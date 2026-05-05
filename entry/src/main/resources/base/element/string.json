@@ -1,0 +1,144 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "走走拍拍 - 相机连接与照片导入"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "走走拍拍主程序"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "走走拍拍"
+    },
+    {
+      "name": "tab_gallery",
+      "value": "画廊"
+    },
+    {
+      "name": "tab_camera",
+      "value": "相机"
+    },
+    {
+      "name": "tab_settings",
+      "value": "设置"
+    },
+    {
+      "name": "status_ready",
+      "value": "就绪"
+    },
+    {
+      "name": "status_connected",
+      "value": "已连接"
+    },
+    {
+      "name": "status_disconnected",
+      "value": "已断开"
+    },
+    {
+      "name": "status_scanning",
+      "value": "扫描中..."
+    },
+    {
+      "name": "status_no_camera",
+      "value": "未检测到USB相机"
+    },
+    {
+      "name": "btn_scan",
+      "value": "搜索相机"
+    },
+    {
+      "name": "btn_rescan",
+      "value": "重新扫描"
+    },
+    {
+      "name": "btn_disconnect",
+      "value": "断开连接"
+    },
+    {
+      "name": "btn_import",
+      "value": "导入照片"
+    },
+    {
+      "name": "btn_copy_log",
+      "value": "复制日志"
+    },
+    {
+      "name": "btn_clear_log",
+      "value": "清除"
+    },
+    {
+      "name": "btn_process_border",
+      "value": "边框"
+    },
+    {
+      "name": "btn_process_watermark",
+      "value": "水印"
+    },
+    {
+      "name": "section_general",
+      "value": "通用设置"
+    },
+    {
+      "name": "section_about",
+      "value": "关于"
+    },
+    {
+      "name": "section_debug_log",
+      "value": "调试日志"
+    },
+    {
+      "name": "section_device_info",
+      "value": "设备信息"
+    },
+    {
+      "name": "setting_dark_mode",
+      "value": "深色模式"
+    },
+    {
+      "name": "setting_version",
+      "value": "版本"
+    },
+    {
+      "name": "empty_gallery_hint",
+      "value": "连接相机以浏览照片"
+    },
+    {
+      "name": "gallery_empty",
+      "value": "相机中无照片"
+    },
+    {
+      "name": "gallery_filter_all",
+      "value": "全部"
+    },
+    {
+      "name": "gallery_filter_jpeg",
+      "value": "JPEG"
+    },
+    {
+      "name": "gallery_filter_raw",
+      "value": "RAW"
+    },
+    {
+      "name": "gallery_filter_heif",
+      "value": "HEIF"
+    },
+    {
+      "name": "gallery_select_count",
+      "value": "已选 %d 张"
+    },
+    {
+      "name": "gallery_download_btn",
+      "value": "下载 (%d)"
+    },
+    {
+      "name": "gallery_cancel_select",
+      "value": "取消"
+    },
+    {
+      "name": "photo_detail_loading",
+      "value": "加载中..."
+    }
+  ]
+}
