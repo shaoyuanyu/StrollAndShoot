@@ -43,8 +43,44 @@
             "name": "ohos.extension.backup",
             "resource": "$profile:backup_config"
           }
-        ],
+        ]
+      },
+      {
+        "name": "PtpDriverExtension",
+        "srcEntry": "./ets/driver/PtpDriverExtension.ets",
+        "type": "driver",
+        "exported": true,
+        "metadata": [
+          {
+            "name": "bus",
+            "value": "USB"
+          },
+          {
+            "name": "vid",
+            "value": "0x04B0"
+          },
+          {
+            "name": "pid",
+            "value": "0x0455"
+          },
+          {
+            "name": "desc",
+            "value": "PTP USB Camera Driver"
+          },
+          {
+            "name": "launchOnBind",
+            "value": "true"
+          },
+          {
+            "name": "ohos.permission.ACCESS_DDK_ALLOWED",
+            "value": "true"
+          }
+        ]
       }
+    ],
+    "requestPermissions": [
+      { "name": "ohos.permission.ACCESS_EXTENSIONAL_DEVICE_DRIVER" },
+      { "name": "ohos.permission.ACCESS_DDK_USB" }
     ]
   }
 }

@@ -1,15 +1,17 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
-import { PtpSession, setPtpLog } from '../pages/PtpHost';
+import { PtpIpcClient } from './PtpIpcClient';
 import { AppLog } from './AppLog';
 import type { PhotoEntry } from '../model/PhotoEntry';
 
 const DOMAIN = 0x0000;
 const TAG = 'CameraService';
 
+const USE_DDK: boolean = true;
+
 export class CameraService {
   private static instance: CameraService;
-  private session: PtpSession = new PtpSession();
+  private session: PtpIpcClient = new PtpIpcClient();
   private log: AppLog = new AppLog();
 
   // State
@@ -45,8 +47,7 @@ export class CameraService {
   }
 
   private constructor() {
-    setPtpLog(this.log);
-    this.log.add('App 启动');
+    this.log.add('App 启动 (DDK)');
   }
 
   getLog(): AppLog {
@@ -80,7 +81,7 @@ export class CameraService {
     this.notify();
 
     try {
-      const cameras = PtpSession.findCameras();
+      const cameras = PtpIpcClient.findCameras();
       if (cameras.length === 0) {
         this.statusText = '未检测到USB相机';
         this.connected = false;
@@ -90,7 +91,7 @@ export class CameraService {
         return;
       }
 
-      this.statusText = `发现相机: ${cameras[0].productName}`;
+      this.statusText = `发现相机`;
       this.notify();
 
       const ok = await this.session.connect(cameras[0]);
@@ -102,16 +103,13 @@ export class CameraService {
         return;
       }
 
-      // Use USB descriptor for camera name
-      this.cameraName = cameras[0].productName || cameras[0].manufacturerName ||
-                        cameras[0].name;
       this.statusText = '已连接';
       this.connected = true;
       this.notify();
 
-      // Attempt DeviceInfo parsing for diagnosis
       const devInfo = await this.session.getDeviceInfo();
       if (devInfo) {
+        this.cameraName = `${devInfo.manufacturer} ${devInfo.model}`.trim();
         hilog.info(DOMAIN, TAG,
           `DeviceInfo vendorExtId=0x${devInfo.vendorExtensionID.toString(16)} ` +
           `manu=${devInfo.manufacturer} model=${devInfo.model} ` +
@@ -405,7 +403,7 @@ export class CameraService {
   }
 
   async disconnect(): Promise<void> {
-    await this.session.closeSessionAndPipe();
+    this.session.close();
     this.connected = false;
     this.cameraName = '';
     this.photoCount = 0;

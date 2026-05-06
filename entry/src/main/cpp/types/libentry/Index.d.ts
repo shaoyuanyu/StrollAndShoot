@@ -39,3 +39,10 @@ export const parseDeviceInfo: (data: Uint8Array) => PtpDeviceInfo;
 export const parseStorageIDs: (data: Uint8Array) => number[];
 export const parseObjectHandles: (data: Uint8Array) => number[];
 export const parseObjectInfo: (data: Uint8Array, handle: number) => PtpObjectInfo;
+
+// DDK driver functions
+export const init: () => number;
+export const initDevice: (deviceId: number) => boolean;
+export const releaseDevice: () => void;
+export const execute: (cmd: string, arg: number) => Uint8Array | null;
+export const getLargeData: (handle: number) => Uint8Array | null;

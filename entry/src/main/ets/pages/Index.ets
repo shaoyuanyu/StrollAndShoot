@@ -39,6 +39,20 @@ struct Index {
     this.service.initLogPath(ctx.filesDir);
     this.service.onChange = () => { this.syncState(); };
     this.syncState();
+    // DDK availability test
+    try {
+      const devices = deviceManager.queryDevices(1); // BusType.USB = 1
+      this.appLog.add(`DDK OK: ${devices.length}`);
+    } catch (e) {
+      this.appLog.add('DDK crashed: ' + e);
+    }
+    try {
+      const devices2 = deviceManager.queryDevices();
+      this.appLog.add(`DDK noarg: ${devices2.length}`);
+    } catch (e) {
+      this.appLog.add('DDK noarg crashed: ' + e);
+    }
+    this.syncState();
   }
 
   syncState(): void {

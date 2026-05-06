@@ -1,5 +1,6 @@
 #include "napi/native_api.h"
 #include "ptp_engine.h"
+#include "ptp_ddk_transport.h"
 #include <cstring>
 #include <vector>
 
@@ -272,6 +273,128 @@ static napi_value ParseObjectInfo(napi_env env, napi_callback_info info) {
     return MakeObjectInfoObj(env, obj);
 }
 
+// ---- DDK Driver NAPI functions ----
+
+static napi_value PtpDriverInit(napi_env env, napi_callback_info info) {
+    int ret = ptp_ddk_init();
+    napi_value result;
+    napi_create_int32(env, ret, &result);
+    return result;
+}
+
+static napi_value PtpDriverInitDevice(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    int64_t deviceId = 0;
+    if (argc > 0) napi_get_value_int64(env, args[0], &deviceId);
+    bool ok = ptp_ddk_init_device(static_cast<uint64_t>(deviceId));
+    napi_value result;
+    napi_get_boolean(env, ok, &result);
+    return result;
+}
+
+static napi_value PtpDriverReleaseDevice(napi_env env, napi_callback_info info) {
+    ptp_ddk_release_device();
+    napi_value result;
+    napi_get_boolean(env, true, &result);
+    return result;
+}
+
+// Helper: do a full PTP transaction (command → data → response)
+// Returns raw data phase bytes, or empty on error.
+static std::vector<uint8_t> doPtpTransaction(const std::vector<uint8_t>& cmd, bool expectData) {
+    if (!ptp_ddk_send_command(cmd)) return {};
+
+    std::vector<uint8_t> dataResult;
+
+    for (int attempt = 0; attempt < 20; attempt++) {
+        auto raw = ptp_ddk_read_data(expectData ? 3000 : 5000, expectData);
+        if (raw.empty()) continue;
+
+        auto result = g_engine.processIncoming(raw.data(), raw.size(), expectData);
+
+        if (result.action == 1 && !result.data.empty()) {
+            dataResult = std::move(result.data);
+        }
+        if (result.action == 2) {
+            if (result.respCode == 0x2001) {
+                return expectData ? dataResult : std::vector<uint8_t>{1};
+            }
+            return {};
+        }
+        if (result.action == -1) return {};
+    }
+    return {};
+}
+
+// execute(cmd: string, arg: number) -> Uint8Array
+// For no-data commands (openSession, closeSession): returns [1] on success, [] on error
+// For data commands: returns raw data phase bytes, or [] on error
+static napi_value PtpDriverExecute(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    size_t cmdLen = 0;
+    napi_get_value_string_utf8(env, args[0], nullptr, 0, &cmdLen);
+    std::string cmd(cmdLen, '\0');
+    napi_get_value_string_utf8(env, args[0], &cmd[0], cmdLen + 1, &cmdLen);
+
+    uint32_t arg = 0;
+    if (argc > 1) napi_get_value_uint32(env, args[1], &arg);
+
+    std::vector<uint8_t> ptpCmd;
+    bool expectData = false;
+
+    if (cmd == "openSession") {
+        ptpCmd = g_engine.buildOpenSession(arg > 0 ? arg : 1);
+    } else if (cmd == "closeSession") {
+        ptpCmd = g_engine.buildCloseSession();
+    } else if (cmd == "getDeviceInfo") {
+        ptpCmd = g_engine.buildGetDeviceInfo();
+        expectData = true;
+    } else if (cmd == "getStorageIDs") {
+        ptpCmd = g_engine.buildGetStorageIDs();
+        expectData = true;
+    } else if (cmd == "getObjectHandles") {
+        ptpCmd = g_engine.buildGetObjectHandles(arg);
+        expectData = true;
+    } else if (cmd == "getObjectInfo") {
+        ptpCmd = g_engine.buildGetObjectInfo(arg);
+        expectData = true;
+    } else if (cmd == "getThumb") {
+        ptpCmd = g_engine.buildGetThumb(arg);
+        expectData = true;
+    } else {
+        napi_value result;
+        napi_get_boolean(env, false, &result);
+        return MakeEmptyUint8Array(env);
+    }
+
+    std::vector<uint8_t> result = doPtpTransaction(ptpCmd, expectData);
+    return MakeUint8Array(env, result);
+}
+
+// getLargeData(handle: number) -> Uint8Array | null
+static napi_value PtpDriverGetLargeData(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint32_t handle = 0;
+    if (argc > 0) napi_get_value_uint32(env, args[0], &handle);
+
+    auto cmd = g_engine.buildGetObject(handle);
+    if (!ptp_ddk_send_command(cmd)) return MakeEmptyUint8Array(env);
+
+    // Read data phase using DMA buffer
+    auto data = ptp_ddk_read_data(10000, true);
+    // Read response
+    ptp_ddk_read_data(5000, false);
+
+    return MakeUint8Array(env, data);
+}
+
 // ---- Module init ----
 
 EXTERN_C_START
@@ -290,6 +413,12 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"parseStorageIDs",    nullptr, ParseStorageIDs,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseObjectHandles", nullptr, ParseObjectHandles, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseObjectInfo",    nullptr, ParseObjectInfo,    nullptr, nullptr, nullptr, napi_default, nullptr},
+        // DDK driver functions
+        {"init",               nullptr, PtpDriverInit,        nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"initDevice",         nullptr, PtpDriverInitDevice,  nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"releaseDevice",      nullptr, PtpDriverReleaseDevice, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"execute",            nullptr, PtpDriverExecute,     nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getLargeData",       nullptr, PtpDriverGetLargeData, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;
