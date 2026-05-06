@@ -347,8 +347,8 @@ export class PtpSession {
     let rawCount = 0;
 
     // Read IN until we get both data and response.
+    const buf = new Uint8Array(196608);  // 192KB — under HMOS 200KB limit
     for (let attempt = 0; attempt < 350; attempt++) {
-      const buf = new Uint8Array(196608);
       const rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
       if (rn < 0) {
         log(`IN failed: ${rn}`);
@@ -358,8 +358,7 @@ export class PtpSession {
         continue;
       }
 
-      const inData = new Uint8Array(buf.buffer, 0, rn);
-      const result = ptpNative.processResponse(inData, true);
+      const result = ptpNative.processResponse(buf.subarray(0, rn), true);
 
       if (result.action === 0) {
         rawCount++;

@@ -239,12 +239,20 @@ export class CameraService {
     try {
       const data = await this.session.getThumb(handle);
       if (data && data.length > 0) {
-        const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
-        const pixelMap = await imageSource.createPixelMap();
-        this.thumbnailPixelMapMap.set(handle, pixelMap);
-        this.thumbnailLoadedSet.add(handle);
-        imageSource.release();
+        await this.decodeThumbnail(handle, data);
       }
+    } catch (err) {
+      this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
+    }
+  }
+
+  private async decodeThumbnail(handle: number, data: Uint8Array): Promise<void> {
+    try {
+      const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
+      const pixelMap = await imageSource.createPixelMap();
+      this.thumbnailPixelMapMap.set(handle, pixelMap);
+      this.thumbnailLoadedSet.add(handle);
+      imageSource.release();
     } catch (err) {
       this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
     }
@@ -397,9 +405,18 @@ export class CameraService {
 
   async loadAllThumbnails(): Promise<void> {
     this.log.add(`开始加载 ${this.photos.length} 张缩略图...`);
+    const decodeJobs: Promise<void>[] = [];
+
     for (const photo of this.photos) {
-      await this.loadThumbnail(photo.handle);
+      if (this.thumbnailLoadedSet.has(photo.handle)) continue;
+      const data = await this.session.getThumb(photo.handle); // USB 串行读取
+      if (data && data.length > 0) {
+        // 立即启动异步解码，不等待；USB 继续读下一张，重叠隐藏解码延迟
+        decodeJobs.push(this.decodeThumbnail(photo.handle, data));
+      }
     }
+
+    await Promise.all(decodeJobs);
     this.log.add('缩略图加载完成');
     this.notify();
   }
