@@ -5,6 +5,9 @@ import type { PhotoEntry } from '../model/PhotoEntry';
 
 // ---- ZoomableImage: isolated component so gesture @State changes don't
 //      rebuild the parent Swiper/overlay ----
+// Pinch / pan formula follows:
+//   offset' = (lastOffset + panOff) + (0.5 - center) * size * (1 - scale) * lastScale
+// where center is INVERTED (1 - normalized position) per HarmonyOS convention.
 @Component
 struct ZoomableImage {
   pixelMap: image.PixelMap | null = null;
@@ -25,8 +28,12 @@ struct ZoomableImage {
   private imgW: number = 1;
   private imgH: number = 1;
   private pinching: boolean = false;
+  private pinchCx: number = 0.5;
+  private pinchCy: number = 0.5;
 
-  onPageChange(): void { this.reset(); }
+  onPageChange(): void {
+    animateTo({ duration: 120, curve: Curve.EaseOut }, () => { this.reset(); });
+  }
 
   aboutToAppear(): void { this.updateImgCache(); }
 
@@ -47,27 +54,33 @@ struct ZoomableImage {
     this.pinching = false;
   }
 
-  private clamp(cs: number): void {
-    const iw = this.imgW * cs;
-    const ih = this.imgH * cs;
-    if (iw > this.compW) {
-      const mx = (iw - this.compW) / 2;
-      if (this.offX > mx) this.offX = mx;
-      if (this.offX < -mx) this.offX = -mx;
-    } else { this.offX = 0; }
-    if (ih > this.compH) {
-      const my = (ih - this.compH) / 2;
-      if (this.offY > my) this.offY = my;
-      if (this.offY < -my) this.offY = -my;
-    } else { this.offY = 0; }
+  // Unified transform: called by both pan and pinch.
+  // offset' = (lastOffset + panOff) + (0.5 - center) * size * (1 - scale) * lastScale
+  private applyTransform(scale: number, panOffX: number, panOffY: number): void {
+    const ns = Math.max(1.0, Math.min(5.0, this.lastScale * scale));
+    this.scaleVal = ns;
+    this.offX = (this.lastOffX + panOffX) +
+      (0.5 - this.pinchCx) * this.imgW * (1 - scale) * this.lastScale;
+    this.offY = (this.lastOffY + panOffY) +
+      (0.5 - this.pinchCy) * this.imgH * (1 - scale) * this.lastScale;
+    this.clampAndCheckEdge();
   }
 
-  private atHorizBounds(): boolean {
-    if (this.scaleVal <= 1.0) return false;
+  private clampAndCheckEdge(): void {
     const iw = this.imgW * this.scaleVal;
-    if (iw <= this.compW) return false;
-    const mx = (iw - this.compW) / 2;
-    return this.offX >= mx - 1 || this.offX <= -mx + 1;
+    const ih = this.imgH * this.scaleVal;
+    if (iw > this.compW) {
+      const mx = (iw - this.compW) / 2;
+      this.offX = Math.max(-mx, Math.min(mx, this.offX));
+    } else {
+      this.offX = 0;
+    }
+    if (ih > this.compH) {
+      const my = (ih - this.compH) / 2;
+      this.offY = Math.max(-my, Math.min(my, this.offY));
+    } else {
+      this.offY = 0;
+    }
   }
 
   // ---- Pinch ----
@@ -78,29 +91,28 @@ struct ZoomableImage {
     this.lastScale = this.scaleVal;
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
+    const iw = this.imgW * this.lastScale;
+    const ih = this.imgH * this.lastScale;
+    const il = (this.compW - iw) / 2 + this.lastOffX;
+    const it = (this.compH - ih) / 2 + this.lastOffY;
+    const cx = iw > 0 ? Math.max(0, (e.pinchCenterX - il) / iw) : 0.5;
+    const cy = ih > 0 ? Math.max(0, (e.pinchCenterY - it) / ih) : 0.5;
+    this.pinchCx = 1 - cx;
+    this.pinchCy = 1 - cy;
   }
 
   private onPinchUpdate(e: GestureEvent): void {
     if (!e) return;
-    const w = this.imgW, h = this.imgH;
-    const iw = w * this.lastScale, ih = h * this.lastScale;
-    const il = (this.compW - iw) / 2 + this.lastOffX;
-    const it = (this.compH - ih) / 2 + this.lastOffY;
-    const cx = iw > 1 ? (e.pinchCenterX - il) / iw : 0.5;
-    const cy = ih > 1 ? (e.pinchCenterY - it) / ih : 0.5;
-    const ns = Math.max(1.0, Math.min(5.0, this.lastScale * e.scale));
-    this.scaleVal = ns;
-    this.offX = (0.5 - cx) * w * (1 - e.scale) * this.lastScale + this.lastOffX;
-    this.offY = (0.5 - cy) * h * (1 - e.scale) * this.lastScale + this.lastOffY;
-    this.clamp(ns);
+    this.applyTransform(e.scale, e.offsetX, e.offsetY);
   }
 
   private onPinchEnd(_e: GestureEvent): void {
     if (!this.pinching) return;
     this.pinching = false;
     if (this.scaleVal < 1.05) {
-      this.reset();
       this.onZoomChange(false);
+      this.onEdgeChange(false);
+      animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
       return;
     }
     this.lastScale = this.scaleVal;
@@ -111,36 +123,60 @@ struct ZoomableImage {
 
   // ---- Pan ----
   private onPanStart(_e: GestureEvent): void {
+    if (this.pinching) return;
     this.onGestureStart();
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
-    this.onEdgeChange(false);
   }
 
   private onPanUpdate(e: GestureEvent): void {
-    if (!e || this.scaleVal <= 1.0) return;
-    const spd = this.scaleVal;
-    this.offX = this.lastOffX + e.offsetX * spd;
-    this.offY = this.lastOffY + e.offsetY * spd;
+    if (!e || this.scaleVal <= 1.0 || this.pinching) return;
+    this.applyTransform(1, e.offsetX, e.offsetY);
   }
 
   private onPanEnd(_e: GestureEvent): void {
-    this.clamp(this.scaleVal);
+    if (this.pinching) return;
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
-    this.onEdgeChange(this.atHorizBounds());
+    if (this.scaleVal > 1.0) {
+      const iw = this.imgW * this.scaleVal;
+      if (iw > this.compW) {
+        const mx = (iw - this.compW) / 2;
+        const atEdge = this.offX >= mx - 1 || this.offX <= -mx + 1;
+        this.onEdgeChange(atEdge);
+      }
+    }
   }
 
   // ---- Double-tap ----
-  private onDblTap(): void {
+  private onDblTap(e: GestureEvent): void {
     if (this.scaleVal > 1.0) {
-      this.reset();
       this.onZoomChange(false);
-    } else {
-      this.scaleVal = 2.5;
-      this.lastScale = 2.5;
-      this.onZoomChange(true);
+      this.onEdgeChange(false);
+      animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
+      return;
     }
+    const fl = e?.fingerList;
+    const tx = (fl && fl.length > 0) ? fl[0].localX : this.compW / 2;
+    const ty = (fl && fl.length > 0) ? fl[0].localY : this.compH / 2;
+    const iw = this.imgW;
+    const ih = this.imgH;
+    const il = (this.compW - iw) / 2;
+    const it = (this.compH - ih) / 2;
+    const tapCx = iw > 0 ? (tx - il) / iw : 0.5;
+    const tapCy = ih > 0 ? (ty - it) / ih : 0.5;
+    this.pinchCx = 1 - tapCx;
+    this.pinchCy = 1 - tapCy;
+    this.lastScale = 1.0;
+    this.lastOffX = 0;
+    this.lastOffY = 0;
+    this.onZoomChange(true);
+    animateTo({ duration: 250, curve: Curve.EaseOut }, () => {
+      this.applyTransform(2.5, 0, 0);
+      this.lastScale = this.scaleVal;
+      this.lastOffX = this.offX;
+      this.lastOffY = this.offY;
+    });
   }
 
   build() {
@@ -164,7 +200,7 @@ struct ZoomableImage {
             .onActionUpdate((e: GestureEvent) => { this.onPanUpdate(e); })
             .onActionEnd((e: GestureEvent) => { this.onPanEnd(e); }),
           TapGesture({ count: 2 })
-            .onAction(() => { this.onDblTap(); })
+            .onAction((e: GestureEvent) => { this.onDblTap(e); })
         )
       )
       .onAreaChange((_o: Area, n: Area) => {
