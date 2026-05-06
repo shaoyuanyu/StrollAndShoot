@@ -116,7 +116,7 @@ struct Index {
         }
       }
       .barHeight(0)
-      .scrollable(true)
+      .scrollable(false)
       .onChange((idx: number) => { this.currentTab = idx; })
       .layoutWeight(1)
 

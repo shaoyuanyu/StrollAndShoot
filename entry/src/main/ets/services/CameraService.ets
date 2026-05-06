@@ -130,6 +130,44 @@ export class CameraService {
     }
   }
 
+  /**
+   * Recursively collect all photo handles by traversing the directory tree.
+   * Returns handles of non-directory objects (photos/videos).
+   */
+  private async collectPhotoHandles(
+    storageIDs: number[], parent: number, depth: number
+  ): Promise<number[]> {
+    if (depth > 10) return [];
+
+    const result: number[] = [];
+    for (const sid of storageIDs) {
+      const handles = await this.session.getObjectHandles(sid, parent);
+      if (handles.length === 0) continue;
+
+      const dirs: number[] = [];
+      for (const h of handles) {
+        const info = await this.session.getObjectInfo(h);
+        if (!info) continue;
+        if (info.objectFormat === 0x3001) {
+          dirs.push(h);
+          hilog.info(DOMAIN, TAG,
+            `Dir 0x${h.toString(16)}: ${info.filename}`);
+        } else {
+          result.push(h);
+        }
+      }
+
+      // Recurse into all subdirectories
+      for (const dh of dirs) {
+        const sub = await this.collectPhotoHandles(storageIDs, dh, depth + 1);
+        result.push(...sub);
+      }
+
+      break; // only use the first storage with results
+    }
+    return result;
+  }
+
   private async loadPhotoList(): Promise<void> {
     this.statusText = '正在获取照片列表...';
     this.notify();
@@ -146,70 +184,13 @@ export class CameraService {
         return;
       }
 
-      // Try each storage ID to find photos
-      let handles: number[] = [];
-      for (const sid of storageIDs) {
-        const h = await this.session.getObjectHandles(sid);
-        hilog.info(DOMAIN, TAG, `Storage 0x${sid.toString(16)}: ${h.length} objects`);
-        if (h.length > 0) {
-          handles = h;
-          break;
-        }
-      }
-
-      // Check for directory objects and traverse up to 6 levels
-      let dirParent: number = 0;
-      for (const h of handles) {
-        const info = await this.session.getObjectInfo(h);
-        if (info) {
-          hilog.info(DOMAIN, TAG,
-            `Handle 0x${h.toString(16)} fmt=0x${info.objectFormat.toString(16)} file=${info.filename}`);
-          if (info.objectFormat === 0x3001) {
-            dirParent = h;
-          }
-        }
-      }
-
-      if (dirParent !== 0) {
-        for (let level = 0; level < 6; level++) {
-          let foundDir = false;
-          for (const sid of storageIDs) {
-            const h = await this.session.getObjectHandles(sid, dirParent);
-            hilog.info(DOMAIN, TAG,
-              `Level ${level} dir 0x${dirParent.toString(16)}: ${h.length} objects`);
-            if (h.length > 0) {
-              handles = h;
-              let nextDir = 0;
-              let validCount = 0;
-              for (const childH of h) {
-                const info = await this.session.getObjectInfo(childH);
-                if (info) {
-                  validCount++;
-                  if (info.objectFormat === 0x3001) {
-                    nextDir = childH;
-                  }
-                }
-              }
-              if (nextDir !== 0 && validCount <= 2) {
-                dirParent = nextDir;
-                foundDir = true;
-              } else {
-                foundDir = false;
-              }
-              break;
-            }
-          }
-          if (!foundDir) break;
-        }
-      }
+      const handles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0);
 
       hilog.info(DOMAIN, TAG, `ObjectHandles total: ${handles.length}`);
       this.photoCount = handles.length;
 
-      // Get info for each object (limit to first 50)
       const photoList: PhotoEntry[] = [];
-      const limit = Math.min(handles.length, 50);
-      for (let i = 0; i < limit; i++) {
+      for (let i = 0; i < handles.length; i++) {
         const info = await this.session.getObjectInfo(handles[i]);
         if (info) {
           photoList.push({
