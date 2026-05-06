@@ -74,6 +74,7 @@ export class PtpSession {
   private bulkOut: usbManager.USBEndpoint | null = null;
   private intEp: usbManager.USBEndpoint | null = null;
   private sessionOpen: boolean = false;
+  private usbBusy: boolean = false;
 
   static findCameras(): usbManager.USBDevice[] {
     const cameras: usbManager.USBDevice[] = [];
@@ -230,17 +231,23 @@ export class PtpSession {
   }
 
   async getThumb(handle: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen) return null;
+    if (!this.sessionOpen || this.usbBusy) return null;
+    this.usbBusy = true;
     log(`Getting thumb for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetThumb(handle);
-    return await this.ptpCommandGetLargeData(cmd);
+    const result = await this.ptpCommandGetLargeData(cmd);
+    this.usbBusy = false;
+    return result;
   }
 
   async getObject(handle: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen) return null;
+    if (!this.sessionOpen || this.usbBusy) return null;
+    this.usbBusy = true;
     log(`Getting object for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetObject(handle);
-    return await this.ptpCommandGetLargeData(cmd);
+    const result = await this.ptpCommandGetLargeData(cmd);
+    this.usbBusy = false;
+    return result;
   }
 
   // ---- PTP transaction helpers ----

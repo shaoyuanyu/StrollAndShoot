@@ -376,6 +376,15 @@ export class CameraService {
     this.preloading = false;
   }
 
+  cancelPreload(): void {
+    if (this.preloadTimer >= 0) {
+      clearTimeout(this.preloadTimer);
+      this.preloadTimer = -1;
+    }
+    this.preloading = false;
+    this.preloadingSet.clear();
+  }
+
   clearFullCache(): void {
     this.compressedCache.clear();
     this.preloadingSet.clear();

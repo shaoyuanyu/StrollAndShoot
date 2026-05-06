@@ -23,10 +23,9 @@ export struct GalleryPage {
   @Prop photos: PhotoEntry[] = [];
   @Prop thumbnailVersion: number = 0;
   @Prop thumbnailReadyHandles: number[] = [];
-  @State filterIdx: number = 0;
+  @State filterValue: string = '';
   @State selectMode: boolean = false;
   @State selectedHandles: Set<number> = new Set();
-  @State filterOptions: FilterOption[] = [{ label: '全部', value: '' }];
   @State dateGroups: DateGroup[] = [];
   @State galleryScale: number = 1.0;
   private service: CameraService = CameraService.getInstance();
@@ -93,8 +92,7 @@ export struct GalleryPage {
   }
 
   private getFilterExt(): string {
-    if (this.filterIdx < 0 || this.filterIdx >= this.filterOptions.length) return '';
-    return this.filterOptions[this.filterIdx].value;
+    return this.filterValue;
   }
 
   private getFilteredPhotos(): PhotoEntry[] {
@@ -154,11 +152,7 @@ export struct GalleryPage {
     return opts;
   }
 
-  aboutToAppear(): void {
-    this.filterOptions = this.buildFilterOptions();
-  }
-
-  build() {
+build() {
     Column() {
       ConnectionStatusBar({
         connected: this.connected, cameraName: this.cameraName,
@@ -169,19 +163,19 @@ export struct GalleryPage {
       // Filter bar
       Scroll() {
         Row({ space: 8 }) {
-          ForEach(this.buildFilterOptions(), (opt: FilterOption, idx: number) => {
+          ForEach(this.buildFilterOptions(), (opt: FilterOption) => {
             Text(opt.label)
               .fontSize(12)
-              .fontColor(this.filterIdx === idx
+              .fontColor(opt.value === this.filterValue
                 ? $r('app.color.filter_chip_active_text')
                 : $r('app.color.filter_chip_text'))
-              .backgroundColor(this.filterIdx === idx
+              .backgroundColor(opt.value === this.filterValue
                 ? $r('app.color.filter_chip_active_bg')
                 : $r('app.color.filter_chip_bg'))
               .borderRadius(14)
               .padding({ left: 12, right: 12, top: 5, bottom: 5 })
               .onClick(() => {
-                this.filterIdx = idx;
+                this.filterValue = opt.value;
               })
           })
         }

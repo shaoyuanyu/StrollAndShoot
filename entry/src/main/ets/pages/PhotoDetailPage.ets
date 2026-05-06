@@ -3,6 +3,179 @@ import { image } from '@kit.ImageKit';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
 
+// ---- ZoomableImage: isolated component so gesture @State changes don't
+//      rebuild the parent Swiper/overlay ----
+@Component
+struct ZoomableImage {
+  pixelMap: image.PixelMap | null = null;
+  photoW: number = 1;
+  photoH: number = 1;
+  @Prop @Watch('onPageChange') pageKey: number = 0;
+  onZoomChange: (zoomed: boolean) => void = () => {};
+  onEdgeChange: (atEdge: boolean) => void = () => {};
+  onGestureStart: () => void = () => {};
+  @State scaleVal: number = 1.0;
+  @State offX: number = 0;
+  @State offY: number = 0;
+  private lastScale: number = 1.0;
+  private lastOffX: number = 0;
+  private lastOffY: number = 0;
+  private compW: number = 0;
+  private compH: number = 0;
+  private imgW: number = 1;
+  private imgH: number = 1;
+  private pinching: boolean = false;
+
+  onPageChange(): void { this.reset(); }
+
+  aboutToAppear(): void { this.updateImgCache(); }
+
+  private updateImgCache(): void {
+    const s = Math.min(this.compW > 0 ? this.compW / this.photoW : 1,
+      this.compH > 0 ? this.compH / this.photoH : 1);
+    this.imgW = this.photoW * s;
+    this.imgH = this.photoH * s;
+  }
+
+  private reset(): void {
+    this.scaleVal = 1.0;
+    this.offX = 0;
+    this.offY = 0;
+    this.lastScale = 1.0;
+    this.lastOffX = 0;
+    this.lastOffY = 0;
+    this.pinching = false;
+  }
+
+  private clamp(cs: number): void {
+    const iw = this.imgW * cs;
+    const ih = this.imgH * cs;
+    if (iw > this.compW) {
+      const mx = (iw - this.compW) / 2;
+      if (this.offX > mx) this.offX = mx;
+      if (this.offX < -mx) this.offX = -mx;
+    } else { this.offX = 0; }
+    if (ih > this.compH) {
+      const my = (ih - this.compH) / 2;
+      if (this.offY > my) this.offY = my;
+      if (this.offY < -my) this.offY = -my;
+    } else { this.offY = 0; }
+  }
+
+  private atHorizBounds(): boolean {
+    if (this.scaleVal <= 1.0) return false;
+    const iw = this.imgW * this.scaleVal;
+    if (iw <= this.compW) return false;
+    const mx = (iw - this.compW) / 2;
+    return this.offX >= mx - 1 || this.offX <= -mx + 1;
+  }
+
+  // ---- Pinch ----
+  private onPinchStart(e: GestureEvent): void {
+    if (!e) return;
+    this.onGestureStart();
+    this.pinching = true;
+    this.lastScale = this.scaleVal;
+    this.lastOffX = this.offX;
+    this.lastOffY = this.offY;
+  }
+
+  private onPinchUpdate(e: GestureEvent): void {
+    if (!e) return;
+    const w = this.imgW, h = this.imgH;
+    const iw = w * this.lastScale, ih = h * this.lastScale;
+    const il = (this.compW - iw) / 2 + this.lastOffX;
+    const it = (this.compH - ih) / 2 + this.lastOffY;
+    const cx = iw > 1 ? (e.pinchCenterX - il) / iw : 0.5;
+    const cy = ih > 1 ? (e.pinchCenterY - it) / ih : 0.5;
+    const ns = Math.max(1.0, Math.min(5.0, this.lastScale * e.scale));
+    this.scaleVal = ns;
+    this.offX = (0.5 - cx) * w * (1 - e.scale) * this.lastScale + this.lastOffX;
+    this.offY = (0.5 - cy) * h * (1 - e.scale) * this.lastScale + this.lastOffY;
+    this.clamp(ns);
+  }
+
+  private onPinchEnd(_e: GestureEvent): void {
+    if (!this.pinching) return;
+    this.pinching = false;
+    if (this.scaleVal < 1.05) {
+      this.reset();
+      this.onZoomChange(false);
+      return;
+    }
+    this.lastScale = this.scaleVal;
+    this.lastOffX = this.offX;
+    this.lastOffY = this.offY;
+    this.onZoomChange(true);
+  }
+
+  // ---- Pan ----
+  private onPanStart(_e: GestureEvent): void {
+    this.onGestureStart();
+    this.lastOffX = this.offX;
+    this.lastOffY = this.offY;
+    this.onEdgeChange(false);
+  }
+
+  private onPanUpdate(e: GestureEvent): void {
+    if (!e || this.scaleVal <= 1.0) return;
+    const spd = this.scaleVal;
+    this.offX = this.lastOffX + e.offsetX * spd;
+    this.offY = this.lastOffY + e.offsetY * spd;
+  }
+
+  private onPanEnd(_e: GestureEvent): void {
+    this.clamp(this.scaleVal);
+    this.lastOffX = this.offX;
+    this.lastOffY = this.offY;
+    this.onEdgeChange(this.atHorizBounds());
+  }
+
+  // ---- Double-tap ----
+  private onDblTap(): void {
+    if (this.scaleVal > 1.0) {
+      this.reset();
+      this.onZoomChange(false);
+    } else {
+      this.scaleVal = 2.5;
+      this.lastScale = 2.5;
+      this.onZoomChange(true);
+    }
+  }
+
+  build() {
+    Image(this.pixelMap)
+      .objectFit(ImageFit.Contain)
+      .width('100%').height('100%')
+      .scale({ x: this.scaleVal, y: this.scaleVal })
+      .translate({ x: this.offX, y: this.offY })
+      .gesture(
+        GestureGroup(GestureMode.Parallel,
+          PinchGesture({ fingers: 2, distance: 1 })
+            .onActionStart((e: GestureEvent) => { this.onPinchStart(e); })
+            .onActionUpdate((e: GestureEvent) => { this.onPinchUpdate(e); })
+            .onActionEnd((e: GestureEvent) => { this.onPinchEnd(e); }),
+          PanGesture({
+            fingers: 1,
+            direction: PanDirection.All,
+            distance: this.scaleVal > 1.0 ? 3 : 80
+          })
+            .onActionStart((e: GestureEvent) => { this.onPanStart(e); })
+            .onActionUpdate((e: GestureEvent) => { this.onPanUpdate(e); })
+            .onActionEnd((e: GestureEvent) => { this.onPanEnd(e); }),
+          TapGesture({ count: 2 })
+            .onAction(() => { this.onDblTap(); })
+        )
+      )
+      .onAreaChange((_o: Area, n: Area) => {
+        this.compW = n.width as number;
+        this.compH = n.height as number;
+        this.updateImgCache();
+      })
+  }
+}
+
+// ---- PhotoDetailPage ----
 @Entry
 @Component
 struct PhotoDetailPage {
@@ -11,6 +184,8 @@ struct PhotoDetailPage {
   @State fullPixelMap: image.PixelMap | null = null;
   @State loading: boolean = false;
   @State loadedHandle: number = 0;
+  @State isZoomed: boolean = false;
+  @State allowEdgeSwipe: boolean = true;
   private photos: PhotoEntry[] = [];
   private service: CameraService = CameraService.getInstance();
   private loadVersion: number = 0;
@@ -34,20 +209,20 @@ struct PhotoDetailPage {
     const photo = this.currentPhoto();
     if (!photo || photo.handle === this.loadedHandle) return;
 
-    // Show thumbnail while loading
     this.fullPixelMap = null;
+    this.isZoomed = false;
+    this.allowEdgeSwipe = true;
     this.loading = true;
     this.loadedHandle = 0;
     this.loadVersion++;
     const ver = this.loadVersion;
 
     const pixelMap = await this.service.loadFullPhoto(photo.handle);
-    if (ver !== this.loadVersion) return; // stale
+    if (ver !== this.loadVersion) return;
 
     if (pixelMap) {
       this.fullPixelMap = pixelMap;
       this.loadedHandle = photo.handle;
-      // Trigger preload of adjacent photos
       this.service.setDetailIndex(this.currentIndex, this.photos.length);
     }
     this.loading = false;
@@ -69,15 +244,38 @@ struct PhotoDetailPage {
       Swiper() {
         ForEach(this.photos, (photo: PhotoEntry) => {
           Stack() {
-            // Show full-res if loaded for this handle, else thumbnail
             if (this.fullPixelMap && photo.handle === this.loadedHandle) {
-              Image(this.fullPixelMap)
-                .objectFit(ImageFit.Contain)
-                .width('100%').height('100%')
+              ZoomableImage({
+                pixelMap: this.fullPixelMap,
+                photoW: photo.imagePixWidth || 1,
+                photoH: photo.imagePixHeight || 1,
+                pageKey: this.currentIndex,
+                onZoomChange: (zoomed: boolean) => {
+                  this.isZoomed = zoomed;
+                },
+                onEdgeChange: (atEdge: boolean) => {
+                  this.allowEdgeSwipe = atEdge;
+                },
+                onGestureStart: () => {
+                  this.service.cancelPreload();
+                }
+              })
             } else if (this.service.thumbnailPixelMapMap.has(photo.handle)) {
-              Image(this.service.thumbnailPixelMapMap.get(photo.handle)!)
-                .objectFit(ImageFit.Contain)
-                .width('100%').height('100%')
+              ZoomableImage({
+                pixelMap: this.service.thumbnailPixelMapMap.get(photo.handle)!,
+                photoW: photo.imagePixWidth || 1,
+                photoH: photo.imagePixHeight || 1,
+                pageKey: this.currentIndex,
+                onZoomChange: (zoomed: boolean) => {
+                  this.isZoomed = zoomed;
+                },
+                onEdgeChange: (atEdge: boolean) => {
+                  this.allowEdgeSwipe = atEdge;
+                },
+                onGestureStart: () => {
+                  this.service.cancelPreload();
+                }
+              })
             } else {
               Column() {
                 Text('📷').fontSize(56)
@@ -90,7 +288,6 @@ struct PhotoDetailPage {
               .justifyContent(FlexAlign.Center)
             }
 
-            // Loading indicator
             if (this.loading && photo.handle === this.currentPhoto().handle) {
               LoadingProgress()
                 .width(32).height(32)
@@ -100,12 +297,14 @@ struct PhotoDetailPage {
             }
           }
           .width('100%').height('100%')
+          .clip(false)
           .onClick(() => { this.showOverlay = !this.showOverlay; })
         })
       }
       .index(this.currentIndex)
       .indicator(false)
       .loop(false)
+      .disableSwipe(this.isZoomed && !this.allowEdgeSwipe)
       .onChange((idx: number) => {
         this.currentIndex = idx;
         this.loadFullForCurrent();

@@ -111,9 +111,11 @@ Grid view of imported photos with:
 - Debug log viewer with clear/copy actions, monospace font, scrollable
 
 ### PhotoDetailPage.ets — Full-Resolution Viewer
-- `Swiper` for horizontal pagination through all photos
+- `Swiper` for horizontal pagination through all photos (disabled when zoomed in)
 - Loads full-resolution photo on display via `CameraService.loadFullPhoto()` with stale-request guard (`loadVersion`)
 - Falls back to thumbnail while full-res loads
+- **Pinch-to-zoom**: Two-finger pinch (1x–5x) + single-finger pan when zoomed + double-tap to toggle 1x/2.5x
+- Gestures combined in single `GestureGroup(Parallel, PinchGesture, PanGesture, TapGesture)` — multiple `.gesture()` calls override each other
 - Overlay with filename, date, size, resolution; tap to toggle
 - Triggers adjacent preloading via `CameraService.setDetailIndex()`
 
@@ -233,3 +235,10 @@ Single `bulkTransfer` call total data must be under 200KB. Exceeding returns -1.
 
 ### Phone USB connection is unstable during development
 The phone frequently disconnects from `hdc` during development. Before any deploy or log check, verify with `hdc list targets`. If `[Empty]`, ask the user to reconnect the phone.
+
+### Consult HarmonyOS developer docs via Playwright
+When you need API reference, guides, or system interfaces, use Playwright to browse https://developer.huawei.com/consumer/cn/doc/. Search using `#developer_search_input_pc` input field. The doc site is client-side rendered (use `browser_evaluate` to extract content, not plain HTML). Prefer this over guessing API signatures.
+
+### Test workflow for camera-required features
+
+After any code change that involves camera/USB interaction: build → deploy → tell user what changed → user disconnects phone from PC, connects to camera, tests → user reports results → user reconnects phone to PC → check hilog for debug info. Do NOT assume gestures or camera features work until confirmed on actual camera hardware.
