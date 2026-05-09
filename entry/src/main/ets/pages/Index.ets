@@ -5,7 +5,7 @@ import { CameraService } from '../services/CameraService';
 import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
-import type { PhotoEntry } from '../model/PhotoEntry';
+import type { PhotoEntry, DownloadProgress } from '../model/PhotoEntry';
 import { AppLog } from '../services/AppLog';
 
 const TABS: string[] = ['Gallery', 'Camera', 'Settings'];
@@ -22,6 +22,7 @@ struct Index {
   private tabsController: TabsController = new TabsController();
   private service: CameraService = CameraService.getInstance();
   private appLog: AppLog = this.service.getLog();
+  private uiContext: common.UIAbilityContext | null = null;
   @State currentTab: number = 1;
   @State statusText: string = '就绪';
   @State cameraName: string = '';
@@ -32,11 +33,15 @@ struct Index {
   @State logText: string = '';
   @State thumbnailVersion: number = 0;
   @State thumbnailReadyHandles: number[] = [];
+  @State downloadProgress: DownloadProgress | null = null;
+  @State downloadedKeys: string[] = [];
 
   aboutToAppear(): void {
     // Init log file path for persistence
     const ctx = getContext(this) as common.UIAbilityContext;
+    this.uiContext = ctx;
     this.service.initLogPath(ctx.filesDir);
+    this.service.initDownloadDir(ctx.filesDir);
     this.service.onChange = () => { this.syncState(); };
     this.syncState();
   }
@@ -54,6 +59,7 @@ struct Index {
     const handles: number[] = [];
     this.service.thumbnailPixelMapMap.forEach((_v: Object, k: number) => { handles.push(k); });
     this.thumbnailReadyHandles = handles;
+    this.downloadedKeys = this.service.getDownloadedKeys();
   }
 
   applyDarkMode(mode: number): void {
@@ -78,14 +84,55 @@ struct Index {
             photos: this.photos,
             thumbnailVersion: this.thumbnailVersion,
             thumbnailReadyHandles: this.thumbnailReadyHandles,
+            downloadProgress: this.downloadProgress,
+            downloadedKeys: this.downloadedKeys,
             onThumbClick: (photo: PhotoEntry, index: number) => {
               router.pushUrl({
                 url: 'pages/PhotoDetailPage',
                 params: { photos: this.photos, initialIndex: index }
               });
             },
-            onDownloadSelected: (handles: number[]) => {
-              this.appLog.add(`选中 ${handles.length} 张照片准备下载`);
+            onDownloadSelected: async (handles: number[]) => {
+              if (handles.length === 0) return;
+              this.service.cancelPreload();
+              this.appLog.add(`选中 ${handles.length} 张照片，开始下载`);
+              this.syncState();
+
+              try {
+                await this.service.downloadPhotos(
+                  handles,
+                  (progress: DownloadProgress) => {
+                    this.downloadProgress = {
+                      phase: progress.phase,
+                      currentIndex: progress.currentIndex,
+                      totalCount: progress.totalCount,
+                      currentFilename: progress.currentFilename,
+                      currentSizeBytes: progress.currentSizeBytes,
+                      downloadedCount: progress.downloadedCount,
+                      totalBytes: progress.totalBytes,
+                      downloadedBytes: progress.downloadedBytes,
+                      errors: progress.errors
+                    };
+                  },
+                  this.uiContext!
+                );
+
+                this.downloadedKeys = this.service.getDownloadedKeys();
+                this.syncState();
+
+                setTimeout(() => {
+                  this.downloadProgress = null;
+                  this.syncState();
+                }, 2000);
+              } catch (err) {
+                this.appLog.add(`下载异常: ${JSON.stringify(err)}`);
+                this.downloadProgress = null;
+                this.syncState();
+              }
+            },
+            onCancelDownload: () => {
+              this.service.cancelDownload();
+              this.downloadProgress = null;
               this.syncState();
             }
           })

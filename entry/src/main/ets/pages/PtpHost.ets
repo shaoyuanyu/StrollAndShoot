@@ -231,7 +231,12 @@ export class PtpSession {
   }
 
   async getThumb(handle: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen || this.usbBusy) return null;
+    if (!this.sessionOpen) return null;
+    for (let wait = 0; wait < 150; wait++) {
+      if (!this.usbBusy) break;
+      await new Promise<void>((r: () => void) => { setTimeout(r, 200); });
+    }
+    if (this.usbBusy) return null;
     this.usbBusy = true;
     log(`Getting thumb for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetThumb(handle);
@@ -241,7 +246,16 @@ export class PtpSession {
   }
 
   async getObject(handle: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen || this.usbBusy) return null;
+    if (!this.sessionOpen) return null;
+    // Wait for USB pipe to become free (up to 30s)
+    for (let wait = 0; wait < 150; wait++) {
+      if (!this.usbBusy) break;
+      await new Promise<void>((r: () => void) => setTimeout(r, 200));
+    }
+    if (this.usbBusy) {
+      log('USB busy timeout');
+      return null;
+    }
     this.usbBusy = true;
     log(`Getting object for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetObject(handle);

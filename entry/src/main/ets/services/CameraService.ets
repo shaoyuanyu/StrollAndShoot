@@ -1,8 +1,12 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
+import { fileIo, fileUri } from '@kit.CoreFileKit';
+import { util } from '@kit.ArkTS';
+import { common } from '@kit.AbilityKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { PtpSession, setPtpLog } from '../pages/PtpHost';
 import { AppLog } from './AppLog';
-import type { PhotoEntry } from '../model/PhotoEntry';
+import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } from '../model/PhotoEntry';
 
 const DOMAIN = 0x0000;
 const TAG = 'CameraService';
@@ -34,6 +38,12 @@ export class CameraService {
   private preloadRadius: number = 5;
   private preloading: boolean = false;
 
+  // Download registry — persisted across sessions
+  private downloadRegistry: Map<string, DownloadRecord> = new Map();
+  private downloadDir: string = '';
+  private downloadAborted: boolean = false;
+  private registryLoaded: boolean = false;
+
   // Change callback
   onChange: () => void = () => {};
 
@@ -59,6 +69,321 @@ export class CameraService {
 
   initLogPath(dir: string): void {
     this.log.setFilePath(dir + '/app_log.txt');
+  }
+
+  initDownloadDir(dir: string): void {
+    this.downloadDir = dir;
+    this.loadRegistry();
+  }
+
+  makeDownloadKey(filename: string, size: number): string {
+    return `${filename}::${size}`;
+  }
+
+  isPhotoDownloaded(handle: number): boolean {
+    for (const p of this.photos) {
+      if (p.handle === handle) {
+        return this.downloadRegistry.has(this.makeDownloadKey(p.filename, p.size));
+      }
+    }
+    return false;
+  }
+
+  getDownloadedKeys(): string[] {
+    const keys: string[] = [];
+    for (const p of this.photos) {
+      const k = this.makeDownloadKey(p.filename, p.size);
+      if (this.downloadRegistry.has(k)) {
+        keys.push(k);
+      }
+    }
+    return keys;
+  }
+
+  cancelDownload(): void {
+    this.downloadAborted = true;
+  }
+
+  async downloadPhotos(
+    handles: number[],
+    onProgress: (progress: DownloadProgress) => void,
+    context: common.UIAbilityContext
+  ): Promise<DownloadResult[]> {
+    // Ensure registry is loaded before starting
+    await this.loadRegistry();
+
+    const results: DownloadResult[] = [];
+    const errors: string[] = [];
+
+    const batch: PhotoEntry[] = [];
+    let totalBytes = 0;
+    for (const h of handles) {
+      for (const p of this.photos) {
+        if (p.handle === h) {
+          batch.push(p);
+          totalBytes += p.size;
+          break;
+        }
+      }
+    }
+
+    if (batch.length === 0) {
+      onProgress({
+        phase: 'error', currentIndex: 0, totalCount: 0,
+        currentFilename: '', currentSizeBytes: 0,
+        downloadedCount: 0, totalBytes: 0, downloadedBytes: 0,
+        errors: ['No matching photos found for selected handles']
+      });
+      return results;
+    }
+
+    this.downloadAborted = false;
+    let downloadedBytes = 0;
+    for (let i = 0; i < batch.length; i++) {
+      if (this.downloadAborted) {
+        this.downloadAborted = false;
+        this.log.add('下载已取消');
+        errors.push('用户取消下载');
+        onProgress({
+          phase: 'complete', currentIndex: i, totalCount: batch.length,
+          currentFilename: '', currentSizeBytes: 0,
+          downloadedCount: results.filter((r: DownloadResult) => r.success).length,
+          totalBytes, downloadedBytes, errors
+        });
+        break;
+      }
+
+      const photo = batch[i];
+      const key = this.makeDownloadKey(photo.filename, photo.size);
+
+      if (this.downloadRegistry.has(key)) {
+        const existing = this.downloadRegistry.get(key)!;
+        results.push({ handle: photo.handle, key, success: true, localPath: existing.localPath });
+        onProgress({
+          phase: 'downloading', currentIndex: i, totalCount: batch.length,
+          currentFilename: photo.filename, currentSizeBytes: photo.size,
+          downloadedCount: results.filter((r: DownloadResult) => r.success).length,
+          totalBytes, downloadedBytes, errors
+        });
+        continue;
+      }
+
+      onProgress({
+        phase: 'downloading', currentIndex: i, totalCount: batch.length,
+        currentFilename: photo.filename, currentSizeBytes: photo.size,
+        downloadedCount: results.filter((r: DownloadResult) => r.success).length,
+        totalBytes, downloadedBytes, errors
+      });
+
+      let data: Uint8Array | null = null;
+
+      // Reuse preloaded data from cache to avoid re-downloading via USB
+      if (this.compressedCache.has(photo.handle)) {
+        data = this.compressedCache.get(photo.handle)!;
+        this.log.add(`下载(缓存命中): ${photo.filename} (${this.formatSize(data.length)})`);
+      } else {
+        try {
+          data = await this.session.getObject(photo.handle);
+        } catch (err) {
+          const msg = `${photo.filename}: USB传输失败: ${JSON.stringify(err)}`;
+          errors.push(msg);
+          results.push({ handle: photo.handle, key, success: false, localPath: '', error: msg });
+          continue;
+        }
+      }
+
+      if (!data || data.length === 0) {
+        errors.push(`${photo.filename}: USB传输返回空数据`);
+        results.push({ handle: photo.handle, key, success: false,
+          localPath: '', error: 'USB transfer returned empty data' });
+        continue;
+      }
+
+      onProgress({
+        phase: 'saving', currentIndex: i, totalCount: batch.length,
+        currentFilename: photo.filename, currentSizeBytes: photo.size,
+        downloadedCount: results.filter((r: DownloadResult) => r.success).length,
+        totalBytes, downloadedBytes, errors
+      });
+
+      const localFilename = this.sanitizeFilename(photo.filename);
+      const localPath = this.downloadDir + '/' + localFilename;
+      try {
+        const f = await fileIo.open(localPath,
+          fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
+        await fileIo.write(f.fd, data.buffer as ArrayBuffer);
+        await fileIo.close(f);
+      } catch (err) {
+        const msg = `${photo.filename}: 写入文件失败: ${JSON.stringify(err)}`;
+        errors.push(msg);
+        results.push({ handle: photo.handle, key, success: false, localPath: '', error: msg });
+        continue;
+      }
+
+      downloadedBytes += data.length;
+      results.push({ handle: photo.handle, key, success: true, localPath: localPath });
+      this.log.add(`沙箱暂存 [${i + 1}/${batch.length}]: ${photo.filename} (${this.formatSize(photo.size)})`);
+    }
+
+    // Phase: save to system Gallery via showAssetsCreationDialog
+    const sandboxSuccesses = results.filter((r: DownloadResult) => r.success);
+    if (sandboxSuccesses.length > 0) {
+      onProgress({
+        phase: 'saving', currentIndex: batch.length, totalCount: batch.length,
+        currentFilename: '正在保存到相册...', currentSizeBytes: 0,
+        downloadedCount: sandboxSuccesses.length, totalBytes, downloadedBytes, errors
+      });
+
+      try {
+        await this.moveToGallery(sandboxSuccesses, context);
+      } catch (err) {
+        this.log.add(`保存到相册失败: ${JSON.stringify(err)}`);
+      }
+
+      // Persist registry for successfully saved photos
+      for (const r of sandboxSuccesses) {
+        if (this.downloadRegistry.has(r.key)) {
+          continue;
+        }
+        const photo = batch.find((p: PhotoEntry) => p.handle === r.handle);
+        if (!photo) continue;
+        const record: DownloadRecord = {
+          key: r.key,
+          filename: photo.filename,
+          size: photo.size,
+          localPath: r.localPath,
+          downloadDate: new Date().toISOString()
+        };
+        this.downloadRegistry.set(r.key, record);
+      }
+      await this.saveRegistry();
+    }
+
+    onProgress({
+      phase: 'complete', currentIndex: batch.length - 1, totalCount: batch.length,
+      currentFilename: '', currentSizeBytes: 0,
+      downloadedCount: results.filter((r: DownloadResult) => r.success).length,
+      totalBytes, downloadedBytes, errors
+    });
+
+    this.log.add(`批量下载完成: ${results.filter((r: DownloadResult) => r.success).length}/${batch.length} 成功`);
+    if (errors.length > 0) {
+      this.log.add(`错误: ${errors.join('; ')}`);
+    }
+
+    return results;
+  }
+
+  /**
+   * Moves successfully downloaded sandbox files to the system Gallery
+   * via showAssetsCreationDialog. User confirms once for all files.
+   */
+  private async moveToGallery(
+    sandboxResults: DownloadResult[],
+    context: common.UIAbilityContext
+  ): Promise<void> {
+    const srcFileUris: string[] = [];
+    const photoCreationConfigs: photoAccessHelper.PhotoCreationConfig[] = [];
+
+    const prefix = this.sanitizeCameraName(this.cameraName);
+
+    for (const r of sandboxResults) {
+      const ext = this.getFileExtension(r.localPath);
+      srcFileUris.push(fileUri.getUriFromPath(r.localPath));
+      const fileName = r.localPath.substring(r.localPath.lastIndexOf('/') + 1);
+      const nameWithoutExt = fileName.substring(0, fileName.lastIndexOf('.'));
+      const title = prefix ? `${prefix}_${nameWithoutExt}` : nameWithoutExt;
+      photoCreationConfigs.push({
+        title: title,
+        fileNameExtension: ext,
+        photoType: photoAccessHelper.PhotoType.IMAGE,
+      });
+    }
+
+    const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
+    const desFileUris = await phAccessHelper.showAssetsCreationDialog(
+      srcFileUris, photoCreationConfigs
+    );
+
+    if (desFileUris.length === 0) {
+      this.log.add('用户取消保存到相册，文件保留在应用沙箱');
+      return;
+    }
+
+    // Copy from sandbox to Gallery URIs
+    let copied = 0;
+    for (let i = 0; i < desFileUris.length; i++) {
+      try {
+        const srcFile = fileIo.openSync(srcFileUris[i], fileIo.OpenMode.READ_ONLY);
+        const desFile = fileIo.openSync(desFileUris[i],
+          fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+        fileIo.copyFileSync(srcFile.fd, desFile.fd);
+        fileIo.closeSync(srcFile);
+        fileIo.closeSync(desFile);
+        copied++;
+      } catch (err) {
+        this.log.add(`相册写入失败 [${i}]: ${JSON.stringify(err)}`);
+      }
+    }
+
+    // Delete sandbox temp files
+    for (const r of sandboxResults) {
+      try { fileIo.unlink(r.localPath); } catch (_e) { /* best effort */ }
+    }
+
+    this.log.add(`已保存到相册: ${copied}/${desFileUris.length} 张`);
+  }
+
+  private sanitizeCameraName(name: string): string {
+    if (!name) return '';
+    return name.replace(/[\\/:*?"<>| ]/g, '_').substring(0, 32);
+  }
+
+  private getFileExtension(path: string): string {
+    const dot = path.lastIndexOf('.');
+    if (dot < 0) return 'jpg';
+    return path.substring(dot + 1).toLowerCase();
+  }
+
+
+  private sanitizeFilename(name: string): string {
+    return name.replace(/[/\\:*?"<>|]/g, '_');
+  }
+
+  private async loadRegistry(): Promise<void> {
+    if (this.registryLoaded) return;
+    const path = this.downloadDir + '/download_registry.json';
+    try {
+      const f = await fileIo.open(path, fileIo.OpenMode.READ_ONLY);
+      const stat = await fileIo.stat(path);
+      const buf = new ArrayBuffer(stat.size);
+      await fileIo.read(f.fd, buf);
+      await fileIo.close(f);
+      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
+      const obj = JSON.parse(text) as Record<string, DownloadRecord>;
+      for (const k of Object.keys(obj)) {
+        this.downloadRegistry.set(k, obj[k]);
+      }
+      this.log.add(`加载下载记录: ${this.downloadRegistry.size} 条`);
+    } catch (_e) {
+      // File doesn't exist yet — registry stays empty
+    }
+    this.registryLoaded = true;
+  }
+
+  private async saveRegistry(): Promise<void> {
+    const obj: Record<string, DownloadRecord> = {};
+    this.downloadRegistry.forEach((v: DownloadRecord, k: string) => { obj[k] = v; });
+    const text = JSON.stringify(obj);
+    const path = this.downloadDir + '/download_registry.json';
+    try {
+      const f = await fileIo.open(path,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      await fileIo.write(f.fd, text);
+      await fileIo.close(f);
+    } catch (err) {
+      this.log.add(`保存下载记录失败: ${JSON.stringify(err)}`);
+    }
   }
 
   private notify(): void {
@@ -356,6 +681,7 @@ export class CameraService {
     }
 
     for (const qi of queue) {
+      if (!this.preloading) break;
       const photo = this.photos[qi];
       if (!photo) continue;
       if (this.compressedCache.has(photo.handle)) continue;

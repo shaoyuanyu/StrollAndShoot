@@ -1,8 +1,9 @@
 import display from '@ohos.display';
 import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
 import { SelectionActionBar } from '../components/SelectionActionBar';
+import { DownloadProgressBar } from '../components/DownloadProgressBar';
 import { CameraService } from '../services/CameraService';
-import type { PhotoEntry } from '../model/PhotoEntry';
+import type { PhotoEntry, DownloadProgress } from '../model/PhotoEntry';
 
 interface DateGroup {
   dateLabel: string;
@@ -28,10 +29,13 @@ export struct GalleryPage {
   @State selectedHandles: Set<number> = new Set();
   @State dateGroups: DateGroup[] = [];
   @State galleryScale: number = 1.0;
+  @Prop downloadProgress: DownloadProgress | null = null;
+  @Prop downloadedKeys: string[] = [];
   private service: CameraService = CameraService.getInstance();
   private pinchBaseScale: number = 1.0;
   onThumbClick: (photo: PhotoEntry, index: number) => void = (_p: PhotoEntry, _i: number) => {};
   onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
+  onCancelDownload: () => void = () => {};
 
   private columnCount(): number {
     const d = display.getDefaultDisplaySync();
@@ -152,6 +156,21 @@ export struct GalleryPage {
     return opts;
   }
 
+  private toggleSelectAll(): void {
+    const filtered = this.getFilteredPhotos();
+    const allSelected = filtered.every((p: PhotoEntry) => this.selectedHandles.has(p.handle));
+    if (allSelected) {
+      for (const p of filtered) {
+        this.selectedHandles.delete(p.handle);
+      }
+    } else {
+      for (const p of filtered) {
+        this.selectedHandles.add(p.handle);
+      }
+    }
+    this.selectedHandles = new Set(this.selectedHandles);
+  }
+
 build() {
     Column() {
       ConnectionStatusBar({
@@ -196,99 +215,117 @@ build() {
         .width('100%').layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        Scroll() {
-          Column() {
-            ForEach(this.getFilteredGroups(), (group: DateGroup, gi: number) => {
-              Column() {
-                Text(group.dateLabel)
-                  .fontSize(13)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.text_primary'))
-                  .alignSelf(ItemAlign.Start)
-                  .padding({ left: 4, bottom: 4 })
+        Column() {
+          Scroll() {
+            Column() {
+              ForEach(this.getFilteredGroups(), (group: DateGroup, gi: number) => {
+                Column() {
+                  Text(group.dateLabel)
+                    .fontSize(13)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.text_primary'))
+                    .alignSelf(ItemAlign.Start)
+                    .padding({ left: 4, bottom: 4 })
 
-                Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-                  ForEach(group.photos, (photo: PhotoEntry) => {
-                    Column() {
-                      Stack() {
-                        if (this.hasThumb(photo.handle)) {
-                          Image(this.service.thumbnailPixelMapMap.get(photo.handle)!)
-                            .objectFit(ImageFit.Cover)
-                            .width('100%').height('100%')
-                        } else {
-                          Column() {
-                            Text('📷').fontSize(20)
-                          }
-                          .width('100%').height('100%')
-                          .justifyContent(FlexAlign.Center)
-                          .backgroundColor($r('app.color.thumbnail_placeholder'))
-                        }
-
-                        if (photo.captureDate) {
-                          Text(this.formatTime(photo.captureDate!))
-                            .fontSize(8)
-                            .fontColor($r('app.color.text_on_dark'))
-                            .padding({ left: 3, right: 3, top: 1, bottom: 1 })
-                            .backgroundColor('rgba(0,0,0,0.5)')
-                            .borderRadius(3)
-                            .position({ x: 0, y: '100%' })
-                            .markAnchor({ x: 0, y: '100%' })
-                            .margin({ left: 3, bottom: 3 })
-                        }
-
-                        if (this.selectMode) {
-                          Checkbox()
-                            .select(this.selectedHandles.has(photo.handle))
-                            .width(18).height(18)
-                            .position({ x: '100%', y: 0 })
-                            .markAnchor({ x: '100%', y: 0 })
-                            .margin({ top: 3, right: 3 })
-                            .hitTestBehavior(HitTestMode.None)
-                        }
-                      }
-                      .width('100%')
-                      .aspectRatio(1)
-                      .borderRadius(4)
-                      .clip(true)
-                      .onClick(() => {
-                        if (this.selectMode) {
-                          if (this.selectedHandles.has(photo.handle)) {
-                            this.selectedHandles.delete(photo.handle);
+                  Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
+                    ForEach(group.photos, (photo: PhotoEntry) => {
+                      Column() {
+                        Stack() {
+                          if (this.hasThumb(photo.handle)) {
+                            Image(this.service.thumbnailPixelMapMap.get(photo.handle)!)
+                              .objectFit(ImageFit.Cover)
+                              .width('100%').height('100%')
                           } else {
-                            this.selectedHandles.add(photo.handle);
-                          }
-                          this.selectedHandles = new Set(this.selectedHandles);
-                        } else {
-                          // Find by handle, not reference (ArkTS @Prop copies objects)
-                          let idx = 0;
-                          for (let i = 0; i < this.photos.length; i++) {
-                            if (this.photos[i].handle === photo.handle) { idx = i; break; }
-                          }
-                          this.onThumbClick(photo, idx);
-                        }
-                      })
-                      .gesture(
-                        LongPressGesture({ repeat: false, duration: 500 })
-                          .onAction(() => {
-                            if (!this.selectMode) {
-                              this.selectMode = true;
-                              this.selectedHandles.add(photo.handle);
-                              this.selectedHandles = new Set(this.selectedHandles);
+                            Column() {
+                              Text('📷').fontSize(20)
                             }
-                          })
-                      )
-                    }
-                    .width(this.itemWidth())
-                    .margin({ right: this.itemMargin(), bottom: 4 })
-                  }, (photo: PhotoEntry) => photo.handle.toString())
+                            .width('100%').height('100%')
+                            .justifyContent(FlexAlign.Center)
+                            .backgroundColor($r('app.color.thumbnail_placeholder'))
+                          }
+
+                          if (photo.captureDate) {
+                            Text(this.formatTime(photo.captureDate!))
+                              .fontSize(8)
+                              .fontColor($r('app.color.text_on_dark'))
+                              .padding({ left: 3, right: 3, top: 1, bottom: 1 })
+                              .backgroundColor('rgba(0,0,0,0.5)')
+                              .borderRadius(3)
+                              .position({ x: 0, y: '100%' })
+                              .markAnchor({ x: 0, y: '100%' })
+                              .margin({ left: 3, bottom: 3 })
+                          }
+
+                          if (this.selectMode) {
+                            Checkbox()
+                              .select(this.selectedHandles.has(photo.handle))
+                              .width(18).height(18)
+                              .position({ x: '100%', y: 0 })
+                              .markAnchor({ x: '100%', y: 0 })
+                              .margin({ top: 3, right: 3 })
+                              .hitTestBehavior(HitTestMode.None)
+                          }
+
+                          if (this.downloadedKeys.indexOf(this.service.makeDownloadKey(photo.filename, photo.size)) >= 0) {
+                            Text('✓')
+                              .fontSize(10)
+                              .fontColor('#FFFFFF')
+                              .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+                              .backgroundColor('rgba(76,175,80,0.85)')
+                              .borderRadius(3)
+                              .position({ x: '100%', y: '100%' })
+                              .markAnchor({ x: '100%', y: '100%' })
+                              .margin({ right: 3, bottom: 3 })
+                              .hitTestBehavior(HitTestMode.None)
+                          }
+                        }
+                        .width('100%')
+                        .aspectRatio(1)
+                        .borderRadius(4)
+                        .clip(true)
+                        .parallelGesture(
+                          GestureGroup(GestureMode.Exclusive,
+                            LongPressGesture({ repeat: false, duration: 500 })
+                              .onAction(() => {
+                                if (!this.selectMode) {
+                                  this.selectMode = true;
+                                  this.selectedHandles.add(photo.handle);
+                                  this.selectedHandles = new Set(this.selectedHandles);
+                                }
+                              }),
+                            TapGesture()
+                              .onAction(() => {
+                                if (this.selectMode) {
+                                  if (this.selectedHandles.has(photo.handle)) {
+                                    this.selectedHandles.delete(photo.handle);
+                                  } else {
+                                    this.selectedHandles.add(photo.handle);
+                                  }
+                                  this.selectedHandles = new Set(this.selectedHandles);
+                                } else {
+                                  let idx = 0;
+                                  for (let i = 0; i < this.photos.length; i++) {
+                                    if (this.photos[i].handle === photo.handle) { idx = i; break; }
+                                  }
+                                  this.onThumbClick(photo, idx);
+                                }
+                              })
+                          )
+                        )
+                      }
+                      .width(this.itemWidth())
+                      .margin({ right: this.itemMargin(), bottom: 4 })
+                    }, (photo: PhotoEntry) => photo.handle.toString())
+                  }
+                  .width('100%')
                 }
                 .width('100%')
-              }
-              .width('100%')
-              .margin({ bottom: 10 })
-            }, (group: DateGroup, gi: number) => `${gi}_${group.dateLabel}_${group.photos.length}`)
+                .margin({ bottom: 10 })
+              }, (group: DateGroup, gi: number) => `${gi}_${group.dateLabel}_${group.photos.length}`)
+            }
+            .width('100%').padding({ left: 6, right: 6, bottom: 16 })
           }
-          .width('100%').padding({ left: 6, right: 6, bottom: 16 })
+          .width('100%').layoutWeight(1)
         }
         .width('100%').layoutWeight(1)
         .parallelGesture(
@@ -308,9 +345,15 @@ build() {
         )
       }
 
-      if (this.selectMode) {
+      if (this.downloadProgress !== null && this.downloadProgress.phase !== 'idle') {
+        DownloadProgressBar({
+          progress: this.downloadProgress,
+          onCancel: () => { this.onCancelDownload(); }
+        })
+      } else if (this.selectMode) {
         SelectionActionBar({
           selectedCount: this.selectedHandles.size,
+          totalVisible: this.getFilteredPhotos().length,
           onCancel: () => {
             this.selectMode = false;
             this.selectedHandles.clear();
@@ -321,7 +364,8 @@ build() {
             this.onDownloadSelected(handles);
             this.selectMode = false;
             this.selectedHandles.clear();
-          }
+          },
+          onSelectAll: () => { this.toggleSelectAll(); }
         })
       }
     }
