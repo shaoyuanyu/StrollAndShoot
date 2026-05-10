@@ -50,6 +50,9 @@ struct Index {
     // Persist dark mode across restarts
     PersistentStorage.persistProp(DARK_MODE_KEY, ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     const savedMode = AppStorage.get<number>(DARK_MODE_KEY);
+
+    // Persist gallery column count across restarts (-1 = auto)
+    PersistentStorage.persistProp('gallery_column_count', -1);
     if (savedMode !== undefined && savedMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
       this.applyDarkMode(savedMode);
     }

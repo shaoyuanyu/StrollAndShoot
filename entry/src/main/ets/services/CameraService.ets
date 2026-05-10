@@ -256,15 +256,21 @@ export class CameraService {
         downloadedCount: sandboxSuccesses.length, totalBytes, downloadedBytes, errors
       });
 
+      let galleryUris: Map<string, string> = new Map();
       try {
-        await this.moveToGallery(sandboxSuccesses, context);
+        galleryUris = await this.moveToGallery(sandboxSuccesses, context);
       } catch (err) {
         this.log.add(`保存到相册失败: ${JSON.stringify(err)}`);
       }
 
-      // Persist registry for successfully saved photos
+      // Persist registry for photos successfully saved to Gallery
       for (const r of sandboxSuccesses) {
         if (this.downloadRegistry.has(r.key)) {
+          continue;
+        }
+        const galleryUri = galleryUris.get(r.key);
+        if (!galleryUri) {
+          this.log.add(`注册跳过(无Gallery URI): ${r.key}`);
           continue;
         }
         const photo = batch.find((p: PhotoEntry) => p.handle === r.handle);
@@ -273,7 +279,7 @@ export class CameraService {
           key: r.key,
           filename: photo.filename,
           size: photo.size,
-          localPath: r.localPath,
+          localPath: galleryUri,
           downloadDate: new Date().toISOString()
         };
         this.downloadRegistry.set(r.key, record);
@@ -299,11 +305,13 @@ export class CameraService {
   /**
    * Moves successfully downloaded sandbox files to the system Gallery
    * via showAssetsCreationDialog. User confirms once for all files.
+   * Returns a map from download key to Gallery URI for successfully copied files.
    */
   private async moveToGallery(
     sandboxResults: DownloadResult[],
     context: common.UIAbilityContext
-  ): Promise<void> {
+  ): Promise<Map<string, string>> {
+    const galleryUris = new Map<string, string>();
     const srcFileUris: string[] = [];
     const photoCreationConfigs: photoAccessHelper.PhotoCreationConfig[] = [];
 
@@ -329,7 +337,7 @@ export class CameraService {
 
     if (desFileUris.length === 0) {
       this.log.add('用户取消保存到相册，文件保留在应用沙箱');
-      return;
+      return galleryUris;
     }
 
     // Copy from sandbox to Gallery URIs
@@ -342,6 +350,9 @@ export class CameraService {
         fileIo.copyFileSync(srcFile.fd, desFile.fd);
         fileIo.closeSync(srcFile);
         fileIo.closeSync(desFile);
+        if (i < sandboxResults.length) {
+          galleryUris.set(sandboxResults[i].key, desFileUris[i]);
+        }
         copied++;
       } catch (err) {
         this.log.add(`相册写入失败 [${i}]: ${JSON.stringify(err)}`);
@@ -354,6 +365,7 @@ export class CameraService {
     }
 
     this.log.add(`已保存到相册: ${copied}/${desFileUris.length} 张`);
+    return galleryUris;
   }
 
   private sanitizeCameraName(name: string): string {
@@ -391,6 +403,39 @@ export class CameraService {
       // File doesn't exist yet — registry stays empty
     }
     this.registryLoaded = true;
+
+    // Prune entries whose Gallery files no longer exist (e.g. user deleted from Album)
+    await this.validateRegistry();
+  }
+
+  /**
+   * Validates the persisted download registry against actual filesystem state.
+   * Removes entries for files that have been deleted from Gallery.
+   */
+  private async validateRegistry(): Promise<void> {
+    const keys: string[] = [];
+    this.downloadRegistry.forEach((_record: DownloadRecord, key: string) => {
+      keys.push(key);
+    });
+    const stale: string[] = [];
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      const record = this.downloadRegistry.get(key);
+      if (!record) continue;
+      try {
+        const f = await fileIo.open(record.localPath, fileIo.OpenMode.READ_ONLY);
+        await fileIo.close(f);
+      } catch (_e) {
+        stale.push(key);
+      }
+    }
+    if (stale.length > 0) {
+      for (let i = 0; i < stale.length; i++) {
+        this.downloadRegistry.delete(stale[i]);
+      }
+      this.log.add(`下载记录清理: 移除 ${stale.length} 条失效记录`);
+      await this.saveRegistry();
+    }
   }
 
   private async saveRegistry(): Promise<void> {
@@ -467,6 +512,9 @@ export class CameraService {
 
       await this.loadPhotoList();
       await this.loadAllThumbnails();
+
+      // Re-validate download registry against Gallery to detect user deletions
+      await this.validateRegistry();
     } catch (err) {
       hilog.error(DOMAIN, TAG, `scan error: ${JSON.stringify(err)}`);
       this.statusText = '扫描出错';

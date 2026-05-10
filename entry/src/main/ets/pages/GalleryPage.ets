@@ -31,17 +31,29 @@ export struct GalleryPage {
   @State galleryScale: number = 1.0;
   @Prop downloadProgress: DownloadProgress | null = null;
   @Prop downloadedKeys: string[] = [];
+  @StorageLink('gallery_column_count') galleryColumnCount: number = -1;
   private service: CameraService = CameraService.getInstance();
   private pinchBaseScale: number = 1.0;
   onThumbClick: (photo: PhotoEntry, index: number) => void = (_p: PhotoEntry, _i: number) => {};
   onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
   onCancelDownload: () => void = () => {};
 
+  private baseItemW(): number {
+    if (this.galleryColumnCount > 0) {
+      const d = display.getDefaultDisplaySync();
+      const w = d ? d.width : 360;
+      const avail = w - 12;
+      const gap = 2;
+      return (avail - (this.galleryColumnCount - 1) * gap) / this.galleryColumnCount;
+    }
+    return 80;
+  }
+
   private columnCount(): number {
     const d = display.getDefaultDisplaySync();
     const w = d ? d.width : 360;
     const avail = w - 12;
-    const itemW = 80 * this.galleryScale;
+    const itemW = this.baseItemW() * this.galleryScale;
     const gap = this.itemGapPx();
     const cols = Math.floor((avail + gap) / (itemW + gap));
     if (cols < 1) return 1;
@@ -267,21 +279,22 @@ build() {
                           }
 
                           if (this.downloadedKeys.indexOf(this.service.makeDownloadKey(photo.filename, photo.size)) >= 0) {
-                            Text('✓')
-                              .fontSize(10)
-                              .fontColor('#FFFFFF')
-                              .padding({ left: 4, right: 4, top: 1, bottom: 1 })
-                              .backgroundColor('rgba(76,175,80,0.85)')
-                              .borderRadius(3)
-                              .position({ x: '100%', y: '100%' })
-                              .markAnchor({ x: '100%', y: '100%' })
-                              .margin({ right: 3, bottom: 3 })
+                            Circle({ width: 6, height: 6 })
+                              .fill('#4CAF50')
+                              .position({ x: '100%', y: 0 })
+                              .markAnchor({ x: '100%', y: 0 })
+                              .margin({ top: 4, right: 4 })
                               .hitTestBehavior(HitTestMode.None)
                           }
                         }
                         .width('100%')
                         .aspectRatio(1)
                         .borderRadius(4)
+                        .border({
+                          width: this.downloadedKeys.indexOf(this.service.makeDownloadKey(photo.filename, photo.size)) >= 0 ? 2 : 0,
+                          color: '#4CAF50',
+                          radius: 4
+                        })
                         .clip(true)
                         .parallelGesture(
                           GestureGroup(GestureMode.Exclusive,
@@ -329,19 +342,14 @@ build() {
         }
         .width('100%').layoutWeight(1)
         .parallelGesture(
-          GestureGroup(GestureMode.Parallel,
-            TapGesture({ count: 2 }).onAction(() => {
-              this.galleryScale = 1.0;
-            }),
-            PinchGesture({ fingers: 2 })
-              .onActionStart(() => {
-                this.pinchBaseScale = this.galleryScale;
-              })
-              .onActionUpdate((event: GestureEvent) => {
-                const s = this.pinchBaseScale * event.scale;
-                this.galleryScale = Math.max(0.4, Math.min(6.0, s));
-              })
-          )
+          PinchGesture({ fingers: 2 })
+            .onActionStart(() => {
+              this.pinchBaseScale = this.galleryScale;
+            })
+            .onActionUpdate((event: GestureEvent) => {
+              const s = this.pinchBaseScale * event.scale;
+              this.galleryScale = Math.max(0.4, Math.min(6.0, s));
+            })
         )
       }
 

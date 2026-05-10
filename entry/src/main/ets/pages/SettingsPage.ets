@@ -3,6 +3,13 @@ import { router } from '@kit.ArkUI';
 
 const DARK_MODE_KEY = 'dark_mode_pref';
 
+const COLUMN_OPTIONS: number[] = [-1, 3, 4, 5, 6];
+
+function formatColumn(n: number): string {
+  if (n <= 0) return '自动';
+  return `${n}列`;
+}
+
 const GPS_INTERVALS: number[] = [30, 60, 300, 600, 1800];
 
 function formatInterval(seconds: number): string {
@@ -15,6 +22,7 @@ function formatInterval(seconds: number): string {
 export struct SettingsPage {
   @Prop logText: string = '';
   @StorageLink(DARK_MODE_KEY) darkMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
+  @StorageLink('gallery_column_count') galleryColumnCount: number = -1;
   // GPS state
   @Prop gpsRunning: boolean = false;
   @Prop gpsRecordCount: number = 0;
@@ -48,6 +56,31 @@ export struct SettingsPage {
             this.ModeButton('深色', ConfigurationConstant.ColorMode.COLOR_MODE_DARK)
           }
           .width('100%')
+        }
+        .width('100%').padding(14)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .margin({ bottom: 16 })
+
+        Text('画廊')
+          .fontSize(13).fontColor($r('app.color.text_secondary'))
+          .fontWeight(FontWeight.Medium)
+          .alignSelf(ItemAlign.Start).margin({ bottom: 8 })
+
+        Column() {
+          Text('默认列数').fontSize(14).fontColor($r('app.color.text_primary'))
+            .alignSelf(ItemAlign.Start).margin({ bottom: 10 })
+
+          Row({ space: 8 }) {
+            ForEach(COLUMN_OPTIONS, (n: number) => {
+              Text(formatColumn(n))
+                .fontSize(13)
+                .fontColor(this.galleryColumnCount === n ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                .backgroundColor(this.galleryColumnCount === n ? $r('app.color.primary') : $r('app.color.bg_page'))
+                .borderRadius(14)
+                .onClick(() => { this.galleryColumnCount = n; })
+            })
+          }
         }
         .width('100%').padding(14)
         .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
