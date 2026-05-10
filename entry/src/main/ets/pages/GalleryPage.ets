@@ -168,15 +168,52 @@ export struct GalleryPage {
     return opts;
   }
 
-  private toggleSelectAll(): void {
+  private isDownloaded(photo: PhotoEntry): boolean {
+    return this.downloadedKeys.indexOf(this.service.makeDownloadKey(photo.filename, photo.size)) >= 0;
+  }
+
+  private getSelectablePhotos(): PhotoEntry[] {
     const filtered = this.getFilteredPhotos();
-    const allSelected = filtered.every((p: PhotoEntry) => this.selectedHandles.has(p.handle));
+    const result: PhotoEntry[] = [];
+    for (const p of filtered) {
+      if (!this.isDownloaded(p)) result.push(p);
+    }
+    return result;
+  }
+
+  private toggleSelectAll(): void {
+    const selectable = this.getSelectablePhotos();
+    if (selectable.length === 0) return;
+    const allSelected = selectable.every((p: PhotoEntry) => this.selectedHandles.has(p.handle));
     if (allSelected) {
-      for (const p of filtered) {
+      for (const p of selectable) {
         this.selectedHandles.delete(p.handle);
       }
     } else {
-      for (const p of filtered) {
+      for (const p of selectable) {
+        this.selectedHandles.add(p.handle);
+      }
+    }
+    this.selectedHandles = new Set(this.selectedHandles);
+  }
+
+  private toggleSelectDate(groupIndex: number): void {
+    if (!this.selectMode) return;
+    const groups = this.getFilteredGroups();
+    const group = groups[groupIndex];
+    if (!group) return;
+    const selectable: PhotoEntry[] = [];
+    for (const p of group.photos) {
+      if (!this.isDownloaded(p)) selectable.push(p);
+    }
+    if (selectable.length === 0) return;
+    const allSelected = selectable.every((p: PhotoEntry) => this.selectedHandles.has(p.handle));
+    if (allSelected) {
+      for (const p of selectable) {
+        this.selectedHandles.delete(p.handle);
+      }
+    } else {
+      for (const p of selectable) {
         this.selectedHandles.add(p.handle);
       }
     }
@@ -232,12 +269,22 @@ build() {
             Column() {
               ForEach(this.getFilteredGroups(), (group: DateGroup, gi: number) => {
                 Column() {
-                  Text(group.dateLabel)
-                    .fontSize(13)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor($r('app.color.text_primary'))
-                    .alignSelf(ItemAlign.Start)
-                    .padding({ left: 4, bottom: 4 })
+                  Row({ space: 8 }) {
+                    Text(group.dateLabel)
+                      .fontSize(13)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor($r('app.color.text_primary'))
+                    if (this.selectMode) {
+                      Text('全选当天')
+                        .fontSize(11)
+                        .fontColor($r('app.color.primary'))
+                        .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                        .border({ width: 1, color: $r('app.color.primary'), radius: 10 })
+                        .onClick(() => { this.toggleSelectDate(gi); })
+                    }
+                  }
+                  .alignSelf(ItemAlign.Start)
+                  .padding({ left: 4, bottom: 4 })
 
                   Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
                     ForEach(group.photos, (photo: PhotoEntry) => {
@@ -268,7 +315,7 @@ build() {
                               .margin({ left: 3, bottom: 3 })
                           }
 
-                          if (this.selectMode) {
+                          if (this.selectMode && !this.isDownloaded(photo)) {
                             Checkbox()
                               .select(this.selectedHandles.has(photo.handle))
                               .width(18).height(18)
@@ -300,6 +347,7 @@ build() {
                           GestureGroup(GestureMode.Exclusive,
                             LongPressGesture({ repeat: false, duration: 500 })
                               .onAction(() => {
+                                if (this.isDownloaded(photo)) return;
                                 if (!this.selectMode) {
                                   this.selectMode = true;
                                   this.selectedHandles.add(photo.handle);
@@ -309,6 +357,7 @@ build() {
                             TapGesture()
                               .onAction(() => {
                                 if (this.selectMode) {
+                                  if (this.isDownloaded(photo)) return;
                                   if (this.selectedHandles.has(photo.handle)) {
                                     this.selectedHandles.delete(photo.handle);
                                   } else {
@@ -361,7 +410,7 @@ build() {
       } else if (this.selectMode) {
         SelectionActionBar({
           selectedCount: this.selectedHandles.size,
-          totalVisible: this.getFilteredPhotos().length,
+          totalVisible: this.getSelectablePhotos().length,
           onCancel: () => {
             this.selectMode = false;
             this.selectedHandles.clear();
