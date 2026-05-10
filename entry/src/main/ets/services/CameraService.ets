@@ -6,6 +6,8 @@ import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { PtpSession, setPtpLog } from '../pages/PtpHost';
 import { AppLog } from './AppLog';
+import { GpsRecorder } from './GpsRecorder';
+import { ExifGeotagger } from './ExifGeotagger';
 import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } from '../model/PhotoEntry';
 
 const DOMAIN = 0x0000;
@@ -222,6 +224,26 @@ export class CameraService {
 
       downloadedBytes += data.length;
       results.push({ handle: photo.handle, key, success: true, localPath: localPath });
+
+      // Apply GPS geotagging to the sandbox file before Gallery save
+      if (photo.captureDate) {
+        const gpsRecorder = GpsRecorder.getInstance();
+        const gpsRecords = gpsRecorder.getRecords();
+        if (gpsRecords.length > 0) {
+          const photoTime = GpsRecorder.parseCaptureDate(photo.captureDate);
+          const gps = gpsRecorder.findClosest(photo.captureDate);
+          this.log.add(`GPS匹配: ${photo.filename} captureDate=${photo.captureDate} photoTime=${photoTime} gpsRange=[${gpsRecords[0].timestamp}..${gpsRecords[gpsRecords.length-1].timestamp}] match=${gps ? 'yes' : 'no'}`);
+          if (gps) {
+            const tagged = await ExifGeotagger.applyGps(localPath, gps);
+            if (tagged) {
+              this.log.add(`GPS标记: ${photo.filename} (${gps.latitude.toFixed(4)},${gps.longitude.toFixed(4)})`);
+            }
+          }
+        }
+      } else {
+        this.log.add(`GPS跳过: ${photo.filename} 无captureDate`);
+      }
+
       this.log.add(`沙箱暂存 [${i + 1}/${batch.length}]: ${photo.filename} (${this.formatSize(photo.size)})`);
     }
 

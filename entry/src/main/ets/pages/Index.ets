@@ -1,13 +1,16 @@
 import { pasteboard } from '@kit.BasicServicesKit';
-import { common } from '@kit.AbilityKit';
+import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
 import { CameraService } from '../services/CameraService';
+import { GpsRecorder } from '../services/GpsRecorder';
+import { ExifGeotagger } from '../services/ExifGeotagger';
 import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
 import type { PhotoEntry, DownloadProgress } from '../model/PhotoEntry';
 import { AppLog } from '../services/AppLog';
 
+const DARK_MODE_KEY = 'dark_mode_pref';
 const TABS: string[] = ['Gallery', 'Camera', 'Settings'];
 
 function tabLabel(key: string): string {
@@ -35,14 +38,34 @@ struct Index {
   @State thumbnailReadyHandles: number[] = [];
   @State downloadProgress: DownloadProgress | null = null;
   @State downloadedKeys: string[] = [];
+  @State gpsRunning: boolean = false;
+  @State gpsRecordCount: number = 0;
+  @State gpsInterval: number = 60;
+  private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
 
   aboutToAppear(): void {
-    // Init log file path for persistence
     const ctx = getContext(this) as common.UIAbilityContext;
     this.uiContext = ctx;
+
+    // Persist dark mode across restarts
+    PersistentStorage.persistProp(DARK_MODE_KEY, ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
+    const savedMode = AppStorage.get<number>(DARK_MODE_KEY);
+    if (savedMode !== undefined && savedMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+      this.applyDarkMode(savedMode);
+    }
+
     this.service.initLogPath(ctx.filesDir);
     this.service.initDownloadDir(ctx.filesDir);
     this.service.onChange = () => { this.syncState(); };
+
+    // Init GPS recorder and geotagger; auto-start if it was running last time
+    this.gpsRecorder.init(ctx.filesDir, this.appLog, ctx);
+    this.gpsRecorder.onChange = () => { this.syncGpsState(); };
+    ExifGeotagger.setLog(this.appLog);
+    this.gpsInterval = this.gpsRecorder.getInterval();
+    this.syncGpsState();
+    this.gpsRecorder.autoStart();
+
     this.syncState();
   }
 
@@ -60,6 +83,31 @@ struct Index {
     this.service.thumbnailPixelMapMap.forEach((_v: Object, k: number) => { handles.push(k); });
     this.thumbnailReadyHandles = handles;
     this.downloadedKeys = this.service.getDownloadedKeys();
+  }
+
+  syncGpsState(): void {
+    this.gpsRunning = this.gpsRecorder.isRunning();
+    this.gpsRecordCount = this.gpsRecorder.recordCount();
+    this.gpsInterval = this.gpsRecorder.getInterval();
+  }
+
+  async toggleGps(): Promise<void> {
+    if (this.gpsRecorder.isRunning()) {
+      this.gpsRecorder.stop();
+    } else {
+      await this.gpsRecorder.start();
+    }
+    this.syncGpsState();
+  }
+
+  async changeGpsInterval(seconds: number): Promise<void> {
+    await this.gpsRecorder.setInterval(seconds);
+    this.syncGpsState();
+  }
+
+  clearGpsRecords(): void {
+    this.gpsRecorder.clearRecords();
+    this.syncGpsState();
   }
 
   applyDarkMode(mode: number): void {
@@ -151,6 +199,9 @@ struct Index {
         TabContent() {
           SettingsPage({
             logText: this.logText,
+            gpsRunning: this.gpsRunning,
+            gpsRecordCount: this.gpsRecordCount,
+            gpsInterval: this.gpsInterval,
             onClear: () => { this.appLog.clear(); this.syncState(); },
             onCopy: () => {
               const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.logText);
@@ -158,7 +209,10 @@ struct Index {
               this.appLog.add('日志已复制到剪贴板');
               this.syncState();
             },
-            onDarkModeChange: (mode: number) => { this.applyDarkMode(mode); }
+            onDarkModeChange: (mode: number) => { this.applyDarkMode(mode); },
+            onGpsToggle: () => { this.toggleGps(); },
+            onGpsIntervalChange: (seconds: number) => { this.changeGpsInterval(seconds); },
+            onGpsClear: () => { this.clearGpsRecords(); }
           })
         }
       }

@@ -139,6 +139,10 @@
     {
       "name": "photo_detail_loading",
       "value": "加载中..."
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "用于记录拍照位置，为照片添加地理标记"
     }
   ]
 }

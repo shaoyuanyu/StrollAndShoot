@@ -48,3 +48,15 @@ export interface DownloadResult {
   localPath: string;
   error?: string;
 }
+
+export interface GpsRecord {
+  timestamp: number;   // epoch ms
+  latitude: number;
+  longitude: number;
+  altitude: number;     // meters, 0 if unavailable
+}
+
+export interface GpsDailyGroup {
+  day: string;    // "YYYY-MM-DD"
+  count: number;
+}
