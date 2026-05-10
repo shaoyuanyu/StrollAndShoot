@@ -1,7 +1,8 @@
 import { router } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
+import { common } from '@kit.AbilityKit';
 import { CameraService } from '../services/CameraService';
-import type { PhotoEntry } from '../model/PhotoEntry';
+import type { PhotoEntry, DownloadProgress } from '../model/PhotoEntry';
 
 // ---- ZoomableImage: isolated component so gesture @State changes don't
 //      rebuild the parent Swiper/overlay ----
@@ -222,6 +223,8 @@ struct PhotoDetailPage {
   @State loadedHandle: number = 0;
   @State isZoomed: boolean = false;
   @State allowEdgeSwipe: boolean = true;
+  @State isDownloaded: boolean = false;
+  @State downloading: boolean = false;
   private photos: PhotoEntry[] = [];
   private service: CameraService = CameraService.getInstance();
   private loadVersion: number = 0;
@@ -235,6 +238,29 @@ struct PhotoDetailPage {
       if (idx !== undefined) this.currentIndex = idx;
     }
     this.loadFullForCurrent();
+    this.checkDownloaded();
+  }
+
+  private checkDownloaded(): void {
+    this.isDownloaded = this.service.isPhotoDownloaded(this.currentPhoto().handle);
+  }
+
+  private async downloadCurrent(): Promise<void> {
+    if (this.downloading || this.isDownloaded) return;
+    this.downloading = true;
+
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      await this.service.downloadPhotos(
+        [this.currentPhoto().handle],
+        (_progress: DownloadProgress) => { /* single photo, progress handled by service */ },
+        ctx
+      );
+      this.isDownloaded = this.service.isPhotoDownloaded(this.currentPhoto().handle);
+    } catch (_e) {
+      // download failed, keep button enabled
+    }
+    this.downloading = false;
   }
 
   private currentPhoto(): PhotoEntry {
@@ -344,6 +370,7 @@ struct PhotoDetailPage {
       .onChange((idx: number) => {
         this.currentIndex = idx;
         this.loadFullForCurrent();
+        this.checkDownloaded();
       })
       .width('100%').height('100%')
 
@@ -390,8 +417,29 @@ struct PhotoDetailPage {
               Text(`${this.currentPhoto().imagePixWidth}x${this.currentPhoto().imagePixHeight}`)
                 .fontSize(11).fontColor($r('app.color.text_secondary'))
             }
+            Blank()
+            if (this.isDownloaded) {
+              Text('已下载')
+                .fontSize(12).fontColor('#4CAF50')
+                .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                .backgroundColor('rgba(76,175,80,0.15)')
+                .borderRadius(12)
+            } else if (this.downloading) {
+              Text('下载中…')
+                .fontSize(12).fontColor($r('app.color.text_secondary'))
+                .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                .backgroundColor('rgba(255,255,255,0.12)')
+                .borderRadius(12)
+            } else {
+              Text('下载')
+                .fontSize(12).fontColor($r('app.color.text_on_dark'))
+                .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                .backgroundColor($r('app.color.primary'))
+                .borderRadius(12)
+                .onClick(() => { this.downloadCurrent(); })
+            }
           }
-          .alignSelf(ItemAlign.Start)
+          .alignSelf(ItemAlign.Start).width('100%')
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 12, bottom: 24 })
