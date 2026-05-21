@@ -10,14 +10,6 @@ function formatColumn(n: number): string {
   return `${n}列`;
 }
 
-const GPS_INTERVALS: number[] = [30, 60, 300, 600, 1800];
-
-function formatInterval(seconds: number): string {
-  if (seconds < 60) return `${seconds}秒`;
-  const m = seconds / 60;
-  return Number.isInteger(m) ? `${m}分钟` : `${m.toFixed(1)}分钟`;
-}
-
 @Component
 export struct SettingsPage {
   @Prop logText: string = '';
@@ -26,12 +18,12 @@ export struct SettingsPage {
   // GPS state
   @Prop gpsRunning: boolean = false;
   @Prop gpsRecordCount: number = 0;
-  @Prop gpsInterval: number = 60;
+  @Prop gpsPrecision: boolean = false;
   onClear: () => void = () => {};
   onCopy: () => void = () => {};
   onDarkModeChange: (mode: number) => void = (_m: number) => {};
   onGpsToggle: () => void = () => {};
-  onGpsIntervalChange: (seconds: number) => void = (_s: number) => {};
+  onGpsPrecisionChange: (precision: boolean) => void = (_p: boolean) => {};
   onGpsClear: () => void = () => {};
 
   gotoManage(): void {
@@ -102,21 +94,32 @@ export struct SettingsPage {
 
           Divider().margin({ top: 10, bottom: 10 })
 
-          Text('记录间隔')
+          Text('定位模式')
             .fontSize(13).fontColor($r('app.color.text_secondary'))
             .alignSelf(ItemAlign.Start).margin({ bottom: 8 })
 
-          Row({ space: 8 }) {
-            ForEach(GPS_INTERVALS, (sec: number) => {
-              Text(formatInterval(sec))
-                .fontSize(13)
-                .fontColor(this.gpsInterval === sec ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-                .backgroundColor(this.gpsInterval === sec ? $r('app.color.primary') : $r('app.color.bg_page'))
-                .borderRadius(14)
-                .onClick(() => { this.onGpsIntervalChange(sec); })
-            })
+          Row() {
+            Text('精确模式')
+              .fontSize(13).fontColor(this.gpsPrecision ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+              .textAlign(TextAlign.Center)
+              .padding({ top: 7, bottom: 7 })
+              .backgroundColor(this.gpsPrecision ? $r('app.color.primary') : 'transparent')
+              .borderRadius(16)
+              .layoutWeight(1)
+              .onClick(() => { this.onGpsPrecisionChange(true); })
+
+            Text('省电模式')
+              .fontSize(13).fontColor(!this.gpsPrecision ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+              .textAlign(TextAlign.Center)
+              .padding({ top: 7, bottom: 7 })
+              .backgroundColor(!this.gpsPrecision ? $r('app.color.primary') : 'transparent')
+              .borderRadius(16)
+              .layoutWeight(1)
+              .onClick(() => { this.onGpsPrecisionChange(false); })
           }
+          .width('100%').padding(3)
+          .backgroundColor($r('app.color.bg_page'))
+          .borderRadius(18)
 
           Row() {
             Text(`已记录 ${this.gpsRecordCount} 个位置点`)

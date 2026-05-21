@@ -2,6 +2,7 @@
   "src": [
     "pages/Index",
     "pages/PhotoDetailPage",
-    "pages/GpsManagementPage"
+    "pages/GpsManagementPage",
+    "pages/GpsDayDetailPage"
   ]
 }

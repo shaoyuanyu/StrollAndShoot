@@ -93,6 +93,12 @@ struct GpsManagementPage {
                   .onClick(() => { this.deleteDay(group.day, group.count); })
               }
               .width('100%').padding(14)
+              .onClick(() => {
+                router.pushUrl({
+                  url: 'pages/GpsDayDetailPage',
+                  params: { day: group.day }
+                });
+              })
             }
           }, (group: GpsDailyGroup) => group.day)
         }

@@ -29,6 +29,9 @@
               "ohos.want.action.home"
             ]
           }
+        ],
+        "backgroundModes": [
+          "location"
         ]
       }
     ],
@@ -43,6 +46,14 @@
       },
       {
         "name": "ohos.permission.APPROXIMATELY_LOCATION",
+        "reason": "$string:location_permission_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
         "reason": "$string:location_permission_reason",
         "usedScene": {
           "abilities": ["EntryAbility"],

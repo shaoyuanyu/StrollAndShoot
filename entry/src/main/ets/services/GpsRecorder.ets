@@ -1,7 +1,8 @@
 import { geoLocationManager } from '@kit.LocationKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
-import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
+import { abilityAccessCtrl, common, Permissions, wantAgent, WantAgent } from '@kit.AbilityKit';
+import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { AppLog } from './AppLog';
 import type { GpsRecord, GpsDailyGroup } from '../model/PhotoEntry';
 
@@ -17,7 +18,8 @@ export class GpsRecorder {
   private log: AppLog = new AppLog();
   private running: boolean = false;
   private storageDir: string = '';
-  private intervalSeconds: number = 60;
+  // true = precision (TRANSPORT), false = power-saving (DAILY_LIFE_SERVICE)
+  private precisionMode: boolean = false;
   private locationCallback?: (location: geoLocationManager.Location) => void;
   private context: common.UIAbilityContext | null = null;
   private permissionsChecked: boolean = false;
@@ -36,7 +38,7 @@ export class GpsRecorder {
     this.storageDir = dir;
     this.log = log;
     this.context = ctx;
-    this.loadInterval();
+    this.loadMode();
     this.loadRecords();
   }
 
@@ -67,17 +69,17 @@ export class GpsRecorder {
     return this.records.length;
   }
 
-  async setInterval(seconds: number): Promise<void> {
-    this.intervalSeconds = seconds;
-    this.saveInterval();
+  async setPrecisionMode(precision: boolean): Promise<void> {
+    this.precisionMode = precision;
+    this.saveMode();
     if (this.running) {
       this.stop();
       await this.start();
     }
   }
 
-  getInterval(): number {
-    return this.intervalSeconds;
+  isPrecision(): boolean {
+    return this.precisionMode;
   }
 
   async start(): Promise<void> {
@@ -111,15 +113,25 @@ export class GpsRecorder {
         this.log.add(`GPS定位 #${callbackCount}: ${record.latitude.toFixed(4)},${record.longitude.toFixed(4)} (共${this.records.length}条)`);
       };
 
+      const scenario = this.precisionMode
+        ? geoLocationManager.UserActivityScenario.TRANSPORT
+        : geoLocationManager.UserActivityScenario.DAILY_LIFE_SERVICE;
+      const interval = this.precisionMode ? 31 : 91;
+
       const requestCfg: geoLocationManager.ContinuousLocationRequest = {
-        interval: this.intervalSeconds,
-        locationScenario: geoLocationManager.UserActivityScenario.DAILY_LIFE_SERVICE
+        interval: interval,
+        locationScenario: scenario
       };
 
       geoLocationManager.on('locationChange', requestCfg, this.locationCallback);
       this.running = true;
-      this.saveInterval();
-      this.log.add(`GPS记录已启动 (间隔${this.intervalSeconds}秒, 已有${this.records.length}条)`);
+      this.saveMode();
+
+      // Request continuous task for background GPS
+      await this.requestContinuousTask();
+
+      const modeLabel = this.precisionMode ? '精确' : '省电';
+      this.log.add(`GPS记录已启动 (${modeLabel}模式, 已有${this.records.length}条)`);
     } catch (err) {
       this.log.add(`GPS记录启动失败: ${JSON.stringify(err)}`);
     }
@@ -127,6 +139,8 @@ export class GpsRecorder {
 
   stop(): void {
     if (!this.running) return;
+
+    this.cancelContinuousTask();
 
     try {
       if (this.locationCallback) {
@@ -137,7 +151,7 @@ export class GpsRecorder {
     }
     this.running = false;
     this.locationCallback = undefined;
-    this.saveInterval();
+    this.saveMode();
     this.log.add(`GPS记录已停止 (共${this.records.length}条)`);
   }
 
@@ -227,6 +241,17 @@ export class GpsRecorder {
     return result;
   }
 
+  /** Returns all records for a specific day (YYYY-MM-DD), sorted by time ascending. */
+  getDayRecords(dateKey: string): GpsRecord[] {
+    return this.records
+      .filter((r: GpsRecord) => {
+        const d = new Date(r.timestamp);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        return key === dateKey;
+      })
+      .sort((a: GpsRecord, b: GpsRecord) => a.timestamp - b.timestamp);
+  }
+
   /** Delete all records for a given day. Returns the new total count. */
   deleteDay(dateKey: string): number {
     const before = this.records.length;
@@ -250,11 +275,45 @@ export class GpsRecorder {
     this.log.add('GPS记录已清除');
   }
 
+  private async requestContinuousTask(): Promise<void> {
+    if (!this.context) return;
+    try {
+      const wantAgentInfo: wantAgent.WantAgentInfo = {
+        wants: [{
+          bundleName: 'io.github.shaoyuanyu.strollandshoot',
+          abilityName: 'EntryAbility'
+        }],
+        actionType: wantAgent.OperationType.START_ABILITY,
+        requestCode: 0,
+        wantAgentFlags: [wantAgent.WantAgentFlags.CONSTANT_FLAG]
+      };
+      const wa: WantAgent = await wantAgent.getWantAgent(wantAgentInfo);
+      await backgroundTaskManager.startBackgroundRunning(
+        this.context,
+        backgroundTaskManager.BackgroundMode.LOCATION,
+        wa
+      );
+      this.log.add('后台定位长时任务已申请');
+    } catch (err) {
+      this.log.add(`后台长时任务申请失败: ${JSON.stringify(err)}`);
+    }
+  }
+
+  private cancelContinuousTask(): void {
+    if (!this.context) return;
+    try {
+      backgroundTaskManager.stopBackgroundRunning(this.context);
+      this.log.add('后台定位长时任务已取消');
+    } catch (err) {
+      this.log.add(`后台长时任务取消失败: ${JSON.stringify(err)}`);
+    }
+  }
+
   private settingsPath(): string {
     return this.storageDir + '/gps_settings.json';
   }
 
-  private loadInterval(): void {
+  private loadMode(): void {
     try {
       const f = fileIo.openSync(this.settingsPath(), fileIo.OpenMode.READ_ONLY);
       const stat = fileIo.statSync(this.settingsPath());
@@ -262,20 +321,20 @@ export class GpsRecorder {
       fileIo.readSync(f.fd, buf);
       fileIo.closeSync(f);
       const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-      const obj = JSON.parse(text) as Record<string, number>;
-      if (typeof obj.interval === 'number' && obj.interval > 0) {
-        this.intervalSeconds = obj.interval;
+      const obj = JSON.parse(text) as Record<string, Object>;
+      if (typeof obj.precisionMode === 'boolean') {
+        this.precisionMode = obj.precisionMode as boolean;
       }
     } catch (_e) {
       // keep default
     }
   }
 
-  private saveInterval(): void {
+  private saveMode(): void {
     if (!this.storageDir) return;
     try {
       const text = JSON.stringify({
-        interval: this.intervalSeconds,
+        precisionMode: this.precisionMode,
         wasRunning: this.running
       });
       const f = fileIo.openSync(this.settingsPath(),

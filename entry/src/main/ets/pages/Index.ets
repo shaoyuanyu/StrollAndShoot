@@ -40,8 +40,14 @@ struct Index {
   @State downloadedKeys: string[] = [];
   @State gpsRunning: boolean = false;
   @State gpsRecordCount: number = 0;
-  @State gpsInterval: number = 60;
+  @State gpsPrecision: boolean = false;
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
+
+  onPageShow(): void {
+    // Restore onChange in case another page overwrote it (e.g. GpsManagementPage)
+    this.gpsRecorder.onChange = () => { this.syncGpsState(); };
+    this.syncGpsState();
+  }
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.UIAbilityContext;
@@ -65,7 +71,6 @@ struct Index {
     this.gpsRecorder.init(ctx.filesDir, this.appLog, ctx);
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
     ExifGeotagger.setLog(this.appLog);
-    this.gpsInterval = this.gpsRecorder.getInterval();
     this.syncGpsState();
     this.gpsRecorder.autoStart();
 
@@ -91,7 +96,7 @@ struct Index {
   syncGpsState(): void {
     this.gpsRunning = this.gpsRecorder.isRunning();
     this.gpsRecordCount = this.gpsRecorder.recordCount();
-    this.gpsInterval = this.gpsRecorder.getInterval();
+    this.gpsPrecision = this.gpsRecorder.isPrecision();
   }
 
   async toggleGps(): Promise<void> {
@@ -103,8 +108,8 @@ struct Index {
     this.syncGpsState();
   }
 
-  async changeGpsInterval(seconds: number): Promise<void> {
-    await this.gpsRecorder.setInterval(seconds);
+  async changeGpsPrecision(precision: boolean): Promise<void> {
+    await this.gpsRecorder.setPrecisionMode(precision);
     this.syncGpsState();
   }
 
@@ -204,7 +209,7 @@ struct Index {
             logText: this.logText,
             gpsRunning: this.gpsRunning,
             gpsRecordCount: this.gpsRecordCount,
-            gpsInterval: this.gpsInterval,
+            gpsPrecision: this.gpsPrecision,
             onClear: () => { this.appLog.clear(); this.syncState(); },
             onCopy: () => {
               const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.logText);
@@ -214,7 +219,7 @@ struct Index {
             },
             onDarkModeChange: (mode: number) => { this.applyDarkMode(mode); },
             onGpsToggle: () => { this.toggleGps(); },
-            onGpsIntervalChange: (seconds: number) => { this.changeGpsInterval(seconds); },
+            onGpsPrecisionChange: (precision: boolean) => { this.changeGpsPrecision(precision); },
             onGpsClear: () => { this.clearGpsRecords(); }
           })
         }
