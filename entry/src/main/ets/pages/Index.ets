@@ -47,6 +47,7 @@ struct Index {
     // Restore onChange in case another page overwrote it (e.g. GpsManagementPage)
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
     this.syncGpsState();
+    this.syncState();
   }
 
   aboutToAppear(): void {
