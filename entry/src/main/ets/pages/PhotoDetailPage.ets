@@ -285,7 +285,7 @@ struct PhotoDetailPage {
     if (pixelMap) {
       this.fullPixelMap = pixelMap;
       this.loadedHandle = photo.handle;
-      this.service.setDetailIndex(this.currentIndex, this.photos.length);
+      this.service.setDetailIndex(this.currentIndex, this.photos);
     }
     this.loading = false;
   }

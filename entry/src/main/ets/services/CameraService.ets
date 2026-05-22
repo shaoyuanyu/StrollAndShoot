@@ -716,12 +716,14 @@ export class CameraService {
     }
   }
 
-  setDetailIndex(idx: number, total: number): void {
+  private preloadPhotos: PhotoEntry[] = [];
+
+  setDetailIndex(idx: number, photos: PhotoEntry[]): void {
     if (this.detailIndex === idx) return;
     this.prevDetailIndex = this.detailIndex;
     this.detailIndex = idx;
-    // Trigger preload after a short delay
-    this.schedulePreload(total);
+    this.preloadPhotos = photos;
+    this.schedulePreload(photos.length);
   }
 
   private preloadTimer: number = -1;
@@ -752,7 +754,7 @@ export class CameraService {
 
     for (const qi of queue) {
       if (!this.preloading) break;
-      const photo = this.photos[qi];
+      const photo = this.preloadPhotos[qi];
       if (!photo) continue;
       if (this.compressedCache.has(photo.handle)) continue;
       if (this.preloadingSet.has(photo.handle)) continue;
@@ -787,6 +789,7 @@ export class CameraService {
     this.cacheTotalBytes = 0;
     this.detailIndex = -1;
     this.prevDetailIndex = -1;
+    this.preloadPhotos = [];
   }
 
   async loadAllThumbnails(): Promise<void> {

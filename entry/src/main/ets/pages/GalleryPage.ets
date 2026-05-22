@@ -34,7 +34,7 @@ export struct GalleryPage {
   @StorageLink('gallery_column_count') galleryColumnCount: number = -1;
   private service: CameraService = CameraService.getInstance();
   private pinchBaseScale: number = 1.0;
-  onThumbClick: (photo: PhotoEntry, index: number) => void = (_p: PhotoEntry, _i: number) => {};
+  onThumbClick: (photos: PhotoEntry[], index: number) => void = (_p: PhotoEntry[], _i: number) => {};
   onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
   onCancelDownload: () => void = () => {};
 
@@ -365,11 +365,12 @@ build() {
                                   }
                                   this.selectedHandles = new Set(this.selectedHandles);
                                 } else {
+                                  const filtered = this.getFilteredPhotos();
                                   let idx = 0;
-                                  for (let i = 0; i < this.photos.length; i++) {
-                                    if (this.photos[i].handle === photo.handle) { idx = i; break; }
+                                  for (let i = 0; i < filtered.length; i++) {
+                                    if (filtered[i].handle === photo.handle) { idx = i; break; }
                                   }
-                                  this.onThumbClick(photo, idx);
+                                  this.onThumbClick(filtered, idx);
                                 }
                               })
                           )

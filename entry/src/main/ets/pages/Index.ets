@@ -142,10 +142,10 @@ struct Index {
             thumbnailReadyHandles: this.thumbnailReadyHandles,
             downloadProgress: this.downloadProgress,
             downloadedKeys: this.downloadedKeys,
-            onThumbClick: (photo: PhotoEntry, index: number) => {
+            onThumbClick: (photos: PhotoEntry[], index: number) => {
               router.pushUrl({
                 url: 'pages/PhotoDetailPage',
-                params: { photos: this.photos, initialIndex: index }
+                params: { photos: photos, initialIndex: index }
               });
             },
             onDownloadSelected: async (handles: number[]) => {
