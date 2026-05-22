@@ -15,6 +15,7 @@ export struct SettingsPage {
   @Prop logText: string = '';
   @StorageLink(DARK_MODE_KEY) darkMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
   @StorageLink('gallery_column_count') galleryColumnCount: number = -1;
+  @StorageLink('gallery_display_mode') displayMode: string = 'file_first';
   // GPS state
   @Prop gpsRunning: boolean = false;
   @Prop gpsRecordCount: number = 0;
@@ -72,6 +73,19 @@ export struct SettingsPage {
                 .borderRadius(14)
                 .onClick(() => { this.galleryColumnCount = n; })
             })
+          }
+        }
+        .width('100%').padding(14)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .margin({ bottom: 16 })
+
+        Column() {
+          Text('显示模式').fontSize(14).fontColor($r('app.color.text_primary'))
+            .alignSelf(ItemAlign.Start).margin({ bottom: 10 })
+
+          Row({ space: 8 }) {
+            this.DisplayModeChip('内容优先', 'content_first')
+            this.DisplayModeChip('文件优先', 'file_first')
           }
         }
         .width('100%').padding(14)
@@ -184,6 +198,17 @@ export struct SettingsPage {
       .borderRadius(16)
       .layoutWeight(1)
       .onClick(() => { this.onGpsModeChange(mode); })
+  }
+
+  @Builder
+  DisplayModeChip(label: string, mode: string) {
+    Text(label)
+      .fontSize(13)
+      .fontColor(this.displayMode === mode ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .backgroundColor(this.displayMode === mode ? $r('app.color.primary') : $r('app.color.bg_page'))
+      .borderRadius(16)
+      .onClick(() => { this.displayMode = mode; })
   }
 
   @Builder

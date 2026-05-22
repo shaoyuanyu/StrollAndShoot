@@ -14,6 +14,18 @@ export interface PhotoEntry {
 }
 
 /**
+ * Unified display group for both content-first and file-first modes.
+ * In file-first mode, each PhotoEntry maps to one group (alternates empty).
+ * In content-first mode, photos with the same basename are merged into one group.
+ */
+export interface DisplayGroup {
+  basename: string;
+  displayPhoto: PhotoEntry;
+  alternates: PhotoEntry[];
+  allPhotos: PhotoEntry[];
+}
+
+/**
  * Persistent record of a downloaded photo.
  * Keyed by `${filename}::${size}` since PTP handles are not stable across sessions.
  */

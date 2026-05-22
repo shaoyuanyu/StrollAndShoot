@@ -7,7 +7,7 @@ import { ExifGeotagger } from '../services/ExifGeotagger';
 import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
-import type { PhotoEntry, DownloadProgress } from '../model/PhotoEntry';
+import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
 import { AppLog } from '../services/AppLog';
 
 const DARK_MODE_KEY = 'dark_mode_pref';
@@ -62,6 +62,7 @@ struct Index {
 
     // Persist gallery column count across restarts (-1 = auto)
     PersistentStorage.persistProp('gallery_column_count', -1);
+    PersistentStorage.persistProp('gallery_display_mode', 'file_first');
     if (savedMode !== undefined && savedMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
       this.applyDarkMode(savedMode);
     }
@@ -148,10 +149,10 @@ struct Index {
             downloadProgress: this.downloadProgress,
             downloadedKeys: this.downloadedKeys,
             scanProgress: this.scanProgress, scanTotal: this.scanTotal,
-            onThumbClick: (photos: PhotoEntry[], index: number) => {
+            onThumbClick: (displayGroups: DisplayGroup[], index: number) => {
               router.pushUrl({
                 url: 'pages/PhotoDetailPage',
-                params: { photos: photos, initialIndex: index }
+                params: { displayGroups: displayGroups, initialIndex: index }
               });
             },
             onDownloadSelected: async (handles: number[]) => {

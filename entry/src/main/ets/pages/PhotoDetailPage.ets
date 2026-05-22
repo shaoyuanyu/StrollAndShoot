@@ -2,7 +2,8 @@ import { router } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { CameraService } from '../services/CameraService';
-import type { PhotoEntry, DownloadProgress } from '../model/PhotoEntry';
+import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
+import { getExt } from '../utils/PhotoGroupUtil';
 
 // ---- ZoomableImage: isolated component so gesture @State changes don't
 //      rebuild the parent Swiper/overlay ----
@@ -225,24 +226,56 @@ struct PhotoDetailPage {
   @State allowEdgeSwipe: boolean = true;
   @State isDownloaded: boolean = false;
   @State downloading: boolean = false;
-  private photos: PhotoEntry[] = [];
+  @State activeHandles: number[] = [];
+  private displayGroups: DisplayGroup[] = [];
   private service: CameraService = CameraService.getInstance();
   private loadVersion: number = 0;
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, Object>;
     if (params) {
-      const p = params['photos'] as PhotoEntry[];
-      if (p) this.photos = p;
+      const g = params['displayGroups'] as DisplayGroup[];
+      if (g) this.displayGroups = g;
       const idx = params['initialIndex'] as number;
       if (idx !== undefined) this.currentIndex = idx;
     }
+    this.activeHandles = this.displayGroups.map(g => g.displayPhoto.handle);
     this.loadFullForCurrent();
     this.checkDownloaded();
   }
 
+  private currentGroup(): DisplayGroup {
+    return this.displayGroups[this.currentIndex];
+  }
+
+  private currentActiveHandle(): number {
+    return this.activeHandles[this.currentIndex];
+  }
+
+  private findPhotoInGroup(handle: number): PhotoEntry | null {
+    const group = this.currentGroup();
+    for (const p of group.allPhotos) {
+      if (p.handle === handle) return p;
+    }
+    return null;
+  }
+
+  private currentPhoto(): PhotoEntry {
+    const found = this.findPhotoInGroup(this.currentActiveHandle());
+    return found ?? this.currentGroup().displayPhoto;
+  }
+
+  private photoForPosition(index: number): PhotoEntry {
+    const group = this.displayGroups[index];
+    const h = this.activeHandles[index];
+    for (const p of group.allPhotos) {
+      if (p.handle === h) return p;
+    }
+    return group.displayPhoto;
+  }
+
   private checkDownloaded(): void {
-    this.isDownloaded = this.service.isPhotoDownloaded(this.currentPhoto().handle);
+    this.isDownloaded = this.service.isPhotoDownloaded(this.currentActiveHandle());
   }
 
   private async downloadCurrent(): Promise<void> {
@@ -252,24 +285,29 @@ struct PhotoDetailPage {
     try {
       const ctx = getContext(this) as common.UIAbilityContext;
       await this.service.downloadPhotos(
-        [this.currentPhoto().handle],
+        [this.currentActiveHandle()],
         (_progress: DownloadProgress) => { /* single photo, progress handled by service */ },
         ctx
       );
-      this.isDownloaded = this.service.isPhotoDownloaded(this.currentPhoto().handle);
+      this.isDownloaded = this.service.isPhotoDownloaded(this.currentActiveHandle());
     } catch (_e) {
       // download failed, keep button enabled
     }
     this.downloading = false;
   }
 
-  private currentPhoto(): PhotoEntry {
-    return this.photos[this.currentIndex];
+  private switchFormat(photo: PhotoEntry): void {
+    if (photo.handle === this.currentActiveHandle()) return;
+    const newHandles = [...this.activeHandles];
+    newHandles[this.currentIndex] = photo.handle;
+    this.activeHandles = newHandles;
+    this.loadFullForCurrent();
+    this.checkDownloaded();
   }
 
   private async loadFullForCurrent(): Promise<void> {
-    const photo = this.currentPhoto();
-    if (!photo || photo.handle === this.loadedHandle) return;
+    const handle = this.currentActiveHandle();
+    if (!handle || handle === this.loadedHandle) return;
 
     this.fullPixelMap = null;
     this.isZoomed = false;
@@ -279,13 +317,19 @@ struct PhotoDetailPage {
     this.loadVersion++;
     const ver = this.loadVersion;
 
-    const pixelMap = await this.service.loadFullPhoto(photo.handle);
+    const pixelMap = await this.service.loadFullPhoto(handle);
     if (ver !== this.loadVersion) return;
 
     if (pixelMap) {
       this.fullPixelMap = pixelMap;
-      this.loadedHandle = photo.handle;
-      this.service.setDetailIndex(this.currentIndex, this.photos);
+      this.loadedHandle = handle;
+
+      // Build preload list: current active photo for each group position
+      const preloadList: PhotoEntry[] = [];
+      for (let i = 0; i < this.displayGroups.length; i++) {
+        preloadList.push(this.photoForPosition(i));
+      }
+      this.service.setDetailIndex(this.currentIndex, preloadList);
     }
     this.loading = false;
   }
@@ -304,13 +348,13 @@ struct PhotoDetailPage {
   build() {
     Stack() {
       Swiper() {
-        ForEach(this.photos, (photo: PhotoEntry) => {
+        ForEach(this.displayGroups, (group: DisplayGroup, index: number) => {
           Stack() {
-            if (this.fullPixelMap && photo.handle === this.loadedHandle) {
+            if (this.fullPixelMap && this.loadedHandle === this.activeHandles[index]) {
               ZoomableImage({
                 pixelMap: this.fullPixelMap,
-                photoW: photo.imagePixWidth || 1,
-                photoH: photo.imagePixHeight || 1,
+                photoW: this.photoForPosition(index).imagePixWidth || 1,
+                photoH: this.photoForPosition(index).imagePixHeight || 1,
                 pageKey: this.currentIndex,
                 onZoomChange: (zoomed: boolean) => {
                   this.isZoomed = zoomed;
@@ -322,11 +366,11 @@ struct PhotoDetailPage {
                   this.service.cancelPreload();
                 }
               })
-            } else if (this.service.thumbnailPixelMapMap.has(photo.handle)) {
+            } else if (this.service.thumbnailPixelMapMap.has(this.activeHandles[index])) {
               ZoomableImage({
-                pixelMap: this.service.thumbnailPixelMapMap.get(photo.handle)!,
-                photoW: photo.imagePixWidth || 1,
-                photoH: photo.imagePixHeight || 1,
+                pixelMap: this.service.thumbnailPixelMapMap.get(this.activeHandles[index])!,
+                photoW: this.photoForPosition(index).imagePixWidth || 1,
+                photoH: this.photoForPosition(index).imagePixHeight || 1,
                 pageKey: this.currentIndex,
                 onZoomChange: (zoomed: boolean) => {
                   this.isZoomed = zoomed;
@@ -341,7 +385,7 @@ struct PhotoDetailPage {
             } else {
               Column() {
                 Text('📷').fontSize(56)
-                Text(photo.filename)
+                Text(group.displayPhoto.filename)
                   .fontSize(14)
                   .fontColor($r('app.color.text_on_dark'))
                   .margin({ top: 12 })
@@ -350,7 +394,8 @@ struct PhotoDetailPage {
               .justifyContent(FlexAlign.Center)
             }
 
-            if (this.loading && photo.handle === this.currentPhoto().handle) {
+            if (this.loading && this.loadedHandle === 0 &&
+                this.currentIndex === index) {
               LoadingProgress()
                 .width(32).height(32)
                 .color($r('app.color.text_on_dark'))
@@ -361,7 +406,7 @@ struct PhotoDetailPage {
           .width('100%').height('100%')
           .clip(false)
           .onClick(() => { this.showOverlay = !this.showOverlay; })
-        })
+        }, (group: DisplayGroup, index: number) => group.displayPhoto.handle.toString() + '_' + index.toString())
       }
       .index(this.currentIndex)
       .indicator(false)
@@ -384,17 +429,31 @@ struct PhotoDetailPage {
           .backgroundColor(Color.Transparent)
           .onClick(() => { router.back(); })
 
-          Blank()
+          if (this.currentGroup().alternates.length > 0) {
+            Row({ space: 6 }) {
+              ForEach(this.currentGroup().allPhotos, (alt: PhotoEntry) => {
+                Text(getExt(alt.filename))
+                  .fontSize(11)
+                  .fontWeight(alt.handle === this.currentActiveHandle() ?
+                    FontWeight.Medium : FontWeight.Normal)
+                  .fontColor(alt.handle === this.currentActiveHandle() ?
+                    $r('app.color.filter_chip_active_text') : $r('app.color.text_on_dark'))
+                  .backgroundColor(alt.handle === this.currentActiveHandle() ?
+                    $r('app.color.filter_chip_active_bg') : 'rgba(255,255,255,0.15)')
+                  .borderRadius(10)
+                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                  .onClick(() => { this.switchFormat(alt); })
+              }, (alt: PhotoEntry) => alt.handle.toString())
+            }
+            .layoutWeight(1)
+            .justifyContent(FlexAlign.Center)
+          } else {
+            Blank().layoutWeight(1)
+          }
 
-          Text(`${this.currentIndex + 1}/${this.photos.length}`)
+          Text(`${this.currentIndex + 1}/${this.displayGroups.length}`)
             .fontSize(14)
             .fontColor($r('app.color.text_on_dark'))
-
-          Blank()
-
-          Image($r('sys.symbol.chevron_left'))
-            .width(24).height(24)
-            .fillColor(Color.Transparent)
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 48 })
