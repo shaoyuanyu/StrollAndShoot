@@ -18,8 +18,8 @@ export class GpsRecorder {
   private log: AppLog = new AppLog();
   private running: boolean = false;
   private storageDir: string = '';
-  // true = precision (TRANSPORT), false = power-saving (DAILY_LIFE_SERVICE)
-  private precisionMode: boolean = false;
+  // 0=precision(T31), 1=daily(T61), 2=powersave(D121)
+  private gpsMode: number = 2;
   private locationCallback?: (location: geoLocationManager.Location) => void;
   private context: common.UIAbilityContext | null = null;
   private permissionsChecked: boolean = false;
@@ -69,8 +69,8 @@ export class GpsRecorder {
     return this.records.length;
   }
 
-  async setPrecisionMode(precision: boolean): Promise<void> {
-    this.precisionMode = precision;
+  async setGpsMode(mode: number): Promise<void> {
+    this.gpsMode = mode;
     this.saveMode();
     if (this.running) {
       this.stop();
@@ -78,8 +78,16 @@ export class GpsRecorder {
     }
   }
 
-  isPrecision(): boolean {
-    return this.precisionMode;
+  getGpsMode(): number {
+    return this.gpsMode;
+  }
+
+  getGpsModeLabel(): string {
+    switch (this.gpsMode) {
+      case 0: return '精确';
+      case 1: return '日常';
+      default: return '省电';
+    }
   }
 
   async start(): Promise<void> {
@@ -113,10 +121,18 @@ export class GpsRecorder {
         this.log.add(`GPS定位 #${callbackCount}: ${record.latitude.toFixed(4)},${record.longitude.toFixed(4)} (共${this.records.length}条)`);
       };
 
-      const scenario = this.precisionMode
-        ? geoLocationManager.UserActivityScenario.TRANSPORT
-        : geoLocationManager.UserActivityScenario.DAILY_LIFE_SERVICE;
-      const interval = this.precisionMode ? 31 : 91;
+      let scenario: geoLocationManager.UserActivityScenario;
+      let interval: number;
+      if (this.gpsMode === 0) {
+        scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
+        interval = 31;
+      } else if (this.gpsMode === 1) {
+        scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
+        interval = 61;
+      } else {
+        scenario = geoLocationManager.UserActivityScenario.DAILY_LIFE_SERVICE;
+        interval = 121;
+      }
 
       const requestCfg: geoLocationManager.ContinuousLocationRequest = {
         interval: interval,
@@ -130,8 +146,7 @@ export class GpsRecorder {
       // Request continuous task for background GPS
       await this.requestContinuousTask();
 
-      const modeLabel = this.precisionMode ? '精确' : '省电';
-      this.log.add(`GPS记录已启动 (${modeLabel}模式, 已有${this.records.length}条)`);
+      this.log.add(`GPS记录已启动 (${this.getGpsModeLabel()}模式, interval=${interval}s, 已有${this.records.length}条)`);
     } catch (err) {
       this.log.add(`GPS记录启动失败: ${JSON.stringify(err)}`);
     }
@@ -322,8 +337,11 @@ export class GpsRecorder {
       fileIo.closeSync(f);
       const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
       const obj = JSON.parse(text) as Record<string, Object>;
-      if (typeof obj.precisionMode === 'boolean') {
-        this.precisionMode = obj.precisionMode as boolean;
+      if (typeof obj.gpsMode === 'number') {
+        // Also migrate from old boolean precisionMode
+        this.gpsMode = obj.gpsMode as number;
+      } else if (typeof obj.precisionMode === 'boolean') {
+        this.gpsMode = (obj.precisionMode as boolean) ? 0 : 2;
       }
     } catch (_e) {
       // keep default
@@ -334,7 +352,7 @@ export class GpsRecorder {
     if (!this.storageDir) return;
     try {
       const text = JSON.stringify({
-        precisionMode: this.precisionMode,
+        gpsMode: this.gpsMode,
         wasRunning: this.running
       });
       const f = fileIo.openSync(this.settingsPath(),

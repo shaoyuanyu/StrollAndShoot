@@ -40,7 +40,7 @@ struct Index {
   @State downloadedKeys: string[] = [];
   @State gpsRunning: boolean = false;
   @State gpsRecordCount: number = 0;
-  @State gpsPrecision: boolean = false;
+  @State gpsMode: number = 2;
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
 
   onPageShow(): void {
@@ -96,7 +96,7 @@ struct Index {
   syncGpsState(): void {
     this.gpsRunning = this.gpsRecorder.isRunning();
     this.gpsRecordCount = this.gpsRecorder.recordCount();
-    this.gpsPrecision = this.gpsRecorder.isPrecision();
+    this.gpsMode = this.gpsRecorder.getGpsMode();
   }
 
   async toggleGps(): Promise<void> {
@@ -108,8 +108,8 @@ struct Index {
     this.syncGpsState();
   }
 
-  async changeGpsPrecision(precision: boolean): Promise<void> {
-    await this.gpsRecorder.setPrecisionMode(precision);
+  async changeGpsMode(mode: number): Promise<void> {
+    await this.gpsRecorder.setGpsMode(mode);
     this.syncGpsState();
   }
 
@@ -209,7 +209,7 @@ struct Index {
             logText: this.logText,
             gpsRunning: this.gpsRunning,
             gpsRecordCount: this.gpsRecordCount,
-            gpsPrecision: this.gpsPrecision,
+            gpsMode: this.gpsMode,
             onClear: () => { this.appLog.clear(); this.syncState(); },
             onCopy: () => {
               const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.logText);
@@ -219,7 +219,7 @@ struct Index {
             },
             onDarkModeChange: (mode: number) => { this.applyDarkMode(mode); },
             onGpsToggle: () => { this.toggleGps(); },
-            onGpsPrecisionChange: (precision: boolean) => { this.changeGpsPrecision(precision); },
+            onGpsModeChange: (mode: number) => { this.changeGpsMode(mode); },
             onGpsClear: () => { this.clearGpsRecords(); }
           })
         }

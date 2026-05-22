@@ -18,12 +18,12 @@ export struct SettingsPage {
   // GPS state
   @Prop gpsRunning: boolean = false;
   @Prop gpsRecordCount: number = 0;
-  @Prop gpsPrecision: boolean = false;
+  @Prop gpsMode: number = 2;
   onClear: () => void = () => {};
   onCopy: () => void = () => {};
   onDarkModeChange: (mode: number) => void = (_m: number) => {};
   onGpsToggle: () => void = () => {};
-  onGpsPrecisionChange: (precision: boolean) => void = (_p: boolean) => {};
+  onGpsModeChange: (mode: number) => void = (_m: number) => {};
   onGpsClear: () => void = () => {};
 
   gotoManage(): void {
@@ -99,23 +99,9 @@ export struct SettingsPage {
             .alignSelf(ItemAlign.Start).margin({ bottom: 8 })
 
           Row() {
-            Text('精确模式')
-              .fontSize(13).fontColor(this.gpsPrecision ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .textAlign(TextAlign.Center)
-              .padding({ top: 7, bottom: 7 })
-              .backgroundColor(this.gpsPrecision ? $r('app.color.primary') : 'transparent')
-              .borderRadius(16)
-              .layoutWeight(1)
-              .onClick(() => { this.onGpsPrecisionChange(true); })
-
-            Text('省电模式')
-              .fontSize(13).fontColor(!this.gpsPrecision ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .textAlign(TextAlign.Center)
-              .padding({ top: 7, bottom: 7 })
-              .backgroundColor(!this.gpsPrecision ? $r('app.color.primary') : 'transparent')
-              .borderRadius(16)
-              .layoutWeight(1)
-              .onClick(() => { this.onGpsPrecisionChange(false); })
+            this.GpsModeChip('精确', 0)
+            this.GpsModeChip('日常', 1)
+            this.GpsModeChip('省电', 2)
           }
           .width('100%').padding(3)
           .backgroundColor($r('app.color.bg_page'))
@@ -185,6 +171,19 @@ export struct SettingsPage {
       .width('100%').padding({ left: 12, right: 12, bottom: 20 })
     }
     .width('100%').height('100%')
+  }
+
+  @Builder
+  GpsModeChip(label: string, mode: number) {
+    Text(label)
+      .fontSize(13)
+      .fontColor(this.gpsMode === mode ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+      .textAlign(TextAlign.Center)
+      .padding({ top: 7, bottom: 7 })
+      .backgroundColor(this.gpsMode === mode ? $r('app.color.primary') : 'transparent')
+      .borderRadius(16)
+      .layoutWeight(1)
+      .onClick(() => { this.onGpsModeChange(mode); })
   }
 
   @Builder
