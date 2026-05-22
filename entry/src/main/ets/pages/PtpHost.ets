@@ -33,7 +33,7 @@ interface DeviceInfo {
   serialNumber: string;
   vendorExtensionID: number;
 }
-interface ObjectInfo {
+export interface ObjectInfo {
   filename: string;
   objectCompressedSize: number;
   objectFormat: number;
@@ -75,6 +75,10 @@ export class PtpSession {
   private intEp: usbManager.USBEndpoint | null = null;
   private sessionOpen: boolean = false;
   private usbBusy: boolean = false;
+
+  get connectedDeviceName(): string {
+    return this.device?.name ?? '';
+  }
 
   static findCameras(): usbManager.USBDevice[] {
     const cameras: usbManager.USBDevice[] = [];
@@ -171,10 +175,11 @@ export class PtpSession {
     return ptpNative.parseStorageIDs(data);
   }
 
-  async getObjectHandles(storageId: number, parent?: number): Promise<number[]> {
+  async getObjectHandles(storageId: number, parent?: number, formatCode?: number): Promise<number[]> {
     if (!this.sessionOpen) return [];
     const parentHandle = parent ?? 0xFFFFFFFF;
-    const cmd = ptpNative.buildGetObjectHandles(storageId, 0, parentHandle);
+    const code = formatCode ?? 0;
+    const cmd = ptpNative.buildGetObjectHandles(storageId, code, parentHandle);
     const data = await this.ptpCommandGetData(cmd);
     if (!data) return [];
     return ptpNative.parseObjectHandles(data);

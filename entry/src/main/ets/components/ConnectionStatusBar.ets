@@ -5,6 +5,8 @@ export struct ConnectionStatusBar {
   @Prop photoCount: number = 0;
   @Prop statusText: string = '就绪';
   @Prop compact: boolean = false;
+  @Prop scanProgress: number = 0;
+  @Prop scanTotal: number = 0;
 
   build() {
     if (this.compact) {
@@ -58,6 +60,26 @@ export struct ConnectionStatusBar {
             .fontSize(13)
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 4 })
+        }
+
+        if (this.scanTotal > 0) {
+          Column() {
+            Progress({
+              value: this.scanProgress,
+              total: this.scanTotal,
+              type: ProgressType.Linear
+            })
+              .width('100%')
+              .height(4)
+              .color($r('app.color.primary'))
+              .backgroundColor($r('app.color.thumbnail_placeholder'))
+            Text(`${this.scanProgress}/${this.scanTotal}`)
+              .fontSize(11)
+              .fontColor($r('app.color.text_secondary'))
+              .margin({ top: 4 })
+          }
+          .width('100%')
+          .margin({ top: 8 })
         }
       }
       .width('100%')

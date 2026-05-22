@@ -41,6 +41,8 @@ struct Index {
   @State gpsRunning: boolean = false;
   @State gpsRecordCount: number = 0;
   @State gpsMode: number = 2;
+  @State scanProgress: number = 0;
+  @State scanTotal: number = 0;
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
 
   onPageShow(): void {
@@ -92,6 +94,8 @@ struct Index {
     this.service.thumbnailPixelMapMap.forEach((_v: Object, k: number) => { handles.push(k); });
     this.thumbnailReadyHandles = handles;
     this.downloadedKeys = this.service.getDownloadedKeys();
+    this.scanProgress = this.service.scanProgress;
+    this.scanTotal = this.service.scanTotal;
   }
 
   syncGpsState(): void {
@@ -143,6 +147,7 @@ struct Index {
             thumbnailReadyHandles: this.thumbnailReadyHandles,
             downloadProgress: this.downloadProgress,
             downloadedKeys: this.downloadedKeys,
+            scanProgress: this.scanProgress, scanTotal: this.scanTotal,
             onThumbClick: (photos: PhotoEntry[], index: number) => {
               router.pushUrl({
                 url: 'pages/PhotoDetailPage',
@@ -200,6 +205,7 @@ struct Index {
             connected: this.connected, cameraName: this.cameraName,
             photoCount: this.photoCount, statusText: this.statusText,
             scanning: this.scanning,
+            scanProgress: this.scanProgress, scanTotal: this.scanTotal,
             onScan: () => { this.service.scanForCamera(); },
             onDisconnect: () => { this.service.disconnect(); this.syncState(); }
           })

@@ -40,6 +40,13 @@ export class CameraService {
   private preloadRadius: number = 5;
   private preloading: boolean = false;
 
+  // Scan progress
+  scanProgress: number = 0;
+  scanTotal: number = 0;
+
+  // Format filter support detection (cached across directory levels)
+  private formatFilterWorks: boolean | null = null;
+
   // Download registry — persisted across sessions
   private downloadRegistry: Map<string, DownloadRecord> = new Map();
   private downloadDir: string = '';
@@ -460,9 +467,6 @@ export class CameraService {
   }
 
   async scanForCamera(): Promise<void> {
-    if (this.connected) {
-      await this.disconnect();
-    }
     this.scanning = true;
     this.log.clear();
     this.log.add('=== 开始扫描 ===');
@@ -482,39 +486,47 @@ export class CameraService {
         return;
       }
 
-      this.statusText = `发现相机: ${cameras[0].productName}`;
-      this.notify();
+      const sameDevice = this.connected &&
+        this.session.connectedDeviceName === cameras[0].name;
 
-      const ok = await this.session.connect(cameras[0]);
-      if (!ok) {
-        this.statusText = '连接相机失败';
-        this.connected = false;
-        this.scanning = false;
+      if (sameDevice) {
+        // Same camera — clear cached data, keep USB session alive
+        this.photos = [];
+        this.photoCount = 0;
+        this.thumbnailPixelMapMap.clear();
+        this.thumbnailLoadedSet.clear();
+        this.clearFullCache();
+        this.statusText = '已连接';
         this.notify();
-        return;
+      } else {
+        // Different camera or first connect
+        if (this.connected) {
+          await this.disconnect();
+        }
+
+        this.statusText = `发现相机: ${cameras[0].productName}`;
+        this.notify();
+
+        const ok = await this.session.connect(cameras[0]);
+        if (!ok) {
+          this.statusText = '连接相机失败';
+          this.connected = false;
+          this.scanning = false;
+          this.notify();
+          return;
+        }
+
+        this.cameraName = cameras[0].productName || cameras[0].manufacturerName ||
+                          cameras[0].name;
+        this.statusText = '已连接';
+        this.connected = true;
+        this.notify();
       }
 
-      // Use USB descriptor for camera name
-      this.cameraName = cameras[0].productName || cameras[0].manufacturerName ||
-                        cameras[0].name;
-      this.statusText = '已连接';
-      this.connected = true;
-      this.notify();
+      await this.loadPhotosAndThumbnails();
 
-      // Attempt DeviceInfo parsing for diagnosis
-      const devInfo = await this.session.getDeviceInfo();
-      if (devInfo) {
-        hilog.info(DOMAIN, TAG,
-          `DeviceInfo vendorExtId=0x${devInfo.vendorExtensionID.toString(16)} ` +
-          `manu=${devInfo.manufacturer} model=${devInfo.model} ` +
-          `ver=${devInfo.deviceVersion} serial=${devInfo.serialNumber}`);
-      }
-
-      await this.loadPhotoList();
-      await this.loadAllThumbnails();
-
-      // Re-validate download registry against Gallery to detect user deletions
-      await this.validateRegistry();
+      // Defer registry validation so UI becomes responsive immediately
+      this.validateRegistry().catch((_e: Error) => { /* best effort */ });
     } catch (err) {
       hilog.error(DOMAIN, TAG, `scan error: ${JSON.stringify(err)}`);
       this.statusText = '扫描出错';
@@ -527,44 +539,83 @@ export class CameraService {
 
   /**
    * Recursively collect all photo handles by traversing the directory tree.
-   * Returns handles of non-directory objects (photos/videos).
+   * Uses GetObjectHandles format filtering (0x0000 vs 0x3001) to separate
+   * files from directories with just 2 USB calls per directory level.
+   * Detects format filter support once (via JPEG 0x3801 test) and caches
+   * the result across all recursive levels.
    */
   private async collectPhotoHandles(
-    storageIDs: number[], parent: number, depth: number
+    storageIDs: number[], parent: number, depth: number,
+    onBatchFound: (count: number) => void
   ): Promise<number[]> {
     if (depth > 10) return [];
 
     const result: number[] = [];
     for (const sid of storageIDs) {
-      const handles = await this.session.getObjectHandles(sid, parent);
-      if (handles.length === 0) continue;
+      const allHandles = await this.session.getObjectHandles(sid, parent, 0);
+      if (allHandles.length === 0) continue;
 
-      const dirs: number[] = [];
-      for (const h of handles) {
-        const info = await this.session.getObjectInfo(h);
-        if (!info) continue;
-        if (info.objectFormat === 0x3001) {
-          dirs.push(h);
-          hilog.info(DOMAIN, TAG,
-            `Dir 0x${h.toString(16)}: ${info.filename}`);
-        } else {
-          result.push(h);
+      // Detect format filter support once (only at first directory level)
+      if (this.formatFilterWorks === null) {
+        const jpegHandles = await this.session.getObjectHandles(sid, parent, 0x3801);
+        this.formatFilterWorks = jpegHandles.length < allHandles.length;
+      }
+
+      if (this.formatFilterWorks) {
+        const dirHandles = await this.session.getObjectHandles(sid, parent, 0x3001);
+        const dirSet = new Set(dirHandles);
+        const files: number[] = [];
+        const dirs: number[] = [];
+        for (const h of allHandles) {
+          if (dirSet.has(h)) {
+            dirs.push(h);
+          } else {
+            files.push(h);
+          }
+        }
+        if (files.length > 0) {
+          result.push(...files);
+          onBatchFound(files.length);
+        }
+        for (const dh of dirs) {
+          const sub = await this.collectPhotoHandles(storageIDs, dh, depth + 1, onBatchFound);
+          result.push(...sub);
+        }
+      } else {
+        // Camera doesn't support format filtering — per-handle getObjectInfo
+        const dirs: number[] = [];
+        for (const h of allHandles) {
+          const info = await this.session.getObjectInfo(h);
+          if (!info) continue;
+          if (info.objectFormat === 0x3001) {
+            dirs.push(h);
+            hilog.info(DOMAIN, TAG,
+              `Dir 0x${h.toString(16)}: ${info.filename}`);
+          } else {
+            result.push(h);
+            onBatchFound(1);
+          }
+        }
+        for (const dh of dirs) {
+          const sub = await this.collectPhotoHandles(storageIDs, dh, depth + 1, onBatchFound);
+          result.push(...sub);
         }
       }
 
-      // Recurse into all subdirectories
-      for (const dh of dirs) {
-        const sub = await this.collectPhotoHandles(storageIDs, dh, depth + 1);
-        result.push(...sub);
-      }
-
-      break; // only use the first storage with results
+      break;
     }
     return result;
   }
 
-  private async loadPhotoList(): Promise<void> {
+  /**
+   * Traverse directories (instant with format filtering), then load photo
+   * metadata and thumbnails in a single pass with a progress bar.
+   */
+  private async loadPhotosAndThumbnails(): Promise<void> {
     this.statusText = '正在获取照片列表...';
+    this.photoCount = 0;
+    this.scanProgress = 0;
+    this.scanTotal = 0;
     this.notify();
 
     try {
@@ -579,17 +630,36 @@ export class CameraService {
         return;
       }
 
-      const handles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0);
+      // ---- Phase 1: traverse directories (2 getObjectHandles per level) ----
+      this.statusText = '正在遍历目录...';
+      this.formatFilterWorks = null; // re-detect for this connection
+      this.notify();
+
+      const handles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0,
+        (count: number) => {
+          this.photoCount += count;
+          this.notify();
+        });
 
       hilog.info(DOMAIN, TAG, `ObjectHandles total: ${handles.length}`);
-      this.photoCount = handles.length;
 
+      // ---- Phase 2: getObjectInfo + getThumb in a single pass ----
+      this.log.add(`开始加载 ${handles.length} 张照片...`);
+      this.scanProgress = 0;
+      this.scanTotal = handles.length;
+      this.statusText = '正在加载照片...';
+      this.notify();
+
+      const decodeJobs: Promise<void>[] = [];
       const photoList: PhotoEntry[] = [];
+
       for (let i = 0; i < handles.length; i++) {
-        const info = await this.session.getObjectInfo(handles[i]);
+        const h = handles[i];
+
+        const info = await this.session.getObjectInfo(h);
         if (info) {
           photoList.push({
-            handle: handles[i],
+            handle: h,
             filename: info.filename,
             size: info.objectCompressedSize,
             objectFormat: info.objectFormat,
@@ -599,13 +669,32 @@ export class CameraService {
             storageId: info.storageId || 0
           });
         }
+
+        if (!this.thumbnailLoadedSet.has(h)) {
+          const data = await this.session.getThumb(h);
+          if (data && data.length > 0) {
+            decodeJobs.push(this.decodeThumbnail(h, data));
+          }
+        }
+
+        this.scanProgress = i + 1;
+        if ((i + 1) % 3 === 0 || i === handles.length - 1) {
+          this.notify();
+        }
       }
+
       this.photos = photoList;
+
+      await Promise.all(decodeJobs);
+      this.log.add('缩略图加载完成');
+
       this.statusText = `已连接 - ${this.photoCount} 张照片`;
     } catch (err) {
-      hilog.error(DOMAIN, TAG, `loadPhotoList error: ${JSON.stringify(err)}`);
-      this.statusText = '获取照片列表失败';
+      hilog.error(DOMAIN, TAG, `loadPhotos error: ${JSON.stringify(err)}`);
+      this.statusText = '加载照片失败';
     } finally {
+      this.scanProgress = 0;
+      this.scanTotal = 0;
       this.notify();
     }
   }
@@ -790,24 +879,6 @@ export class CameraService {
     this.detailIndex = -1;
     this.prevDetailIndex = -1;
     this.preloadPhotos = [];
-  }
-
-  async loadAllThumbnails(): Promise<void> {
-    this.log.add(`开始加载 ${this.photos.length} 张缩略图...`);
-    const decodeJobs: Promise<void>[] = [];
-
-    for (const photo of this.photos) {
-      if (this.thumbnailLoadedSet.has(photo.handle)) continue;
-      const data = await this.session.getThumb(photo.handle); // USB 串行读取
-      if (data && data.length > 0) {
-        // 立即启动异步解码，不等待；USB 继续读下一张，重叠隐藏解码延迟
-        decodeJobs.push(this.decodeThumbnail(photo.handle, data));
-      }
-    }
-
-    await Promise.all(decodeJobs);
-    this.log.add('缩略图加载完成');
-    this.notify();
   }
 
   async disconnect(): Promise<void> {

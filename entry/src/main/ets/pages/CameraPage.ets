@@ -7,6 +7,8 @@ export struct CameraPage {
   @Prop photoCount: number = 0;
   @Prop statusText: string = '就绪';
   @Prop scanning: boolean = false;
+  @Prop scanProgress: number = 0;
+  @Prop scanTotal: number = 0;
   onScan: () => void = () => {};
   onDisconnect: () => void = () => {};
 
@@ -15,7 +17,7 @@ export struct CameraPage {
       ConnectionStatusBar({
         connected: this.connected, cameraName: this.cameraName,
         photoCount: this.photoCount, statusText: this.statusText,
-        compact: false
+        compact: false, scanProgress: this.scanProgress, scanTotal: this.scanTotal
       }).margin({ top: 12, bottom: 12 })
 
       Row() {

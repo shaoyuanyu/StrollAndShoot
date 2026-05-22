@@ -31,6 +31,8 @@ export struct GalleryPage {
   @State galleryScale: number = 1.0;
   @Prop downloadProgress: DownloadProgress | null = null;
   @Prop downloadedKeys: string[] = [];
+  @Prop scanProgress: number = 0;
+  @Prop scanTotal: number = 0;
   @StorageLink('gallery_column_count') galleryColumnCount: number = -1;
   private service: CameraService = CameraService.getInstance();
   private pinchBaseScale: number = 1.0;
@@ -225,7 +227,7 @@ build() {
       ConnectionStatusBar({
         connected: this.connected, cameraName: this.cameraName,
         photoCount: this.photoCount, statusText: this.statusText,
-        compact: true
+        compact: true, scanProgress: this.scanProgress, scanTotal: this.scanTotal
       }).margin({ top: 12, bottom: 4 })
 
       // Filter bar
