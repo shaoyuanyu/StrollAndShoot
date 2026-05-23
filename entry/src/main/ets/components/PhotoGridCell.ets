@@ -1,14 +1,14 @@
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
 
-@Component
+@ComponentV2
 export struct PhotoGridCell {
-  @Prop photo: PhotoEntry = { handle: 0, filename: '', size: 0 };
-  @Prop selectMode: boolean = false;
-  @Prop selected: boolean = false;
+  @Param photo: PhotoEntry = { handle: 0, filename: '', size: 0 };
+  @Param selectMode: boolean = false;
+  @Param selected: boolean = false;
   private service: CameraService = CameraService.getInstance();
-  onTap: () => void = () => {};
-  onLongPress: () => void = () => {};
+  @Event onTap: () => void = () => {};
+  @Event onLongPress: () => void = () => {};
 
   build() {
     Stack() {

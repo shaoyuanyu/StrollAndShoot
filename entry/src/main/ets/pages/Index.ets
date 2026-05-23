@@ -8,9 +8,9 @@ import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
 import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
+import { SettingsStore } from '../model/SettingsStore';
 import { AppLog } from '../services/AppLog';
 
-const DARK_MODE_KEY = 'dark_mode_pref';
 const TABS: string[] = ['Gallery', 'Camera', 'Settings'];
 
 function tabLabel(key: string): string {
@@ -20,33 +20,33 @@ function tabLabel(key: string): string {
 }
 
 @Entry
-@Component
+@ComponentV2
 struct Index {
   private tabsController: TabsController = new TabsController();
   private service: CameraService = CameraService.getInstance();
   private appLog: AppLog = this.service.getLog();
   private uiContext: common.UIAbilityContext | null = null;
-  @State currentTab: number = 1;
-  @State statusText: string = '就绪';
-  @State cameraName: string = '';
-  @State photoCount: number = 0;
-  @State photos: PhotoEntry[] = [];
-  @State scanning: boolean = false;
-  @State connected: boolean = false;
-  @State logText: string = '';
-  @State thumbnailVersion: number = 0;
-  @State thumbnailReadyHandles: number[] = [];
-  @State downloadProgress: DownloadProgress | null = null;
-  @State downloadedKeys: string[] = [];
-  @State gpsRunning: boolean = false;
-  @State gpsRecordCount: number = 0;
-  @State gpsMode: number = 2;
-  @State scanProgress: number = 0;
-  @State scanTotal: number = 0;
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
+  @Local currentTab: number = 1;
+  @Local statusText: string = '就绪';
+  @Local cameraName: string = '';
+  @Local photoCount: number = 0;
+  @Local photos: PhotoEntry[] = [];
+  @Local scanning: boolean = false;
+  @Local connected: boolean = false;
+  @Local logText: string = '';
+  @Local thumbnailVersion: number = 0;
+  @Local thumbnailReadyHandles: number[] = [];
+  @Local downloadProgress: DownloadProgress | null = null;
+  @Local downloadedKeys: string[] = [];
+  @Local gpsRunning: boolean = false;
+  @Local gpsRecordCount: number = 0;
+  @Local gpsMode: number = 2;
+  @Local scanProgress: number = 0;
+  @Local scanTotal: number = 0;
+  @Local settings: SettingsStore = SettingsStore.getInstance();
 
   onPageShow(): void {
-    // Restore onChange in case another page overwrote it (e.g. GpsManagementPage)
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
     this.syncGpsState();
     this.syncState();
@@ -56,22 +56,14 @@ struct Index {
     const ctx = getContext(this) as common.UIAbilityContext;
     this.uiContext = ctx;
 
-    // Persist dark mode across restarts
-    PersistentStorage.persistProp(DARK_MODE_KEY, ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
-    const savedMode = AppStorage.get<number>(DARK_MODE_KEY);
-
-    // Persist gallery column count across restarts (-1 = auto)
-    PersistentStorage.persistProp('gallery_column_count', -1);
-    PersistentStorage.persistProp('gallery_display_mode', 'file_first');
-    if (savedMode !== undefined && savedMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
-      this.applyDarkMode(savedMode);
+    if (this.settings.darkMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+      this.applyDarkMode(this.settings.darkMode);
     }
 
     this.service.initLogPath(ctx.filesDir);
     this.service.initDownloadDir(ctx.filesDir);
     this.service.onChange = () => { this.syncState(); };
 
-    // Init GPS recorder and geotagger; auto-start if it was running last time
     this.gpsRecorder.init(ctx.filesDir, this.appLog, ctx);
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
     ExifGeotagger.setLog(this.appLog);
@@ -79,6 +71,14 @@ struct Index {
     this.gpsRecorder.autoStart();
 
     this.syncState();
+  }
+
+  @Monitor('settings.darkMode')
+  onDarkModeChange(mon: IMonitor) {
+    const mode = mon.value()?.now as number;
+    if (mode !== undefined) {
+      this.applyDarkMode(mode);
+    }
   }
 
   syncState(): void {
@@ -90,7 +90,6 @@ struct Index {
     this.connected = this.service.connected;
     this.logText = this.appLog.getText();
     this.thumbnailVersion++;
-    // Build array of handles that have thumbnails ready
     const handles: number[] = [];
     this.service.thumbnailPixelMapMap.forEach((_v: Object, k: number) => { handles.push(k); });
     this.thumbnailReadyHandles = handles;
@@ -149,6 +148,8 @@ struct Index {
             downloadProgress: this.downloadProgress,
             downloadedKeys: this.downloadedKeys,
             scanProgress: this.scanProgress, scanTotal: this.scanTotal,
+            galleryColumnCount: this.settings.galleryColumnCount,
+            displayMode: this.settings.displayMode,
             onThumbClick: (displayGroups: DisplayGroup[], index: number) => {
               router.pushUrl({
                 url: 'pages/PhotoDetailPage',
@@ -225,7 +226,6 @@ struct Index {
               this.appLog.add('日志已复制到剪贴板');
               this.syncState();
             },
-            onDarkModeChange: (mode: number) => { this.applyDarkMode(mode); },
             onGpsToggle: () => { this.toggleGps(); },
             onGpsModeChange: (mode: number) => { this.changeGpsMode(mode); },
             onGpsClear: () => { this.clearGpsRecords(); }
@@ -238,16 +238,18 @@ struct Index {
       .layoutWeight(1)
 
       Row() {
-        ForEach(TABS, (key: string, idx: number) => {
-          Text(tabLabel(key))
-            .fontSize(16)
-            .fontWeight(this.currentTab === idx ? FontWeight.Bold : FontWeight.Normal)
-            .fontColor(this.currentTab === idx ? $r('app.color.primary') : $r('app.color.text_secondary'))
-            .layoutWeight(1)
-            .textAlign(TextAlign.Center)
-            .padding({ top: 12, bottom: 12 })
-            .onClick(() => { this.switchToTab(idx); })
-        })
+        Repeat<string>(TABS)
+          .each((ri: RepeatItem<string>) => {
+            Text(tabLabel(ri.item))
+              .fontSize(16)
+              .fontWeight(this.currentTab === ri.index ? FontWeight.Bold : FontWeight.Normal)
+              .fontColor(this.currentTab === ri.index ? $r('app.color.primary') : $r('app.color.text_secondary'))
+              .layoutWeight(1)
+              .textAlign(TextAlign.Center)
+              .padding({ top: 12, bottom: 12 })
+              .onClick(() => { this.switchToTab(ri.index); })
+          })
+          .key((item: string) => item)
       }
       .width('100%').height(56)
       .backgroundColor($r('app.color.tab_bar_bg'))

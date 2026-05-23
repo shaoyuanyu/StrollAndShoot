@@ -1,10 +1,10 @@
-@Component
+@ComponentV2
 export struct SelectionActionBar {
-  @Prop selectedCount: number = 0;
-  @Prop totalVisible: number = 0;
-  onCancel: () => void = () => {};
-  onDownload: () => void = () => {};
-  onSelectAll: () => void = () => {};
+  @Param selectedCount: number = 0;
+  @Param totalVisible: number = 0;
+  @Event onCancel: () => void = () => {};
+  @Event onDownload: () => void = () => {};
+  @Event onSelectAll: () => void = () => {};
 
   private get allSelected(): boolean {
     return this.totalVisible > 0 && this.selectedCount >= this.totalVisible;

@@ -2,6 +2,10 @@
 
 A HarmonyOS phone app for connecting to cameras over USB PTP, browsing and importing photos, and applying post-processing effects like GPS geotagging, borders, watermarks, LUTs, filters, and beautification.
 
+## 交流语言
+
+使用中文与我交流。
+
 ## Tech Stack
 
 - **Platform**: HarmonyOS 6.1.0 (API 23, Stage Model)
@@ -71,10 +75,27 @@ hvigorw test
 
 ### State Management
 
-- `CameraService` singleton holds all shared state (connection, photos, thumbnails, cache)
-- `Index.ets` syncs state via `onChange` callback → `syncState()` → `@State` variables
-- Child pages receive data via `@Prop` (one-way binding from Index)
-- `@StorageLink` used for dark mode preference (persisted across sessions)
+This project uses **ArkUI V2 state management exclusively**. V1 decorators (`@State`, `@Prop`, `@Link`, `@StorageLink`, `@StorageProp`, `@Provide`, `@Consume`, `@Observed`, `@ObjectLink`, `@Track`, `@Watch`) are **prohibited** in new code.
+
+| V2 Decorator | Purpose |
+|---|---|
+| `@ComponentV2` | All components must use this instead of `@Component` |
+| `@Local` | Component-local reactive state (replaces `@State`) |
+| `@Param` | Read-only input from parent (replaces `@Prop`). Use with `@Once` for write-in-child scenarios |
+| `@Param @Once` | Parent-initialized, locally writable (replaces `@State` with external init) |
+| `@Event` | Callback from child to parent (replaces `@Link` for bidirectional sync) |
+| `@Provider()` / `@Consumer()` | Cross-level data sharing (replaces `@Provide`/`@Consume`) |
+| `@ObservedV2` | Marks a class as observable (replaces `@Observed`) |
+| `@Trace` | Property-level precise tracking (replaces `@Track`) |
+| `@Monitor` | Async change listener with before/after values (replaces `@Watch`) |
+| `@Computed` | Memoized computed property (no V1 equivalent) |
+| `@Builder` | Retained from V1, compatible with V2 |
+| `Repeat` | List rendering (replaces `ForEach`/`LazyForEach`) |
+| `AppStorageV2.connect()` | App-wide reactive state sharing (replaces `AppStorage` / `@StorageLink`) |
+| `PersistenceV2.globalConnect()` | Persistent app-wide state (replaces `PersistentStorage.persistProp` + `@StorageLink`) |
+| `!!` | Two-way binding syntax (replaces `$$`) |
+
+**Pattern**: `Index.ets` owns all `@Local` state variables and syncs them from `CameraService` via `onChange` callback → `syncState()`. Child pages receive data via `@Param`. Persistent settings (dark mode, gallery column count, display mode) are stored in `SettingsStore` (`@ObservedV2` + `PersistenceV2.globalConnect()`), accessed directly via singleton in any component.
 
 ### NAPI Bridge
 
@@ -90,7 +111,7 @@ Native C++ functions exposed to ArkTS via `libentry.so`. Type declarations in [t
 ## Pages
 
 ### Index.ets — Root Container
-Entry point (`@Entry`). Owns `TabsController`, `CameraService` singleton reference, and all `@State` variables. Syncs state from service on every change. Routes to `PhotoDetailPage` on thumbnail tap.
+Entry point (`@Entry`). Owns `TabsController`, `CameraService` singleton reference, and all `@Local` state variables. Syncs state from service on every change. Uses `SettingsStore` singleton for persisted preferences. Routes to `PhotoDetailPage` on thumbnail tap.
 
 ### GalleryPage.ets — Photo Browser
 Grid view of imported photos with:
@@ -106,7 +127,8 @@ Grid view of imported photos with:
 - `ConnectionStatusBar` in non-compact mode
 
 ### SettingsPage.ets — Preferences & Debug Log
-- Dark mode toggle (follow system / light / dark) via `@StorageLink`
+- Dark mode toggle (follow system / light / dark) via `SettingsStore` singleton (`@ObservedV2` + `PersistenceV2`)
+- Gallery column count and display mode persisted via `SettingsStore`
 - Version info
 - Debug log viewer with clear/copy actions, monospace font, scrollable
 
@@ -206,6 +228,7 @@ Ported from libgphoto2:
 - Pinch-to-zoom gallery grid
 - Dark mode toggle (system/light/dark)
 - Deploy pipeline: `deploy.sh full` (build → sign → install → launch)
+- **State management V2 migration**: All components migrated to `@ComponentV2`, `@Local`, `@Param`, `@Event`, `@Monitor`, `Repeat`. Persistent settings via `SettingsStore` (`@ObservedV2` + `PersistenceV2`). V1 decorators prohibited.
 
 ### In Progress
 - GPS geotagging

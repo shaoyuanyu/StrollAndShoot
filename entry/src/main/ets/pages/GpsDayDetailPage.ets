@@ -4,11 +4,11 @@ import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsRecord } from '../model/PhotoEntry';
 
 @Entry
-@Component
+@ComponentV2
 struct GpsDayDetailPage {
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
-  @State records: GpsRecord[] = [];
-  @State addresses: Map<number, string> = new Map();
+  @Local records: GpsRecord[] = [];
+  @Local addresses: Map<number, string> = new Map();
   private day: string = '';
 
   aboutToAppear(): void {
@@ -60,7 +60,6 @@ struct GpsDayDetailPage {
           resolve(null);
           return;
         }
-        // Build a readable address from available fields
         const addr = data[0];
         const parts: string[] = [];
         if (addr.administrativeArea) parts.push(addr.administrativeArea);
@@ -113,44 +112,46 @@ struct GpsDayDetailPage {
         .width('100%').layoutWeight(1)
       } else {
         List() {
-          ForEach(this.records, (r: GpsRecord, idx: number) => {
-            ListItem() {
-              Column() {
-                Row() {
-                  Text(`#${idx + 1}`)
-                    .fontSize(12).fontColor($r('app.color.text_secondary'))
-                    .width(36)
-
-                  Column() {
-                    Text(this.formatTime(r.timestamp))
-                      .fontSize(15).fontWeight(FontWeight.Medium)
-                      .fontColor($r('app.color.text_primary'))
-                    Text(`${r.latitude.toFixed(6)}, ${r.longitude.toFixed(6)}`)
+          Repeat<GpsRecord>(this.records)
+            .each((ri: RepeatItem<GpsRecord>) => {
+              ListItem() {
+                Column() {
+                  Row() {
+                    Text(`#${ri.index + 1}`)
                       .fontSize(12).fontColor($r('app.color.text_secondary'))
-                      .margin({ top: 2 })
+                      .width(36)
+
+                    Column() {
+                      Text(this.formatTime(ri.item.timestamp))
+                        .fontSize(15).fontWeight(FontWeight.Medium)
+                        .fontColor($r('app.color.text_primary'))
+                      Text(`${ri.item.latitude.toFixed(6)}, ${ri.item.longitude.toFixed(6)}`)
+                        .fontSize(12).fontColor($r('app.color.text_secondary'))
+                        .margin({ top: 2 })
+                    }
+                    .alignItems(HorizontalAlign.Start)
+
+                    Blank()
+
+                    if (ri.item.altitude !== 0) {
+                      Text(`${ri.item.altitude.toFixed(0)}m`)
+                        .fontSize(12).fontColor($r('app.color.text_secondary'))
+                    }
                   }
-                  .alignItems(HorizontalAlign.Start)
+                  .width('100%')
 
-                  Blank()
-
-                  if (r.altitude !== 0) {
-                    Text(`${r.altitude.toFixed(0)}m`)
-                      .fontSize(12).fontColor($r('app.color.text_secondary'))
+                  if (this.addresses.has(ri.index)) {
+                    Text(this.addresses.get(ri.index)!.trim())
+                      .fontSize(11).fontColor($r('app.color.text_secondary'))
+                      .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .margin({ top: 4 })
                   }
                 }
-                .width('100%')
-
-                if (this.addresses.has(idx)) {
-                  Text(this.addresses.get(idx)!.trim())
-                    .fontSize(11).fontColor($r('app.color.text_secondary'))
-                    .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .margin({ top: 4 })
-                }
+                .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
+                .alignItems(HorizontalAlign.Start)
               }
-              .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
-              .alignItems(HorizontalAlign.Start)
-            }
-          }, (_r: GpsRecord, idx: number) => `${idx}`)
+            })
+            .key((_r: GpsRecord, idx: number) => `${idx}`)
         }
         .width('100%').layoutWeight(1)
       }

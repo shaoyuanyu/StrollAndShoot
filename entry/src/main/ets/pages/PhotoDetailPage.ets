@@ -5,23 +5,23 @@ import { CameraService } from '../services/CameraService';
 import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
 import { getExt } from '../utils/PhotoGroupUtil';
 
-// ---- ZoomableImage: isolated component so gesture @State changes don't
+// ---- ZoomableImage: isolated component so gesture @Local changes don't
 //      rebuild the parent Swiper/overlay ----
 // Pinch / pan formula follows:
 //   offset' = (lastOffset + panOff) + (0.5 - center) * size * (1 - scale) * lastScale
 // where center is INVERTED (1 - normalized position) per HarmonyOS convention.
-@Component
+@ComponentV2
 struct ZoomableImage {
-  pixelMap: image.PixelMap | null = null;
-  photoW: number = 1;
-  photoH: number = 1;
-  @Prop @Watch('onPageChange') pageKey: number = 0;
-  onZoomChange: (zoomed: boolean) => void = () => {};
-  onEdgeChange: (atEdge: boolean) => void = () => {};
-  onGestureStart: () => void = () => {};
-  @State scaleVal: number = 1.0;
-  @State offX: number = 0;
-  @State offY: number = 0;
+  @Param pixelMap: image.PixelMap | null = null;
+  @Param photoW: number = 1;
+  @Param photoH: number = 1;
+  @Param pageKey: number = 0;
+  @Event onZoomChange: (zoomed: boolean) => void = () => {};
+  @Event onEdgeChange: (atEdge: boolean) => void = () => {};
+  @Event onGestureStart: () => void = () => {};
+  @Local scaleVal: number = 1.0;
+  @Local offX: number = 0;
+  @Local offY: number = 0;
   private lastScale: number = 1.0;
   private lastOffX: number = 0;
   private lastOffY: number = 0;
@@ -33,6 +33,7 @@ struct ZoomableImage {
   private pinchCx: number = 0.5;
   private pinchCy: number = 0.5;
 
+  @Monitor('pageKey')
   onPageChange(): void {
     animateTo({ duration: 120, curve: Curve.EaseOut }, () => { this.reset(); });
   }
@@ -215,18 +216,18 @@ struct ZoomableImage {
 
 // ---- PhotoDetailPage ----
 @Entry
-@Component
+@ComponentV2
 struct PhotoDetailPage {
-  @State currentIndex: number = 0;
-  @State showOverlay: boolean = true;
-  @State fullPixelMap: image.PixelMap | null = null;
-  @State loading: boolean = false;
-  @State loadedHandle: number = 0;
-  @State isZoomed: boolean = false;
-  @State allowEdgeSwipe: boolean = true;
-  @State isDownloaded: boolean = false;
-  @State downloading: boolean = false;
-  @State activeHandles: number[] = [];
+  @Local currentIndex: number = 0;
+  @Local showOverlay: boolean = true;
+  @Local fullPixelMap: image.PixelMap | null = null;
+  @Local loading: boolean = false;
+  @Local loadedHandle: number = 0;
+  @Local isZoomed: boolean = false;
+  @Local allowEdgeSwipe: boolean = true;
+  @Local isDownloaded: boolean = false;
+  @Local downloading: boolean = false;
+  @Local activeHandles: number[] = [];
   private displayGroups: DisplayGroup[] = [];
   private service: CameraService = CameraService.getInstance();
   private loadVersion: number = 0;
@@ -324,7 +325,6 @@ struct PhotoDetailPage {
       this.fullPixelMap = pixelMap;
       this.loadedHandle = handle;
 
-      // Build preload list: current active photo for each group position
       const preloadList: PhotoEntry[] = [];
       for (let i = 0; i < this.displayGroups.length; i++) {
         preloadList.push(this.photoForPosition(i));
@@ -348,65 +348,67 @@ struct PhotoDetailPage {
   build() {
     Stack() {
       Swiper() {
-        ForEach(this.displayGroups, (group: DisplayGroup, index: number) => {
-          Stack() {
-            if (this.fullPixelMap && this.loadedHandle === this.activeHandles[index]) {
-              ZoomableImage({
-                pixelMap: this.fullPixelMap,
-                photoW: this.photoForPosition(index).imagePixWidth || 1,
-                photoH: this.photoForPosition(index).imagePixHeight || 1,
-                pageKey: this.currentIndex,
-                onZoomChange: (zoomed: boolean) => {
-                  this.isZoomed = zoomed;
-                },
-                onEdgeChange: (atEdge: boolean) => {
-                  this.allowEdgeSwipe = atEdge;
-                },
-                onGestureStart: () => {
-                  this.service.cancelPreload();
+        Repeat<DisplayGroup>(this.displayGroups)
+          .each((ri: RepeatItem<DisplayGroup>) => {
+            Stack() {
+              if (this.fullPixelMap && this.loadedHandle === this.activeHandles[ri.index]) {
+                ZoomableImage({
+                  pixelMap: this.fullPixelMap,
+                  photoW: this.photoForPosition(ri.index).imagePixWidth || 1,
+                  photoH: this.photoForPosition(ri.index).imagePixHeight || 1,
+                  pageKey: this.currentIndex,
+                  onZoomChange: (zoomed: boolean) => {
+                    this.isZoomed = zoomed;
+                  },
+                  onEdgeChange: (atEdge: boolean) => {
+                    this.allowEdgeSwipe = atEdge;
+                  },
+                  onGestureStart: () => {
+                    this.service.cancelPreload();
+                  }
+                })
+              } else if (this.service.thumbnailPixelMapMap.has(this.activeHandles[ri.index])) {
+                ZoomableImage({
+                  pixelMap: this.service.thumbnailPixelMapMap.get(this.activeHandles[ri.index])!,
+                  photoW: this.photoForPosition(ri.index).imagePixWidth || 1,
+                  photoH: this.photoForPosition(ri.index).imagePixHeight || 1,
+                  pageKey: this.currentIndex,
+                  onZoomChange: (zoomed: boolean) => {
+                    this.isZoomed = zoomed;
+                  },
+                  onEdgeChange: (atEdge: boolean) => {
+                    this.allowEdgeSwipe = atEdge;
+                  },
+                  onGestureStart: () => {
+                    this.service.cancelPreload();
+                  }
+                })
+              } else {
+                Column() {
+                  Text('📷').fontSize(56)
+                  Text(ri.item.displayPhoto.filename)
+                    .fontSize(14)
+                    .fontColor($r('app.color.text_on_dark'))
+                    .margin({ top: 12 })
                 }
-              })
-            } else if (this.service.thumbnailPixelMapMap.has(this.activeHandles[index])) {
-              ZoomableImage({
-                pixelMap: this.service.thumbnailPixelMapMap.get(this.activeHandles[index])!,
-                photoW: this.photoForPosition(index).imagePixWidth || 1,
-                photoH: this.photoForPosition(index).imagePixHeight || 1,
-                pageKey: this.currentIndex,
-                onZoomChange: (zoomed: boolean) => {
-                  this.isZoomed = zoomed;
-                },
-                onEdgeChange: (atEdge: boolean) => {
-                  this.allowEdgeSwipe = atEdge;
-                },
-                onGestureStart: () => {
-                  this.service.cancelPreload();
-                }
-              })
-            } else {
-              Column() {
-                Text('📷').fontSize(56)
-                Text(group.displayPhoto.filename)
-                  .fontSize(14)
-                  .fontColor($r('app.color.text_on_dark'))
-                  .margin({ top: 12 })
+                .width('100%').height('100%')
+                .justifyContent(FlexAlign.Center)
               }
-              .width('100%').height('100%')
-              .justifyContent(FlexAlign.Center)
-            }
 
-            if (this.loading && this.loadedHandle === 0 &&
-                this.currentIndex === index) {
-              LoadingProgress()
-                .width(32).height(32)
-                .color($r('app.color.text_on_dark'))
-                .position({ x: '50%', y: '50%' })
-                .markAnchor({ x: '50%', y: '50%' })
+              if (this.loading && this.loadedHandle === 0 &&
+                  this.currentIndex === ri.index) {
+                LoadingProgress()
+                  .width(32).height(32)
+                  .color($r('app.color.text_on_dark'))
+                  .position({ x: '50%', y: '50%' })
+                  .markAnchor({ x: '50%', y: '50%' })
+              }
             }
-          }
-          .width('100%').height('100%')
-          .clip(false)
-          .onClick(() => { this.showOverlay = !this.showOverlay; })
-        }, (group: DisplayGroup, index: number) => group.displayPhoto.handle.toString() + '_' + index.toString())
+            .width('100%').height('100%')
+            .clip(false)
+            .onClick(() => { this.showOverlay = !this.showOverlay; })
+          })
+          .key((group: DisplayGroup, index: number) => group.displayPhoto.handle.toString() + '_' + index.toString())
       }
       .index(this.currentIndex)
       .indicator(false)
@@ -431,19 +433,21 @@ struct PhotoDetailPage {
 
           if (this.currentGroup().alternates.length > 0) {
             Row({ space: 6 }) {
-              ForEach(this.currentGroup().allPhotos, (alt: PhotoEntry) => {
-                Text(getExt(alt.filename))
-                  .fontSize(11)
-                  .fontWeight(alt.handle === this.currentActiveHandle() ?
-                    FontWeight.Medium : FontWeight.Normal)
-                  .fontColor(alt.handle === this.currentActiveHandle() ?
-                    $r('app.color.filter_chip_active_text') : $r('app.color.text_on_dark'))
-                  .backgroundColor(alt.handle === this.currentActiveHandle() ?
-                    $r('app.color.filter_chip_active_bg') : 'rgba(255,255,255,0.15)')
-                  .borderRadius(10)
-                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-                  .onClick(() => { this.switchFormat(alt); })
-              }, (alt: PhotoEntry) => alt.handle.toString())
+              Repeat<PhotoEntry>(this.currentGroup().allPhotos)
+                .each((altRi: RepeatItem<PhotoEntry>) => {
+                  Text(getExt(altRi.item.filename))
+                    .fontSize(11)
+                    .fontWeight(altRi.item.handle === this.currentActiveHandle() ?
+                      FontWeight.Medium : FontWeight.Normal)
+                    .fontColor(altRi.item.handle === this.currentActiveHandle() ?
+                      $r('app.color.filter_chip_active_text') : $r('app.color.text_on_dark'))
+                    .backgroundColor(altRi.item.handle === this.currentActiveHandle() ?
+                      $r('app.color.filter_chip_active_bg') : 'rgba(255,255,255,0.15)')
+                    .borderRadius(10)
+                    .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                    .onClick(() => { this.switchFormat(altRi.item); })
+                })
+                .key((alt: PhotoEntry) => alt.handle.toString())
             }
             .layoutWeight(1)
             .justifyContent(FlexAlign.Center)

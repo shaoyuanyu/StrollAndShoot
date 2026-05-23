@@ -1,14 +1,14 @@
 import type { DownloadProgress } from '../model/PhotoEntry';
 
-@Component
+@ComponentV2
 export struct DownloadProgressBar {
-  @Prop progress: DownloadProgress = {
+  @Param progress: DownloadProgress = {
     phase: 'idle', currentIndex: 0, totalCount: 0,
     currentFilename: '', currentSizeBytes: 0,
     downloadedCount: 0, totalBytes: 0, downloadedBytes: 0,
     errors: []
   };
-  onCancel: () => void = () => {};
+  @Event onCancel: () => void = () => {};
 
   private progressPercent(): number {
     if (this.progress.totalCount === 0) return 0;

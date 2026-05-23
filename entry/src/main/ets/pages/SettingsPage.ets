@@ -1,7 +1,6 @@
 import { ConfigurationConstant } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
-
-const DARK_MODE_KEY = 'dark_mode_pref';
+import { SettingsStore } from '../model/SettingsStore';
 
 const COLUMN_OPTIONS: number[] = [-1, 3, 4, 5, 6];
 
@@ -10,22 +9,18 @@ function formatColumn(n: number): string {
   return `${n}列`;
 }
 
-@Component
+@ComponentV2
 export struct SettingsPage {
-  @Prop logText: string = '';
-  @StorageLink(DARK_MODE_KEY) darkMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
-  @StorageLink('gallery_column_count') galleryColumnCount: number = -1;
-  @StorageLink('gallery_display_mode') displayMode: string = 'file_first';
-  // GPS state
-  @Prop gpsRunning: boolean = false;
-  @Prop gpsRecordCount: number = 0;
-  @Prop gpsMode: number = 2;
-  onClear: () => void = () => {};
-  onCopy: () => void = () => {};
-  onDarkModeChange: (mode: number) => void = (_m: number) => {};
-  onGpsToggle: () => void = () => {};
-  onGpsModeChange: (mode: number) => void = (_m: number) => {};
-  onGpsClear: () => void = () => {};
+  @Param logText: string = '';
+  @Param gpsRunning: boolean = false;
+  @Param gpsRecordCount: number = 0;
+  @Param gpsMode: number = 2;
+  @Event onClear: () => void = () => {};
+  @Event onCopy: () => void = () => {};
+  @Event onGpsToggle: () => void = () => {};
+  @Event onGpsModeChange: (mode: number) => void = (_m: number) => {};
+  @Event onGpsClear: () => void = () => {};
+  settings: SettingsStore = SettingsStore.getInstance();
 
   gotoManage(): void {
     router.pushUrl({ url: 'pages/GpsManagementPage' });
@@ -64,15 +59,17 @@ export struct SettingsPage {
             .alignSelf(ItemAlign.Start).margin({ bottom: 10 })
 
           Row({ space: 8 }) {
-            ForEach(COLUMN_OPTIONS, (n: number) => {
-              Text(formatColumn(n))
-                .fontSize(13)
-                .fontColor(this.galleryColumnCount === n ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-                .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-                .backgroundColor(this.galleryColumnCount === n ? $r('app.color.primary') : $r('app.color.bg_page'))
-                .borderRadius(14)
-                .onClick(() => { this.galleryColumnCount = n; })
-            })
+            Repeat<number>(COLUMN_OPTIONS)
+              .each((ri: RepeatItem<number>) => {
+                Text(formatColumn(ri.item))
+                  .fontSize(13)
+                  .fontColor(this.settings.galleryColumnCount === ri.item ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+                  .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                  .backgroundColor(this.settings.galleryColumnCount === ri.item ? $r('app.color.primary') : $r('app.color.bg_page'))
+                  .borderRadius(14)
+                  .onClick(() => { this.settings.galleryColumnCount = ri.item; })
+              })
+              .key((n: number) => n.toString())
           }
         }
         .width('100%').padding(14)
@@ -204,24 +201,23 @@ export struct SettingsPage {
   DisplayModeChip(label: string, mode: string) {
     Text(label)
       .fontSize(13)
-      .fontColor(this.displayMode === mode ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+      .fontColor(this.settings.displayMode === mode ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
       .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-      .backgroundColor(this.displayMode === mode ? $r('app.color.primary') : $r('app.color.bg_page'))
+      .backgroundColor(this.settings.displayMode === mode ? $r('app.color.primary') : $r('app.color.bg_page'))
       .borderRadius(16)
-      .onClick(() => { this.displayMode = mode; })
+      .onClick(() => { this.settings.displayMode = mode; })
   }
 
   @Builder
   ModeButton(label: string, mode: number) {
     Text(label)
       .fontSize(13)
-      .fontColor(this.darkMode === mode ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
+      .fontColor(this.settings.darkMode === mode ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
       .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-      .backgroundColor(this.darkMode === mode ? $r('app.color.primary') : $r('app.color.bg_page'))
+      .backgroundColor(this.settings.darkMode === mode ? $r('app.color.primary') : $r('app.color.bg_page'))
       .borderRadius(16)
       .onClick(() => {
-        this.darkMode = mode;
-        this.onDarkModeChange(mode);
+        this.settings.darkMode = mode;
       })
   }
 }

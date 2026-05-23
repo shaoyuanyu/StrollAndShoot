@@ -3,10 +3,10 @@ interface FilterOption {
   value: number;
 }
 
-@Component
+@ComponentV2
 export struct FilterBar {
-  @Prop filterFormat: number = 0;
-  onChange: (value: number) => void = (_v: number) => {};
+  @Param filterFormat: number = 0;
+  @Event onChange: (value: number) => void = (_v: number) => {};
 
   private options: FilterOption[] = [
     { label: '全部', value: 0 },
@@ -18,19 +18,21 @@ export struct FilterBar {
   build() {
     Scroll() {
       Row({ space: 8 }) {
-        ForEach(this.options, (opt: FilterOption) => {
-          Text(opt.label)
-            .fontSize(13)
-            .fontColor(this.filterFormat === opt.value
-              ? $r('app.color.filter_chip_active_text')
-              : $r('app.color.filter_chip_text'))
-            .backgroundColor(this.filterFormat === opt.value
-              ? $r('app.color.filter_chip_active_bg')
-              : $r('app.color.filter_chip_bg'))
-            .borderRadius(16)
-            .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-            .onClick(() => { this.onChange(opt.value); })
-        })
+        Repeat<FilterOption>(this.options)
+          .each((ri: RepeatItem<FilterOption>) => {
+            Text(ri.item.label)
+              .fontSize(13)
+              .fontColor(this.filterFormat === ri.item.value
+                ? $r('app.color.filter_chip_active_text')
+                : $r('app.color.filter_chip_text'))
+              .backgroundColor(this.filterFormat === ri.item.value
+                ? $r('app.color.filter_chip_active_bg')
+                : $r('app.color.filter_chip_bg'))
+              .borderRadius(16)
+              .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+              .onClick(() => { this.onChange(ri.item.value); })
+          })
+          .key((opt: FilterOption) => opt.value.toString())
       }
       .padding({ left: 4, right: 4 })
     }

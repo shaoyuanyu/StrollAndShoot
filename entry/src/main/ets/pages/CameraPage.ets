@@ -1,16 +1,16 @@
 import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
 
-@Component
+@ComponentV2
 export struct CameraPage {
-  @Prop connected: boolean = false;
-  @Prop cameraName: string = '';
-  @Prop photoCount: number = 0;
-  @Prop statusText: string = '就绪';
-  @Prop scanning: boolean = false;
-  @Prop scanProgress: number = 0;
-  @Prop scanTotal: number = 0;
-  onScan: () => void = () => {};
-  onDisconnect: () => void = () => {};
+  @Param connected: boolean = false;
+  @Param cameraName: string = '';
+  @Param photoCount: number = 0;
+  @Param statusText: string = '就绪';
+  @Param scanning: boolean = false;
+  @Param scanProgress: number = 0;
+  @Param scanTotal: number = 0;
+  @Event onScan: () => void = () => {};
+  @Event onDisconnect: () => void = () => {};
 
   build() {
     Column() {

@@ -1,12 +1,12 @@
-@Component
+@ComponentV2
 export struct ConnectionStatusBar {
-  @Prop connected: boolean = false;
-  @Prop cameraName: string = '';
-  @Prop photoCount: number = 0;
-  @Prop statusText: string = '就绪';
-  @Prop compact: boolean = false;
-  @Prop scanProgress: number = 0;
-  @Prop scanTotal: number = 0;
+  @Param connected: boolean = false;
+  @Param cameraName: string = '';
+  @Param photoCount: number = 0;
+  @Param statusText: string = '就绪';
+  @Param compact: boolean = false;
+  @Param scanProgress: number = 0;
+  @Param scanTotal: number = 0;
 
   build() {
     if (this.compact) {

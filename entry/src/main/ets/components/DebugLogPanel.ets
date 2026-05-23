@@ -5,9 +5,9 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { AppLog, type LogEntry } from '../services/AppLog';
 
-@Component
+@ComponentV2
 export struct DebugLogPanel {
-  @Prop logText: string = '';
+  @Param logText: string = '';
   private appLog: AppLog | null = null;
 
   // Set the AppLog instance for copy/clear operations

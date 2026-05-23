@@ -3,11 +3,11 @@ import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
 
 @Entry
-@Component
+@ComponentV2
 struct GpsManagementPage {
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
-  @State dailyGroups: GpsDailyGroup[] = [];
-  @State totalCount: number = 0;
+  @Local dailyGroups: GpsDailyGroup[] = [];
+  @Local totalCount: number = 0;
 
   aboutToAppear(): void {
     this.refresh();
@@ -71,36 +71,38 @@ struct GpsManagementPage {
         .width('100%').layoutWeight(1)
       } else {
         List() {
-          ForEach(this.dailyGroups, (group: GpsDailyGroup) => {
-            ListItem() {
-              Row() {
-                Column() {
-                  Text(group.day)
-                    .fontSize(15).fontWeight(FontWeight.Medium)
-                    .fontColor($r('app.color.text_primary'))
-                  Text(`${group.count} 条记录`)
-                    .fontSize(12).fontColor($r('app.color.text_secondary'))
-                    .margin({ top: 2 })
+          Repeat<GpsDailyGroup>(this.dailyGroups)
+            .each((ri: RepeatItem<GpsDailyGroup>) => {
+              ListItem() {
+                Row() {
+                  Column() {
+                    Text(ri.item.day)
+                      .fontSize(15).fontWeight(FontWeight.Medium)
+                      .fontColor($r('app.color.text_primary'))
+                    Text(`${ri.item.count} 条记录`)
+                      .fontSize(12).fontColor($r('app.color.text_secondary'))
+                      .margin({ top: 2 })
+                  }
+                  .alignItems(HorizontalAlign.Start)
+
+                  Blank()
+
+                  Button('删除')
+                    .fontSize(12).height(30)
+                    .fontColor('#E84026')
+                    .backgroundColor($r('app.color.bg_page'))
+                    .onClick(() => { this.deleteDay(ri.item.day, ri.item.count); })
                 }
-                .alignItems(HorizontalAlign.Start)
-
-                Blank()
-
-                Button('删除')
-                  .fontSize(12).height(30)
-                  .fontColor('#E84026')
-                  .backgroundColor($r('app.color.bg_page'))
-                  .onClick(() => { this.deleteDay(group.day, group.count); })
+                .width('100%').padding(14)
+                .onClick(() => {
+                  router.pushUrl({
+                    url: 'pages/GpsDayDetailPage',
+                    params: { day: ri.item.day }
+                  });
+                })
               }
-              .width('100%').padding(14)
-              .onClick(() => {
-                router.pushUrl({
-                  url: 'pages/GpsDayDetailPage',
-                  params: { day: group.day }
-                });
-              })
-            }
-          }, (group: GpsDailyGroup) => group.day)
+            })
+            .key((group: GpsDailyGroup) => group.day)
         }
         .width('100%').layoutWeight(1)
       }
