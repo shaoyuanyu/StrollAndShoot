@@ -137,9 +137,14 @@ struct Index {
             displayMode: this.settings.displayMode,
             onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {
               const handle = _displayGroups[index].displayPhoto.handle;
+              // Build filtered handles list for the viewer
+              const handles: number[] = [];
+              for (const g of _displayGroups) {
+                handles.push(g.displayPhoto.handle);
+              }
               router.pushUrl({
                 url: 'pages/PhotoViewer',
-                params: { handle: handle }
+                params: { handle: handle, handles: handles }
               });
             },
             onDownloadSelected: async (handles: number[]) => {

@@ -3,7 +3,7 @@ import { image } from '@kit.ImageKit';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
 
-// ---- ZoomableImage (retained for future use) ----
+// ---- ZoomableImage ----
 @ComponentV2
 struct ZoomableImage {
   @Param pixelMap: image.PixelMap | null = null;
@@ -26,6 +26,8 @@ struct ZoomableImage {
   private pinching: boolean = false;
   private pinchCx: number = 0.5;
   private pinchCy: number = 0.5;
+  private panEndAt: number = 0;
+  private readonly PAN_DBLTAP_DEBOUNCE_MS: number = 200;
 
   @Monitor('pageKey')
   onPageChange(): void {
@@ -35,10 +37,12 @@ struct ZoomableImage {
   aboutToAppear(): void { this.updateImgCache(); }
 
   private updateImgCache(): void {
-    const s = Math.min(this.compW > 0 ? this.compW / this.photoW : 1,
-      this.compH > 0 ? this.compH / this.photoH : 1);
-    this.imgW = this.photoW * s;
-    this.imgH = this.photoH * s;
+    const pw = this.photoW > 0 ? this.photoW : (this.compW > 0 ? this.compW : 360);
+    const ph = this.photoH > 0 ? this.photoH : (this.compH > 0 ? this.compH : 360);
+    const s = Math.min(this.compW > 0 ? this.compW / pw : 1,
+      this.compH > 0 ? this.compH / ph : 1);
+    this.imgW = pw * s;
+    this.imgH = ph * s;
   }
 
   private reset(): void {
@@ -124,13 +128,17 @@ struct ZoomableImage {
 
   private onPanUpdate(e: GestureEvent): void {
     if (!e || this.scaleVal <= 1.0 || this.pinching) return;
-    this.applyTransform(1, e.offsetX, e.offsetY);
+    // Compensate for the scaled local coordinate system:
+    // .scale() shrinks the component's local coordinate space, so GestureEvent.offsetX
+    // reports a smaller value. Multiply by scaleVal to restore the screen-space delta.
+    this.applyTransform(1, e.offsetX * this.scaleVal, e.offsetY * this.scaleVal);
   }
 
   private onPanEnd(_e: GestureEvent): void {
     if (this.pinching) return;
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
+    this.panEndAt = Date.now();
     if (this.scaleVal > 1.0) {
       const iw = this.imgW * this.scaleVal;
       if (iw > this.compW) {
@@ -142,6 +150,10 @@ struct ZoomableImage {
   }
 
   private onDblTap(e: GestureEvent): void {
+    // Debounce: ignore double-tap shortly after panning to avoid conflicting with rapid successive drags
+    if (Date.now() - this.panEndAt < this.PAN_DBLTAP_DEBOUNCE_MS) {
+      return;
+    }
     if (this.scaleVal > 1.0) {
       this.onZoomChange(false);
       this.onEdgeChange(false);
@@ -184,11 +196,7 @@ struct ZoomableImage {
               .onActionStart((e: GestureEvent) => { this.onPinchStart(e); })
               .onActionUpdate((e: GestureEvent) => { this.onPinchUpdate(e); })
               .onActionEnd((e: GestureEvent) => { this.onPinchEnd(e); }),
-            PanGesture({
-              fingers: 1,
-              direction: PanDirection.All,
-              distance: this.scaleVal > 1.0 ? 3 : 80
-            })
+            PanGesture({ fingers: 1, direction: PanDirection.All, distance: this.scaleVal > 1.0 ? 3 : 80 })
               .onActionStart((e: GestureEvent) => { this.onPanStart(e); })
               .onActionUpdate((e: GestureEvent) => { this.onPanUpdate(e); })
               .onActionEnd((e: GestureEvent) => { this.onPanEnd(e); }),
@@ -219,6 +227,31 @@ function buildDisplayIndices(total: number): number[] {
   const arr: number[] = [];
   for (let i = 0; i < total; i++) { arr.push(i); }
   return arr;
+}
+
+// ---- Formatting helpers ----
+function formatCaptureDate(entry: PhotoEntry): string {
+  const raw = entry.captureDate;
+  if (!raw || raw.length < 14) return '';
+  // PTP format: YYYYMMDDThhmmss
+  const y = raw.substring(0, 4);
+  const mo = raw.substring(4, 6);
+  const d = raw.substring(6, 8);
+  const h = raw.substring(9, 11);
+  const mi = raw.substring(11, 13);
+  const s = raw.substring(13, 15);
+  return `${y}年${mo}月${d}日 ${h}:${mi}:${s}`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
+function formatResolution(w?: number, h?: number): string {
+  if (w && h && w > 0 && h > 0) return `${w}×${h}`;
+  return '';
 }
 
 // ---- ThumbCellView (separate @ComponentV2 for proper Repeat+virtualScroll recycling) ----
@@ -275,7 +308,6 @@ struct PhotoViewer {
   @Local _thumbItemW: number = 60;
   @Local _inertiaAnim: boolean = false;
   @Local _overlayVisible: boolean = true;
-  private navStack: NavPathStack = new NavPathStack();
 
   @Local _realTotal: number = 0;
   @Local _displayCount: number = 9;
@@ -285,14 +317,37 @@ struct PhotoViewer {
   @Local scaleArr: number[] = [];
   @Local offsetArr: number[] = [];
 
+  // ---- Full-resolution loading state ----
+  @Local fullResMap: Map<number, image.PixelMap> = new Map();
+  @Local loadingHandle: number = -1;
+  @Local isZoomed: boolean = false;
+  private stableTimerId: number = -1;
+  private preloadWindow: number = 3;
+  private preloadedHandles: Set<number> = new Set();
+
+  // Filtered photo list (from gallery's filter)
+  @Local photoList: PhotoEntry[] = [];
+
+  private getPhotos(): PhotoEntry[] {
+    return this.photoList.length > 0 ? this.photoList : this.svc.photos;
+  }
+
   aboutToAppear(): void {
-    this.rebuildDisplayArrays();
     const params = router.getParams() as Record<string, Object> | undefined;
     const handle = params ? (params['handle'] as number) : undefined;
+    const handles = params ? (params['handles'] as number[] | undefined) : undefined;
+
+    // Build filtered photo list if handles were passed
+    if (handles && handles.length > 0) {
+      const handleSet = new Set(handles);
+      this.photoList = this.svc.photos.filter(p => handleSet.has(p.handle));
+    }
+
+    this.rebuildDisplayArrays();
     let initialIndex = 0;
-    if (handle !== undefined && this.svc.photos.length > 0) {
-      for (let i = 0; i < this.svc.photos.length; i++) {
-        if (this.svc.photos[i].handle === handle) {
+    if (handle !== undefined && this.getPhotos().length > 0) {
+      for (let i = 0; i < this.getPhotos().length; i++) {
+        if (this.getPhotos()[i].handle === handle) {
           initialIndex = i;
           break;
         }
@@ -301,10 +356,17 @@ struct PhotoViewer {
     this.mainIdx = initialIndex;
     this.thumbIdx = initialIndex;
     this.updateScales(initialIndex);
+    // Start loading full-res for initial photo after a short delay
+    setTimeout(() => { this.scheduleFullResLoad(); }, 200);
+  }
+
+  aboutToDisappear(): void {
+    this.cancelStableTimer();
   }
 
   private rebuildDisplayArrays(): void {
-    const realTotal = this.svc.photos.length > 0 ? this.svc.photos.length : 0;
+    const photos = this.getPhotos();
+    const realTotal = photos.length > 0 ? photos.length : 0;
     if (realTotal === 0) {
       this._realTotal = 0;
       this._displayTotal = 0;
@@ -404,6 +466,7 @@ struct PhotoViewer {
     this.thumbIdx = index;
     this.thumbCtrl.changeIndex(index, false);
     this.updateScales(index);
+    this.scheduleFullResLoad();
   }
 
   private onMainChange(idx: number): void {
@@ -418,6 +481,7 @@ struct PhotoViewer {
       this.thumbCtrl.changeIndex(idx, false);
       this.updateScales(idx);
     }
+    this.scheduleFullResLoad();
   }
 
   // ========== Thumb -> Main ==========
@@ -461,16 +525,248 @@ struct PhotoViewer {
     this.mainCtrl.changeIndex(realIdx, true);
   }
 
+  // ========== Full-resolution loading ==========
+
+  /**
+   * Start or restart the 100ms stabilization timer.
+   * When the timer fires, begin downloading the full-resolution photo.
+   */
+  private scheduleFullResLoad(): void {
+    // Cancel any pending timer
+    this.cancelStableTimer();
+
+    const handle = this.currentHandle();
+    if (handle < 0) return;
+    // Already loaded or loading
+    if (this.fullResMap.has(handle) || this.loadingHandle === handle) return;
+
+    this.stableTimerId = setTimeout(() => {
+      this.stableTimerId = -1;
+      this.loadFullRes(handle);
+    }, 100);
+  }
+
+  private cancelStableTimer(): void {
+    if (this.stableTimerId >= 0) {
+      clearTimeout(this.stableTimerId);
+      this.stableTimerId = -1;
+    }
+  }
+
+  private currentHandle(): number {
+    const photos = this.getPhotos();
+    if (this.mainIdx >= 0 && this.mainIdx < photos.length) {
+      return photos[this.mainIdx].handle;
+    }
+    return -1;
+  }
+
+  private async loadFullRes(handle: number): Promise<void> {
+    // Guard: already loaded or another load in progress
+    if (this.fullResMap.has(handle) || this.loadingHandle >= 0) return;
+
+    this.loadingHandle = handle;
+    try {
+      const pixelMap = await this.svc.loadFullPhoto(handle);
+      if (pixelMap !== null) {
+        this.fullResMap.set(handle, pixelMap);
+        // Trigger preload of adjacent photos
+        this.preloadNeighbors();
+      }
+    } catch (_e) {
+      // Silently fail — thumbnail stays visible
+    } finally {
+      if (this.loadingHandle === handle) {
+        this.loadingHandle = -1;
+      }
+    }
+  }
+
+  /**
+   * Preload adjacent photos within the sliding window (±preloadWindow).
+   * Uses a background queue to avoid blocking the current load.
+   */
+  private preloadNeighbors(): void {
+    const photos = this.getPhotos();
+    const center = this.mainIdx;
+    const window = this.preloadWindow;
+    // Collect handles to preload: nearby, not yet loaded, not already queued
+    const toPreload: number[] = [];
+    for (let i = center - window; i <= center + window; i++) {
+      if (i === center || i < 0 || i >= photos.length) continue;
+      const h = photos[i].handle;
+      if (!this.fullResMap.has(h) && !this.preloadedHandles.has(h)) {
+        toPreload.push(h);
+        this.preloadedHandles.add(h);
+      }
+    }
+    // Evict far-away full-res images (> 2× window)
+    this.evictDistantFullRes(center);
+    // Fire preloads asynchronously
+    for (const h of toPreload) {
+      this.preloadOne(h);
+    }
+  }
+
+  private async preloadOne(handle: number): Promise<void> {
+    try {
+      const pixelMap = await this.svc.loadFullPhoto(handle);
+      if (pixelMap !== null) {
+        this.fullResMap.set(handle, pixelMap);
+      }
+    } catch (_e) {
+      // Silent
+    }
+  }
+
+  /**
+   * Evict full-res pixelMaps for photos far from the current index.
+   * Keeps memory footprint manageable.
+   */
+  private evictDistantFullRes(center: number): void {
+    const threshold = this.preloadWindow * 2 + 1;
+    const photos = this.getPhotos();
+    const toEvict: number[] = [];
+    this.fullResMap.forEach((_v: image.PixelMap, handle: number) => {
+      // Find the index of this handle
+      let idx = -1;
+      for (let i = 0; i < photos.length; i++) {
+        if (photos[i].handle === handle) { idx = i; break; }
+      }
+      if (idx < 0 || Math.abs(idx - center) > threshold) {
+        toEvict.push(handle);
+      }
+    });
+    for (const h of toEvict) {
+      const pm = this.fullResMap.get(h);
+      if (pm) { pm.release(); }
+      this.fullResMap.delete(h);
+      this.preloadedHandles.delete(h);
+    }
+  }
+
+  // ========== Title helpers ==========
+
+  private currentPhoto(): PhotoEntry | null {
+    const photos = this.getPhotos();
+    if (this.mainIdx >= 0 && this.mainIdx < photos.length) {
+      return photos[this.mainIdx];
+    }
+    return null;
+  }
+
+  private getMainTitle(): string {
+    const p = this.currentPhoto();
+    if (!p) return '走走拍拍';
+    return formatCaptureDate(p) || p.filename;
+  }
+
+  private getSubTitle(): string {
+    const p = this.currentPhoto();
+    if (!p) return '';
+    const parts: string[] = [];
+    if (p.filename) parts.push(p.filename);
+    if (p.size > 0) parts.push(formatFileSize(p.size));
+    const res = formatResolution(p.imagePixWidth, p.imagePixHeight);
+    if (res) parts.push(res);
+    return parts.join('  ·  ');
+  }
+
+  @Builder
+  TitleBar() {
+    Row() {
+      // Back button
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(22)
+          .fontColor([Color.White])
+      }
+      .width(36).height(36)
+      .backgroundColor('rgba(255,255,255,0.15)')
+      .onClick(() => { router.back(); })
+
+      // Title block
+      Column() {
+        Text(this.getMainTitle())
+          .fontSize(17).fontWeight(FontWeight.Medium).fontColor(Color.White)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Text(this.getSubTitle())
+          .fontSize(11).fontColor('#bbb')
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .margin({ top: 1 })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      .margin({ left: 10 })
+
+      // Current index indicator
+      Text(`${this.mainIdx + 1}/${this._realTotal}`)
+        .fontSize(12).fontColor('#888')
+        .margin({ right: 4 })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 8 })
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+  }
+
   // ========== Builders ==========
 
+  private getDisplayPixelMap(entry: PhotoEntry): image.PixelMap | null {
+    // Prefer full-resolution if loaded
+    if (this.fullResMap.has(entry.handle)) {
+      return this.fullResMap.get(entry.handle)!;
+    }
+    // Fall back to thumbnail
+    return this.getThumbPixelMap(this.mainIdx);
+  }
+
   private getThumbPixelMap(realIdx: number): image.PixelMap | null {
-    if (realIdx >= 0 && realIdx < this.svc.photos.length) {
-      const handle = this.svc.photos[realIdx].handle;
+    const photos = this.getPhotos();
+    if (realIdx >= 0 && realIdx < photos.length) {
+      const handle = photos[realIdx].handle;
       if (this.svc.thumbnailPixelMapMap.has(handle)) {
         return this.svc.thumbnailPixelMapMap.get(handle)!;
       }
     }
     return null;
+  }
+
+  @Builder
+  MainImageContent(photo: PhotoEntry, idx: number) {
+    Stack() {
+      // Zoomable image (pinch/pan/double-tap)
+      ZoomableImage({
+        pixelMap: this.fullResMap.has(photo.handle)
+          ? this.fullResMap.get(photo.handle)! : this.getThumbPixelMap(idx),
+        photoW: photo.imagePixWidth ?? 1,
+        photoH: photo.imagePixHeight ?? 1,
+        pageKey: idx,
+        onZoomChange: (zoomed: boolean) => {
+          this.isZoomed = zoomed;
+        }
+      })
+
+      // Loading overlay
+      if (this.loadingHandle === photo.handle) {
+        Column() {
+          LoadingProgress()
+            .color(Color.White)
+            .width(48).height(48)
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('rgba(0,0,0,0.3)')
+        .hitTestBehavior(HitTestMode.None)
+      }
+    }
+    .width('100%').height('100%')
+    .onClick(() => { this._overlayVisible = !this._overlayVisible; })
+    .onAreaChange((_o: Area, n: Area) => {
+      const w = n.width as number;
+      if (w > 0) { this._swiperWidth = w; }
+    })
   }
 
   @Builder
@@ -487,17 +783,21 @@ struct PhotoViewer {
   }
 
   build() {
-    Navigation(this.navStack) {
+    Column() {
+      // ===== Custom Title Bar =====
+      if (this._overlayVisible) {
+        this.TitleBar()
+      }
+
+      // ===== Main + Thumb Swipers =====
       Stack() {
         // ===== Main Swiper =====
         Swiper(this.mainCtrl) {
-          Repeat<PhotoEntry>(this.svc.photos)
+          Repeat<PhotoEntry>(this.getPhotos())
             .each((ri: RepeatItem<PhotoEntry>) => {
               Stack() {
                 if (this.svc.thumbnailPixelMapMap.has(ri.item.handle)) {
-                  Image(this.svc.thumbnailPixelMapMap.get(ri.item.handle)!)
-                    .objectFit(ImageFit.Contain)
-                    .width('100%').height('100%')
+                  this.MainImageContent(ri.item, ri.index);
                 } else {
                   Column() {
                     Text(ri.item.filename)
@@ -507,19 +807,16 @@ struct PhotoViewer {
                   .width('100%').height('100%')
                   .justifyContent(FlexAlign.Center)
                   .backgroundColor('#222')
+                  .onClick(() => { this._overlayVisible = !this._overlayVisible; })
                 }
               }
               .width('100%').height('100%')
-              .onClick(() => { this._overlayVisible = !this._overlayVisible; })
-              .onAreaChange((_o: Area, n: Area) => {
-                const w = n.width as number;
-                if (w > 0) { this._swiperWidth = w; }
-              })
             })
             .key((_photo: PhotoEntry, idx: number) => idx.toString())
             .virtualScroll({ totalCount: this._realTotal })
         }
         .index(this.mainIdx)
+        .disableSwipe(this.isZoomed)
         .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
         .onContentDidScroll((s: number, i: number, p: number) => { this.onMainContentDidScroll(s, i, p); })
         .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
@@ -602,10 +899,9 @@ struct PhotoViewer {
       }
       .width('100%').height('100%')
       .backgroundColor(Color.Black)
+      .layoutWeight(1)
     }
-    .hideTitleBar(!this._overlayVisible)
-    .title('', { barStyle: BarStyle.STACK, backgroundBlurStyle: BlurStyle.COMPONENT_THICK })
-    .titleMode(NavigationTitleMode.Mini)
-    .hideBackButton(false)
+    .width('100%').height('100%')
+    .backgroundColor(Color.Black)
   }
 }
