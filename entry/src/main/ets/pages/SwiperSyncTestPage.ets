@@ -4,11 +4,27 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 const TAG = 'SwiperTest';
 const DOMAIN = 0x0001;
 
-const COLORS: string[] = [
-  '#FF6B6B', '#FFA94D', '#FFD43B', '#69DB7C', '#4DABF7',
-  '#9775FA', '#F783AC', '#63E6BE', '#E599F7', '#FF922B',
-];
-const TOTAL = COLORS.length;
+const TOTAL = 1000;
+const COLORS: string[] = (() => {
+  const arr: string[] = [];
+  for (let i = 0; i < TOTAL; i++) {
+    const h = (i * 37) % 360;
+    const s = 0.7, l = 0.55;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; g = x; }
+    const hex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+    arr.push(`#${hex(r)}${hex(g)}${hex(b)}`);
+  }
+  return arr;
+})();
 const DISPLAY_COUNT = 9;
 const HALF = Math.floor(DISPLAY_COUNT / 2);
 const DISPLAY_TOTAL = TOTAL + HALF * 2;
@@ -232,14 +248,14 @@ struct SwiperSyncTestPage {
   // ========== Build ==========
 
   @Builder
-  ThumbCell(displayIdx: number) {
+  ThumbCell(ri: RepeatItem<number>) {
     ThumbBlock({
-      color: COLORS[toReal(displayIdx)],
-      label: `${toReal(displayIdx)}`,
-      isPlaceholder: isPlaceholder(displayIdx),
-      s: this.scaleArr[displayIdx] ?? MIN_S,
-      ox: this.offsetArr[displayIdx] ?? 0,
-      onCellClick: () => { this.onThumbClick(toReal(displayIdx)); }
+      color: COLORS[toReal(ri.item)],
+      label: `${toReal(ri.item)}`,
+      isPlaceholder: isPlaceholder(ri.item),
+      s: this.scaleArr[ri.item] ?? MIN_S,
+      ox: this.offsetArr[ri.item] ?? 0,
+      onCellClick: () => { this.onThumbClick(toReal(ri.item)); }
     })
   }
 
@@ -256,18 +272,21 @@ struct SwiperSyncTestPage {
       Stack() {
         // ===== Main Swiper =====
         Swiper(this.mainCtrl) {
-          ForEach(COLORS, (color: string, idx: number) => {
-            Column() {
-              Text(`${idx}`).fontSize(72).fontColor(Color.White)
-            }
-            .width('100%').height('100%')
-            .backgroundColor(color)
-            .justifyContent(FlexAlign.Center)
-            .onAreaChange((_o: Area, n: Area) => {
-              const w = n.width as number;
-              if (w > 0) { this._swiperWidth = w; }
+          Repeat<string>(COLORS)
+            .each((ri: RepeatItem<string>) => {
+              Column() {
+                Text(`${ri.index}`).fontSize(72).fontColor(Color.White)
+              }
+              .width('100%').height('100%')
+              .backgroundColor(ri.item)
+              .justifyContent(FlexAlign.Center)
+              .onAreaChange((_o: Area, n: Area) => {
+                const w = n.width as number;
+                if (w > 0) { this._swiperWidth = w; }
+              })
             })
-          }, (_: string, idx: number) => idx.toString())
+            .key((_color: string, idx: number) => idx.toString())
+            .virtualScroll({ totalCount: TOTAL })
         }
         .index(this.mainIdx)
         .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
@@ -283,9 +302,12 @@ struct SwiperSyncTestPage {
           Blank()
           Row() {
             Swiper(this.thumbCtrl) {
-              ForEach(DISPLAY_INDICES, (displayIdx: number) => {
-                this.ThumbCell(displayIdx)
-              }, (displayIdx: number) => displayIdx.toString())
+              Repeat<number>(DISPLAY_INDICES)
+                .each((ri: RepeatItem<number>) => {
+                  this.ThumbCell(ri)
+                })
+                .key((displayIdx: number) => displayIdx.toString())
+                .virtualScroll({ totalCount: DISPLAY_TOTAL })
             }
             .cachedCount(6)
             .index(this.thumbIdx)
