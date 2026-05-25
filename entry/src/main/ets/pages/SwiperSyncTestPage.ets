@@ -96,6 +96,8 @@ struct SwiperSyncTestPage {
   @Local scaleArr: number[] = [];
   @Local offsetArr: number[] = [];
   @Local _inertiaAnim: boolean = false; // true = use friction curve for inertia deceleration
+  @Local _overlayVisible: boolean = true;
+  private navStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.scaleArr = new Array(DISPLAY_TOTAL).fill(MIN_S);
@@ -267,15 +269,7 @@ struct SwiperSyncTestPage {
   }
 
   build() {
-    Column() {
-      Row() {
-        Button('<-').width(40).height(40).onClick(() => { router.back(); })
-        Text(`m:${this.mainIdx} t:${this.thumbIdx} iw:${this._thumbItemW.toFixed(0)} sw:${this._swiperWidth.toFixed(0)}`)
-          .fontSize(12).fontColor(Color.White).layoutWeight(1).textAlign(TextAlign.Center)
-        Button('X').width(40).height(40)
-      }
-      .width('100%').height(48).padding({ left: 8, right: 8 }).backgroundColor('#222')
-
+    Navigation(this.navStack) {
       Stack() {
         // ===== Main Swiper =====
         Swiper(this.mainCtrl) {
@@ -287,6 +281,7 @@ struct SwiperSyncTestPage {
               .width('100%').height('100%')
               .backgroundColor(ri.item)
               .justifyContent(FlexAlign.Center)
+              .onClick(() => { this._overlayVisible = !this._overlayVisible; })
               .onAreaChange((_o: Area, n: Area) => {
                 const w = n.width as number;
                 if (w > 0) { this._swiperWidth = w; }
@@ -368,14 +363,19 @@ struct SwiperSyncTestPage {
           }
           .width('100%')
           .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-          .backgroundColor('rgba(0,0,0,0.7)')
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         }
         .width('100%').height('100%')
         .hitTestBehavior(HitTestMode.Transparent)
+        .visibility(this._overlayVisible ? Visibility.Visible : Visibility.Hidden)
+        .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
       }
-      .width('100%').layoutWeight(1)
+      .width('100%').height('100%')
+      .backgroundColor(Color.Black)
     }
-    .width('100%').height('100%')
-    .backgroundColor(Color.Black)
-  }
+  .hideTitleBar(!this._overlayVisible)
+  .title('', { barStyle: BarStyle.STACK, backgroundBlurStyle: BlurStyle.COMPONENT_THICK })
+  .titleMode(NavigationTitleMode.Mini)
+  .hideBackButton(false)
+}
 }
