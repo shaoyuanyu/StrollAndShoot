@@ -74,6 +74,9 @@ const MIN_S = 1.0;          // non-center items fill slot, no visual gaps
 const ITEM_SPACE = 2;       // base layout gap
 const CENTER_OFFSET = 14;   // push neighbors away from center
 const SNAP_DURATION = 150;  // both swipers snap animation duration (ms)
+const INERTIA_THRESHOLD = 3000; // min velocity (px/s) to trigger inertial scroll
+const INERTIA_FACTOR = 150;   // velocity / factor = items to jump (smaller = more jump)
+const INERTIA_DURATION = 5000; // friction curve animation duration for inertia (ms)
 
 @Entry
 @ComponentV2
@@ -92,6 +95,7 @@ struct SwiperSyncTestPage {
   private _seq: number = 0;
   @Local scaleArr: number[] = [];
   @Local offsetArr: number[] = [];
+  @Local _inertiaAnim: boolean = false; // true = use friction curve for inertia deceleration
 
   aboutToAppear(): void {
     this.scaleArr = new Array(DISPLAY_TOTAL).fill(MIN_S);
@@ -137,6 +141,7 @@ struct SwiperSyncTestPage {
     if (!this._isDragging && Math.abs(extraInfo.currentOffset) > 0.5) {
       this._fromMain = true;
       this._isDragging = true;
+      this._inertiaAnim = false;
       this._lastMainFrac = this.mainIdx;
       this.thumbCtrl.startFakeDrag();
       this.log(`M-drag start @${this.mainIdx}`);
@@ -173,6 +178,7 @@ struct SwiperSyncTestPage {
       this._isDragging = false;
     }
     this._fromMain = false;
+    this._inertiaAnim = false;
     this.mainIdx = index;
     this.thumbIdx = index;
     this.thumbCtrl.changeIndex(index, false);
@@ -181,7 +187,8 @@ struct SwiperSyncTestPage {
 
   private onMainChange(idx: number): void {
     this.mainIdx = idx;
-    if (this._fromMain) {
+    // During inertia, skip cleanup — let onMainAnimationEnd handle it
+    if (this._fromMain && !this._inertiaAnim) {
       this._fromMain = false;
       if (this._isDragging) {
         this.thumbCtrl.stopFakeDrag();
@@ -196,7 +203,7 @@ struct SwiperSyncTestPage {
   // ========== Thumb → Main ==========
 
   private onThumbGestureSwipe(index: number, extraInfo: SwiperAnimationEvent): void {
-    if (this._fromMain) return;
+    if (this._fromMain || this._inertiaAnim) return;
 
     // Compute which real item is at center of thumb strip
     const centerReal = index - extraInfo.currentOffset / (this._thumbItemW + ITEM_SPACE);
@@ -209,14 +216,14 @@ struct SwiperSyncTestPage {
   }
 
   private onThumbAnimationStart(_index: number, targetIndex: number): void {
-    if (this._fromMain) return;
+    if (this._fromMain || this._inertiaAnim) return;
     // targetIndex is the first-visible display index, which equals the center real index
     const realTarget = Math.max(0, Math.min(targetIndex, TOTAL - 1));
     this.mainCtrl.changeIndex(realTarget, true);
   }
 
   private onThumbAnimationEnd(index: number): void {
-    if (this._fromMain) return;
+    if (this._fromMain || this._inertiaAnim) return;
     // index is the first-visible display index, which equals the center real index
     const realIdx = Math.max(0, Math.min(index, TOTAL - 1));
     this.mainIdx = realIdx;
@@ -226,7 +233,7 @@ struct SwiperSyncTestPage {
 
   private onThumbChange(idx: number): void {
     this.thumbIdx = idx;
-    if (this._fromMain) return;
+    if (this._fromMain || this._inertiaAnim) return;
     const centerIdx = idx + HALF;
     if (isPlaceholder(centerIdx)) return;
     const realIdx = Math.max(0, Math.min(toReal(centerIdx), TOTAL - 1));
@@ -294,7 +301,7 @@ struct SwiperSyncTestPage {
         .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
         .onChange((i: number) => { this.onMainChange(i); })
         .cachedCount(2).loop(false).indicator(false)
-        .curve(Curve.Linear).duration(SNAP_DURATION)
+        .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear).duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
         .width('100%').height('100%')
 
         // ===== Thumb Swiper =====
@@ -315,7 +322,7 @@ struct SwiperSyncTestPage {
             .indicator(false).itemSpace(ITEM_SPACE)
             .width('100%').height(this._thumbItemW).clip(false)
             .disableSwipe(false).loop(false)
-            .curve(Curve.Linear).duration(SNAP_DURATION)
+            .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear).duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
             .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onThumbGestureSwipe(i, e); })
             .onAnimationStart((i: number, t: number) => { this.onThumbAnimationStart(i, t); })
             .onAnimationEnd((i: number) => { this.onThumbAnimationEnd(i); })
@@ -324,6 +331,40 @@ struct SwiperSyncTestPage {
               const sw = n.width as number;
               this._thumbItemW = (sw - (DISPLAY_COUNT - 1) * ITEM_SPACE) / DISPLAY_COUNT;
             })
+            .parallelGesture(
+              PanGesture()
+                .onActionUpdate((e: GestureEvent) => {
+                  // Preemptively set _inertiaAnim to block thumb callbacks
+                  // before finger lifts, avoiding race with Swiper's internal snap
+                  const vx = e.velocityX || 0;
+                  if (Math.abs(vx) >= INERTIA_THRESHOLD && !this._inertiaAnim) {
+                    this._inertiaAnim = true;
+                  }
+                })
+                .onActionEnd((e: GestureEvent) => {
+                  const vx = e.velocityX || 0;
+                  if (Math.abs(vx) < INERTIA_THRESHOLD) {
+                    // Normal swipe — allow thumb callbacks to proceed
+                    this._inertiaAnim = false;
+                    return;
+                  }
+                  const jump = Math.max(1, Math.round(Math.abs(vx) / INERTIA_FACTOR));
+                  const step = vx > 0 ? -jump : jump;
+                  const target = Math.max(0, Math.min(this.mainIdx + step, TOTAL - 1));
+                  if (target !== this.mainIdx) {
+                    // Flatten all scales/offsets — center thumb returns to normal before scroll
+                    for (let i = 0; i < DISPLAY_TOTAL; i++) {
+                      this.scaleArr[i] = isPlaceholder(i) ? 0 : MIN_S;
+                      this.offsetArr[i] = 0;
+                    }
+                    this._fromMain = true;
+                    this.thumbCtrl.changeIndex(target, true);
+                    this.mainCtrl.changeIndex(target, true);
+                  } else {
+                    this._inertiaAnim = false;
+                  }
+                })
+            )
           }
           .width('100%')
           .padding({ left: 16, right: 16, top: 8, bottom: 8 })
