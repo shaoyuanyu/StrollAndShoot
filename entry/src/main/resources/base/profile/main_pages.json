@@ -1,5 +1,7 @@
 {
   "src": [
+    "pages/SwiperSyncTestPage",
+    "pages/PhotoViewer",
     "pages/Index",
     "pages/PhotoDetailPage",
     "pages/GpsManagementPage",

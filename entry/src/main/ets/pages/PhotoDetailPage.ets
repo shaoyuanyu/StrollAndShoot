@@ -245,6 +245,17 @@ struct PhotoDetailPage {
     this.checkDownloaded();
   }
 
+  aboutToDisappear(): void {
+    const t0 = Date.now();
+    this.service.getLog().add('PERF Detail aboutToDisappear START');
+    this.service.cancelPreload();
+    if (this.fullPixelMap !== null) {
+      this.fullPixelMap.release();
+      this.fullPixelMap = null;
+    }
+    this.service.getLog().add(`PERF Detail aboutToDisappear END ${Date.now() - t0}ms`);
+  }
+
   private currentGroup(): DisplayGroup {
     return this.displayGroups[this.currentIndex];
   }

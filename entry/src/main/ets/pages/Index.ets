@@ -7,9 +7,9 @@ import { ExifGeotagger } from '../services/ExifGeotagger';
 import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
-import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
+import type { DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
 import { SettingsStore } from '../model/SettingsStore';
-import { AppLog } from '../services/AppLog';
+
 
 const TABS: string[] = ['Gallery', 'Camera', 'Settings'];
 
@@ -23,33 +23,24 @@ function tabLabel(key: string): string {
 @ComponentV2
 struct Index {
   private tabsController: TabsController = new TabsController();
-  private service: CameraService = CameraService.getInstance();
-  private appLog: AppLog = this.service.getLog();
   private uiContext: common.UIAbilityContext | null = null;
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
+  @Local svc: CameraService = CameraService.getInstance();
   @Local currentTab: number = 1;
-  @Local statusText: string = '就绪';
-  @Local cameraName: string = '';
-  @Local photoCount: number = 0;
-  @Local photos: PhotoEntry[] = [];
-  @Local scanning: boolean = false;
-  @Local connected: boolean = false;
   @Local logText: string = '';
-  @Local thumbnailVersion: number = 0;
-  @Local thumbnailReadyHandles: number[] = [];
   @Local downloadProgress: DownloadProgress | null = null;
   @Local downloadedKeys: string[] = [];
   @Local gpsRunning: boolean = false;
   @Local gpsRecordCount: number = 0;
   @Local gpsMode: number = 2;
-  @Local scanProgress: number = 0;
-  @Local scanTotal: number = 0;
   @Local settings: SettingsStore = SettingsStore.getInstance();
 
   onPageShow(): void {
+    this.svc.getLog().add('PERF onPageShow START');
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
     this.syncGpsState();
-    this.syncState();
+    this.syncDownloadedKeys();
+    this.svc.getLog().add('PERF onPageShow END');
   }
 
   aboutToAppear(): void {
@@ -60,17 +51,16 @@ struct Index {
       this.applyDarkMode(this.settings.darkMode);
     }
 
-    this.service.initLogPath(ctx.filesDir);
-    this.service.initDownloadDir(ctx.filesDir);
-    this.service.onChange = () => { this.syncState(); };
+    this.svc.initLogPath(ctx.filesDir);
+    this.svc.initDownloadDir(ctx.filesDir);
 
-    this.gpsRecorder.init(ctx.filesDir, this.appLog, ctx);
+    this.gpsRecorder.init(ctx.filesDir, this.svc.getLog(), ctx);
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
-    ExifGeotagger.setLog(this.appLog);
+    ExifGeotagger.setLog(this.svc.getLog());
     this.syncGpsState();
     this.gpsRecorder.autoStart();
 
-    this.syncState();
+    this.syncDownloadedKeys();
   }
 
   @Monitor('settings.darkMode')
@@ -81,21 +71,8 @@ struct Index {
     }
   }
 
-  syncState(): void {
-    this.statusText = this.service.statusText;
-    this.cameraName = this.service.cameraName;
-    this.photoCount = this.service.photoCount;
-    this.photos = this.service.photos;
-    this.scanning = this.service.scanning;
-    this.connected = this.service.connected;
-    this.logText = this.appLog.getText();
-    this.thumbnailVersion++;
-    const handles: number[] = [];
-    this.service.thumbnailPixelMapMap.forEach((_v: Object, k: number) => { handles.push(k); });
-    this.thumbnailReadyHandles = handles;
-    this.downloadedKeys = this.service.getDownloadedKeys();
-    this.scanProgress = this.service.scanProgress;
-    this.scanTotal = this.service.scanTotal;
+  syncDownloadedKeys(): void {
+    this.downloadedKeys = this.svc.getDownloadedKeys();
   }
 
   syncGpsState(): void {
@@ -132,38 +109,47 @@ struct Index {
 
   switchToTab(idx: number): void {
     this.currentTab = idx;
+    if (idx === 2) { this.logText = this.svc.getLog().getText(); }
     this.tabsController.changeIndex(idx);
   }
 
   build() {
     Column() {
+      // ---- TEMP: Swiper sync test entry ----
+      Row() {
+        Blank()
+        Button('[TEST] Swiper Sync')
+          .fontSize(11).height(28)
+          .backgroundColor('#FF6B6B')
+          .borderRadius(4)
+          .onClick(() => { router.pushUrl({ url: 'pages/SwiperSyncTestPage' }); })
+      }
+      .width('100%').padding({ right: 8, top: 4 })
+      .backgroundColor('#222')
+      // ---- END TEMP ----
+
       Tabs({ index: 1, controller: this.tabsController }) {
         TabContent() {
           GalleryPage({
-            connected: this.connected, cameraName: this.cameraName,
-            photoCount: this.photoCount, statusText: this.statusText,
-            photos: this.photos,
-            thumbnailVersion: this.thumbnailVersion,
-            thumbnailReadyHandles: this.thumbnailReadyHandles,
             downloadProgress: this.downloadProgress,
             downloadedKeys: this.downloadedKeys,
-            scanProgress: this.scanProgress, scanTotal: this.scanTotal,
             galleryColumnCount: this.settings.galleryColumnCount,
             displayMode: this.settings.displayMode,
-            onThumbClick: (displayGroups: DisplayGroup[], index: number) => {
+            onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {
+              const handle = _displayGroups[index].displayPhoto.handle;
               router.pushUrl({
-                url: 'pages/PhotoDetailPage',
-                params: { displayGroups: displayGroups, initialIndex: index }
+                url: 'pages/PhotoViewer',
+                params: { handle: handle }
               });
             },
             onDownloadSelected: async (handles: number[]) => {
               if (handles.length === 0) return;
-              this.service.cancelPreload();
-              this.appLog.add(`选中 ${handles.length} 张照片，开始下载`);
-              this.syncState();
+              this.svc.cancelPreload();
+              this.svc.getLog().add(`选中 ${handles.length} 张照片，开始下载`);
+              this.syncDownloadedKeys();
 
               try {
-                await this.service.downloadPhotos(
+                await this.svc.downloadPhotos(
                   handles,
                   (progress: DownloadProgress) => {
                     this.downloadProgress = {
@@ -181,35 +167,31 @@ struct Index {
                   this.uiContext!
                 );
 
-                this.downloadedKeys = this.service.getDownloadedKeys();
-                this.syncState();
+                this.downloadedKeys = this.svc.getDownloadedKeys();
+                this.syncDownloadedKeys();
 
                 setTimeout(() => {
                   this.downloadProgress = null;
-                  this.syncState();
+                  this.syncDownloadedKeys();
                 }, 2000);
               } catch (err) {
-                this.appLog.add(`下载异常: ${JSON.stringify(err)}`);
+                this.svc.getLog().add(`下载异常: ${JSON.stringify(err)}`);
                 this.downloadProgress = null;
-                this.syncState();
+                this.syncDownloadedKeys();
               }
             },
             onCancelDownload: () => {
-              this.service.cancelDownload();
+              this.svc.cancelDownload();
               this.downloadProgress = null;
-              this.syncState();
+              this.syncDownloadedKeys();
             }
           })
         }
 
         TabContent() {
           CameraPage({
-            connected: this.connected, cameraName: this.cameraName,
-            photoCount: this.photoCount, statusText: this.statusText,
-            scanning: this.scanning,
-            scanProgress: this.scanProgress, scanTotal: this.scanTotal,
-            onScan: () => { this.service.scanForCamera(); },
-            onDisconnect: () => { this.service.disconnect(); this.syncState(); }
+            onScan: () => { this.svc.scanForCamera(); },
+            onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
           })
         }
 
@@ -219,12 +201,12 @@ struct Index {
             gpsRunning: this.gpsRunning,
             gpsRecordCount: this.gpsRecordCount,
             gpsMode: this.gpsMode,
-            onClear: () => { this.appLog.clear(); this.syncState(); },
+            onClear: () => { this.svc.getLog().clear(); this.syncDownloadedKeys(); },
             onCopy: () => {
               const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.logText);
               pasteboard.getSystemPasteboard().setData(data);
-              this.appLog.add('日志已复制到剪贴板');
-              this.syncState();
+              this.svc.getLog().add('日志已复制到剪贴板');
+              this.syncDownloadedKeys();
             },
             onGpsToggle: () => { this.toggleGps(); },
             onGpsModeChange: (mode: number) => { this.changeGpsMode(mode); },

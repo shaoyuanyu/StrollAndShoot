@@ -31,88 +31,15 @@ class FlatItem {
   }
 }
 
-@ComponentV2
-struct PhotoCell {
-  @Param dg: DisplayGroup = { basename: '', displayPhoto: { handle: 0, filename: '', size: 0 }, alternates: [], allPhotos: [] };
-  @Param hasThumb: boolean = false;
-  @Param selectMode: boolean = false;
-  @Param isSelected: boolean = false;
-  @Param isDownloaded: boolean = false;
-  @Param timeText: string = '';
-  @Event onTap: () => void = () => {};
-  @Event onLongPress: () => void = () => {};
-  private service: CameraService = CameraService.getInstance();
 
-  build() {
-    Stack() {
-      if (this.hasThumb) {
-        Image(this.service.thumbnailPixelMapMap.get(this.dg.displayPhoto.handle)!)
-          .objectFit(ImageFit.Cover)
-          .width('100%').height('100%')
-      } else {
-        Column() { Text('📷').fontSize(20) }
-        .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor($r('app.color.thumbnail_placeholder'))
-      }
-      if (this.timeText) {
-        Text(this.timeText)
-          .fontSize(8).fontColor($r('app.color.text_on_dark'))
-          .padding({ left: 3, right: 3, top: 1, bottom: 1 })
-          .backgroundColor('rgba(0,0,0,0.5)').borderRadius(3)
-          .position({ x: 0, y: '100%' }).markAnchor({ x: 0, y: '100%' })
-          .margin({ left: 3, bottom: 3 })
-      }
-      if (this.selectMode && !this.isDownloaded) {
-        Checkbox()
-          .select(this.isSelected)
-          .width(18).height(18)
-          .position({ x: '100%', y: 0 }).markAnchor({ x: '100%', y: 0 })
-          .margin({ top: 3, right: 3 })
-          .hitTestBehavior(HitTestMode.None)
-      }
-      if (this.isDownloaded) {
-        Circle({ width: 6, height: 6 })
-          .fill('#4CAF50')
-          .position({ x: '100%', y: 0 }).markAnchor({ x: '100%', y: 0 })
-          .margin({ top: 4, right: 4 })
-          .hitTestBehavior(HitTestMode.None)
-      }
-    }
-    .layoutWeight(1)
-    .aspectRatio(1)
-    .borderRadius(4)
-    .border({
-      width: this.isDownloaded ? 2 : 0,
-      color: '#4CAF50', radius: 4
-    })
-    .clip(true)
-    .parallelGesture(
-      GestureGroup(GestureMode.Exclusive,
-        LongPressGesture({ repeat: false, duration: 500 })
-          .onAction(() => { this.onLongPress(); }),
-        TapGesture()
-          .onAction(() => { this.onTap(); })
-      )
-    )
-  }
-}
 
 @ComponentV2
 export struct GalleryPage {
-  @Param connected: boolean = false;
-  @Param cameraName: string = '';
-  @Param photoCount: number = 0;
-  @Param statusText: string = '就绪';
-  @Param photos: PhotoEntry[] = [];
-  @Param thumbnailVersion: number = 0;
-  @Param thumbnailReadyHandles: number[] = [];
   @Param downloadProgress: DownloadProgress | null = null;
   @Param downloadedKeys: string[] = [];
-  @Param scanProgress: number = 0;
-  @Param scanTotal: number = 0;
   @Param galleryColumnCount: number = -1;
   @Param displayMode: string = 'file_first';
+  @Local svc: CameraService = CameraService.getInstance();
   @Local filterValue: string = '';
   @Local selectMode: boolean = false;
   @Local selectedHandles: Set<number> = new Set();
@@ -120,12 +47,33 @@ export struct GalleryPage {
   @Event onThumbClick: (displayGroups: DisplayGroup[], index: number) => void = (_g: DisplayGroup[], _i: number) => {};
   @Event onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
   @Event onCancelDownload: () => void = () => {};
-  private service: CameraService = CameraService.getInstance();
   private pinchBaseScale: number = 1.0;
 
+  // O(1) filtered index map
+  private _filteredIndexMap: Map<number, number> = new Map();
+  private _filteredIndexMapRef: DisplayGroup[] | null = null;
+  // O(1) downloaded Set cache
+  private _downloadedSet: Set<string> = new Set();
+  private _downloadedSetRef: string[] | null = null;
+  // buildFlatItems cache (version-based, avoids V2 @Local reference instability)
+  private _flatItemsCache: FlatItem[] | null = null;
+  private _flatCachePhotosVer: number = -1;
+  private _flatCacheMode: string = '';
+  private _flatCacheFilter: string = '';
+  private _flatCacheScale: number = -1;
+
+  private _displayWidth: number = -1;
+
+  private getDisplayWidth(): number {
+    if (this._displayWidth < 0) {
+      const d = display.getDefaultDisplaySync();
+      this._displayWidth = d ? d.width : 360;
+    }
+    return this._displayWidth;
+  }
+
   private columnCount(): number {
-    const d = display.getDefaultDisplaySync();
-    const w = d ? d.width : 360;
+    const w = this.getDisplayWidth();
     const avail = w - 12;
     const itemW = this.baseItemW() * this.galleryScale;
     const gap = this.itemGapPx();
@@ -137,8 +85,7 @@ export struct GalleryPage {
 
   private baseItemW(): number {
     if (this.galleryColumnCount > 0) {
-      const d = display.getDefaultDisplaySync();
-      const w = d ? d.width : 360;
+      const w = this.getDisplayWidth();
       const avail = w - 12;
       return (avail - (this.galleryColumnCount - 1) * 2) / this.galleryColumnCount;
     }
@@ -164,25 +111,33 @@ export struct GalleryPage {
   }
 
   private hasThumb(handle: number): boolean {
-    return this.thumbnailReadyHandles.indexOf(handle) >= 0;
+    return this.svc.thumbnailPixelMapMap.has(handle);
+  }
+
+  private getDownloadedSet(): Set<string> {
+    if (this._downloadedSetRef !== this.downloadedKeys) {
+      this._downloadedSet = new Set(this.downloadedKeys);
+      this._downloadedSetRef = this.downloadedKeys;
+    }
+    return this._downloadedSet;
   }
 
   private isDownloaded(photo: PhotoEntry): boolean {
-    return this.downloadedKeys.indexOf(this.service.makeDownloadKey(photo.filename, photo.size)) >= 0;
+    return this.getDownloadedSet().has(this.svc.makeDownloadKey(photo.filename, photo.size));
   }
 
   private _allGroupsCache: DisplayGroup[] | null = null;
-  private _cachePhotosRef: PhotoEntry[] | null = null;
+  private _cachePhotosVer: number = -1;
   private _cacheMode: string = '';
 
   private allDisplayGroups(): DisplayGroup[] {
     if (this._allGroupsCache !== null &&
-        this._cachePhotosRef === this.photos &&
+        this._cachePhotosVer === this.svc.photosVersion &&
         this._cacheMode === this.displayMode) {
       return this._allGroupsCache;
     }
-    this._allGroupsCache = buildDisplayGroups(this.photos, this.displayMode);
-    this._cachePhotosRef = this.photos;
+    this._allGroupsCache = buildDisplayGroups(this.svc.photos, this.displayMode);
+    this._cachePhotosVer = this.svc.photosVersion;
     this._cacheMode = this.displayMode;
     return this._allGroupsCache;
   }
@@ -198,6 +153,15 @@ export struct GalleryPage {
   }
 
   private buildFlatItems(): FlatItem[] {
+    if (this._flatItemsCache !== null &&
+        this._flatCachePhotosVer === this.svc.photosVersion &&
+        this._flatCacheMode === this.displayMode &&
+        this._flatCacheFilter === this.filterValue &&
+        this._flatCacheScale === this.galleryScale) {
+      return this._flatItemsCache;
+    }
+    const t0 = Date.now();
+    this.svc.getLog().add('PERF buildFlatItems cache MISS, rebuilding...');
     const filtered = this.getFilteredDisplayGroups();
     const map = new Map<string, DisplayGroup[]>();
     let noDate: DisplayGroup[] = [];
@@ -239,21 +203,56 @@ export struct GalleryPage {
         items.push(FlatItem.row(row));
       }
     }
+    this._flatItemsCache = items;
+    this._flatCachePhotosVer = this.svc.photosVersion;
+    this._flatCacheMode = this.displayMode;
+    this._flatCacheFilter = this.filterValue;
+    this._flatCacheScale = this.galleryScale;
+    this.svc.getLog().add(`PERF buildFlatItems done in ${Date.now() - t0}ms (${items.length} items)`);
     return items;
   }
 
+  private _filterOptsCache: FilterOption[] | null = null;
+  private _filterOptsCachePhotosVer: number = -1;
+  private _filterOptsCacheMode: string = '';
+
   private buildFilterOptions(): FilterOption[] {
+    if (this._filterOptsCache !== null &&
+        this._filterOptsCachePhotosVer === this.svc.photosVersion &&
+        this._filterOptsCacheMode === this.displayMode) {
+      return this._filterOptsCache;
+    }
     const opts: FilterOption[] = [{ label: '全部', value: '' }];
-    if (this.displayMode === 'content_first') return opts;
+    if (this.displayMode === 'content_first') {
+      this._filterOptsCache = opts;
+      this._filterOptsCachePhotosVer = this.svc.photosVersion;
+      this._filterOptsCacheMode = this.displayMode;
+      return opts;
+    }
     const seen = new Set<string>();
-    for (const p of this.photos) {
+    for (const p of this.svc.photos) {
       const ext = getExt(p.filename);
       if (ext !== '' && !seen.has(ext)) {
         seen.add(ext);
         opts.push({ label: ext, value: ext });
       }
     }
+    this._filterOptsCache = opts;
+    this._filterOptsCachePhotosVer = this.svc.photosVersion;
+    this._filterOptsCacheMode = this.displayMode;
     return opts;
+  }
+
+  private getFilteredIndex(handle: number): number {
+    const filtered = this.getFilteredDisplayGroups();
+    if (this._filteredIndexMapRef !== filtered) {
+      this._filteredIndexMap.clear();
+      for (let i = 0; i < filtered.length; i++) {
+        this._filteredIndexMap.set(filtered[i].displayPhoto.handle, i);
+      }
+      this._filteredIndexMapRef = filtered;
+    }
+    return this._filteredIndexMap.get(handle) ?? 0;
   }
 
   private getSelectableGroups(): DisplayGroup[] {
@@ -297,12 +296,94 @@ export struct GalleryPage {
     this.selectedHandles = new Set(this.selectedHandles);
   }
 
+  @Builder
+  PhotoCell(cellRi: RepeatItem<DisplayGroup | null>) {
+    if (cellRi.item !== null) {
+      Stack() {
+        if (this.hasThumb(cellRi.item!.displayPhoto.handle)) {
+          Image(this.svc.thumbnailPixelMapMap.get(cellRi.item!.displayPhoto.handle)!)
+            .objectFit(ImageFit.Cover)
+            .width('100%').height('100%')
+        } else {
+          Column() { Text('📷').fontSize(20) }
+          .width('100%').height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor($r('app.color.thumbnail_placeholder'))
+        }
+        if (this.formatTime(cellRi.item!.displayPhoto.captureDate ?? '')) {
+          Text(this.formatTime(cellRi.item!.displayPhoto.captureDate ?? ''))
+            .fontSize(8).fontColor($r('app.color.text_on_dark'))
+            .padding({ left: 3, right: 3, top: 1, bottom: 1 })
+            .backgroundColor('rgba(0,0,0,0.5)').borderRadius(3)
+            .position({ x: 0, y: '100%' }).markAnchor({ x: 0, y: '100%' })
+            .margin({ left: 3, bottom: 3 })
+        }
+        if (this.selectMode && !this.isDownloaded(cellRi.item!.displayPhoto)) {
+          Checkbox()
+            .select(this.selectedHandles.has(cellRi.item!.displayPhoto.handle))
+            .width(18).height(18)
+            .position({ x: '100%', y: 0 }).markAnchor({ x: '100%', y: 0 })
+            .margin({ top: 3, right: 3 })
+            .hitTestBehavior(HitTestMode.None)
+        }
+        if (this.isDownloaded(cellRi.item!.displayPhoto)) {
+          Circle({ width: 6, height: 6 })
+            .fill('#4CAF50')
+            .position({ x: '100%', y: 0 }).markAnchor({ x: '100%', y: 0 })
+            .margin({ top: 4, right: 4 })
+            .hitTestBehavior(HitTestMode.None)
+        }
+      }
+      .layoutWeight(1)
+      .aspectRatio(1)
+      .borderRadius(4)
+      .border({
+        width: this.isDownloaded(cellRi.item!.displayPhoto) ? 2 : 0,
+        color: '#4CAF50', radius: 4
+      })
+      .clip(true)
+      .parallelGesture(
+        GestureGroup(GestureMode.Exclusive,
+          LongPressGesture({ repeat: false, duration: 500 })
+            .onAction(() => {
+              if (this.isDownloaded(cellRi.item!.displayPhoto)) return;
+              if (!this.selectMode) {
+                this.selectMode = true;
+                this.selectedHandles.add(cellRi.item!.displayPhoto.handle);
+                this.selectedHandles = new Set(this.selectedHandles);
+              }
+            }),
+          TapGesture()
+            .onAction(() => {
+              if (this.selectMode) {
+                if (this.isDownloaded(cellRi.item!.displayPhoto)) return;
+                if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
+                  this.selectedHandles.delete(cellRi.item!.displayPhoto.handle);
+                } else {
+                  this.selectedHandles.add(cellRi.item!.displayPhoto.handle);
+                }
+                this.selectedHandles = new Set(this.selectedHandles);
+              } else {
+                const filtered = this.getFilteredDisplayGroups();
+                this.onThumbClick(filtered, this.getFilteredIndex(cellRi.item!.displayPhoto.handle));
+              }
+            })
+        )
+      )
+    } else {
+      Stack()
+        .layoutWeight(1)
+        .aspectRatio(1)
+        .backgroundColor(Color.Transparent)
+    }
+  }
+
   build() {
     Column() {
       ConnectionStatusBar({
-        connected: this.connected, cameraName: this.cameraName,
-        photoCount: this.photoCount, statusText: this.statusText,
-        compact: true, scanProgress: this.scanProgress, scanTotal: this.scanTotal
+        connected: this.svc.connected, cameraName: this.svc.cameraName,
+        photoCount: this.svc.photoCount, statusText: this.svc.statusText,
+        compact: true, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal
       }).margin({ top: 12, bottom: 4 })
 
       if (this.displayMode === 'file_first') {
@@ -332,7 +413,7 @@ export struct GalleryPage {
         .padding({ left: 12, right: 12, top: 6, bottom: 6 })
       }
 
-      if (this.photos.length === 0) {
+      if (this.svc.photos.length === 0) {
         Column() {
           Text('📷').fontSize(48).margin({ bottom: 12 })
           Text('连接相机以浏览照片')
@@ -368,47 +449,7 @@ export struct GalleryPage {
                     Row({ space: this.itemGapPx() }) {
                       Repeat<DisplayGroup | null>(ri.item.rowPhotos)
                         .each((cellRi: RepeatItem<DisplayGroup | null>) => {
-                          if (cellRi.item !== null) {
-                            PhotoCell({
-                              dg: cellRi.item,
-                              hasThumb: this.hasThumb(cellRi.item.displayPhoto.handle),
-                              selectMode: this.selectMode,
-                              isSelected: this.selectedHandles.has(cellRi.item.displayPhoto.handle),
-                              isDownloaded: this.isDownloaded(cellRi.item.displayPhoto),
-                              timeText: this.formatTime(cellRi.item.displayPhoto.captureDate ?? ''),
-                              onTap: () => {
-                                if (this.selectMode) {
-                                  if (this.isDownloaded(cellRi.item!.displayPhoto)) return;
-                                  if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
-                                    this.selectedHandles.delete(cellRi.item!.displayPhoto.handle);
-                                  } else {
-                                    this.selectedHandles.add(cellRi.item!.displayPhoto.handle);
-                                  }
-                                  this.selectedHandles = new Set(this.selectedHandles);
-                                } else {
-                                  const filtered = this.getFilteredDisplayGroups();
-                                  let idx = 0;
-                                  for (let i = 0; i < filtered.length; i++) {
-                                    if (filtered[i].displayPhoto.handle === cellRi.item!.displayPhoto.handle) { idx = i; break; }
-                                  }
-                                  this.onThumbClick(filtered, idx);
-                                }
-                              },
-                              onLongPress: () => {
-                                if (this.isDownloaded(cellRi.item!.displayPhoto)) return;
-                                if (!this.selectMode) {
-                                  this.selectMode = true;
-                                  this.selectedHandles.add(cellRi.item!.displayPhoto.handle);
-                                  this.selectedHandles = new Set(this.selectedHandles);
-                                }
-                              }
-                            })
-                          } else {
-                            Stack()
-                              .layoutWeight(1)
-                              .aspectRatio(1)
-                              .backgroundColor(Color.Transparent)
-                          }
+                          this.PhotoCell(cellRi)
                         })
                         .key((dg: DisplayGroup | null, idx: number) => {
                           if (dg !== null) return dg.displayPhoto.handle.toString();

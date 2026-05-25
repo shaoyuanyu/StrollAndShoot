@@ -15,4 +15,5 @@
 /deploy.sh
 /.docs
 /libgphoto*
+/PicturePreview
 /.playwright*

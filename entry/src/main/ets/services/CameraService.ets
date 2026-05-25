@@ -13,22 +13,24 @@ import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } fro
 const DOMAIN = 0x0000;
 const TAG = 'CameraService';
 
+@ObservedV2
 export class CameraService {
   private static instance: CameraService;
   private session: PtpSession = new PtpSession();
   private log: AppLog = new AppLog();
 
   // State
-  statusText: string = '就绪';
-  cameraName: string = '';
-  photoCount: number = 0;
-  photos: PhotoEntry[] = [];
-  scanning: boolean = false;
-  connected: boolean = false;
+  @Trace statusText: string = '就绪';
+  @Trace cameraName: string = '';
+  @Trace photoCount: number = 0;
+  @Trace photos: PhotoEntry[] = [];
+  @Trace scanning: boolean = false;
+  @Trace connected: boolean = false;
 
   // Thumbnail cache
   thumbnailPixelMapMap: Map<number, image.PixelMap> = new Map();
   thumbnailLoadedSet: Set<number> = new Set();
+  @Trace thumbnailVersion: number = 0;
 
   // Full-resolution compressed cache for preloading
   private compressedCache: Map<number, Uint8Array> = new Map();
@@ -41,8 +43,8 @@ export class CameraService {
   private preloading: boolean = false;
 
   // Scan progress
-  scanProgress: number = 0;
-  scanTotal: number = 0;
+  @Trace scanProgress: number = 0;
+  @Trace scanTotal: number = 0;
 
   // Format filter support detection (cached across directory levels)
   private formatFilterWorks: boolean | null = null;
@@ -53,8 +55,9 @@ export class CameraService {
   private downloadAborted: boolean = false;
   private registryLoaded: boolean = false;
 
-  // Change callback
-  onChange: () => void = () => {};
+  // Change tracking
+  @Trace registryVersion: number = 0;
+  @Trace photosVersion: number = 0;
 
   static getInstance(): CameraService {
     if (!CameraService.instance) {
@@ -98,6 +101,8 @@ export class CameraService {
     return false;
   }
 
+  @Trace downloadedCount: number = 0;
+
   getDownloadedKeys(): string[] {
     const keys: string[] = [];
     for (const p of this.photos) {
@@ -106,6 +111,7 @@ export class CameraService {
         keys.push(k);
       }
     }
+    this.downloadedCount = keys.length;
     return keys;
   }
 
@@ -406,6 +412,7 @@ export class CameraService {
         this.downloadRegistry.set(k, obj[k]);
       }
       this.log.add(`加载下载记录: ${this.downloadRegistry.size} 条`);
+    this.registryVersion++;
     } catch (_e) {
       // File doesn't exist yet — registry stays empty
     }
@@ -455,14 +462,9 @@ export class CameraService {
         fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
       await fileIo.write(f.fd, text);
       await fileIo.close(f);
+    this.registryVersion++;
     } catch (err) {
       this.log.add(`保存下载记录失败: ${JSON.stringify(err)}`);
-    }
-  }
-
-  private notify(): void {
-    if (this.onChange) {
-      this.onChange();
     }
   }
 
@@ -470,10 +472,9 @@ export class CameraService {
     this.scanning = true;
     this.log.clear();
     this.log.add('=== 开始扫描 ===');
-    this.notify();
 
     this.statusText = '正在搜索USB相机...';
-    this.notify();
+
 
     try {
       const cameras = PtpSession.findCameras();
@@ -482,7 +483,7 @@ export class CameraService {
         this.connected = false;
         this.cameraName = '';
         this.scanning = false;
-        this.notify();
+
         return;
       }
 
@@ -497,7 +498,7 @@ export class CameraService {
         this.thumbnailLoadedSet.clear();
         this.clearFullCache();
         this.statusText = '已连接';
-        this.notify();
+
       } else {
         // Different camera or first connect
         if (this.connected) {
@@ -505,14 +506,14 @@ export class CameraService {
         }
 
         this.statusText = `发现相机: ${cameras[0].productName}`;
-        this.notify();
+    
 
         const ok = await this.session.connect(cameras[0]);
         if (!ok) {
           this.statusText = '连接相机失败';
           this.connected = false;
           this.scanning = false;
-          this.notify();
+      
           return;
         }
 
@@ -520,7 +521,7 @@ export class CameraService {
                           cameras[0].name;
         this.statusText = '已连接';
         this.connected = true;
-        this.notify();
+
       }
 
       await this.loadPhotosAndThumbnails();
@@ -533,7 +534,7 @@ export class CameraService {
       this.connected = false;
     } finally {
       this.scanning = false;
-      this.notify();
+
     }
   }
 
@@ -616,7 +617,7 @@ export class CameraService {
     this.photoCount = 0;
     this.scanProgress = 0;
     this.scanTotal = 0;
-    this.notify();
+
 
     try {
       const storageIDs = await this.session.getStorageIDs();
@@ -626,29 +627,31 @@ export class CameraService {
         this.photoCount = 0;
         this.photos = [];
         this.statusText = '已连接 (无存储设备)';
-        this.notify();
+    
         return;
       }
 
       // ---- Phase 1: traverse directories (2 getObjectHandles per level) ----
       this.statusText = '正在遍历目录...';
       this.formatFilterWorks = null; // re-detect for this connection
-      this.notify();
+  
 
-      const handles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0,
+      const allHandles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0,
         (count: number) => {
           this.photoCount += count;
-          this.notify();
+      
         });
+      // TEST: only load first 100 photos
+      const handles = allHandles.slice(0, 100);
 
-      hilog.info(DOMAIN, TAG, `ObjectHandles total: ${handles.length}`);
+      hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}, limited to: ${handles.length}`);
 
       // ---- Phase 2: getObjectInfo + getThumb in a single pass ----
       this.log.add(`开始加载 ${handles.length} 张照片...`);
       this.scanProgress = 0;
       this.scanTotal = handles.length;
       this.statusText = '正在加载照片...';
-      this.notify();
+  
 
       const decodeJobs: Promise<void>[] = [];
       const photoList: PhotoEntry[] = [];
@@ -678,14 +681,13 @@ export class CameraService {
         }
 
         this.scanProgress = i + 1;
-        if ((i + 1) % 3 === 0 || i === handles.length - 1) {
-          this.notify();
-        }
       }
 
       this.photos = photoList;
+      this.photosVersion++;
 
       await Promise.all(decodeJobs);
+      this.thumbnailVersion++;
       this.log.add('缩略图加载完成');
 
       this.statusText = `已连接 - ${this.photoCount} 张照片`;
@@ -695,7 +697,7 @@ export class CameraService {
     } finally {
       this.scanProgress = 0;
       this.scanTotal = 0;
-      this.notify();
+  
     }
   }
 
@@ -705,6 +707,7 @@ export class CameraService {
       const data = await this.session.getThumb(handle);
       if (data && data.length > 0) {
         await this.decodeThumbnail(handle, data);
+        this.thumbnailVersion++;
       }
     } catch (err) {
       this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
@@ -892,7 +895,6 @@ export class CameraService {
     this.clearFullCache();
     this.statusText = '已断开连接';
     this.log.add('已断开连接');
-    this.notify();
   }
 
   formatSize(bytes: number): string {
