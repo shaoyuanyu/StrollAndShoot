@@ -58,6 +58,7 @@ export struct GalleryPage {
   // buildFlatItems cache (version-based, avoids V2 @Local reference instability)
   private _flatItemsCache: FlatItem[] | null = null;
   private _flatCachePhotosVer: number = -1;
+  private _flatCacheThumbVer: number = -1;
   private _flatCacheMode: string = '';
   private _flatCacheFilter: string = '';
   private _flatCacheScale: number = -1;
@@ -155,6 +156,7 @@ export struct GalleryPage {
   private buildFlatItems(): FlatItem[] {
     if (this._flatItemsCache !== null &&
         this._flatCachePhotosVer === this.svc.photosVersion &&
+        this._flatCacheThumbVer === this.svc.thumbnailVersion &&
         this._flatCacheMode === this.displayMode &&
         this._flatCacheFilter === this.filterValue &&
         this._flatCacheScale === this.galleryScale) {
@@ -205,6 +207,7 @@ export struct GalleryPage {
     }
     this._flatItemsCache = items;
     this._flatCachePhotosVer = this.svc.photosVersion;
+    this._flatCacheThumbVer = this.svc.thumbnailVersion;
     this._flatCacheMode = this.displayMode;
     this._flatCacheFilter = this.filterValue;
     this._flatCacheScale = this.galleryScale;

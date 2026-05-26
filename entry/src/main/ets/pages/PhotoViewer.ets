@@ -1,6 +1,7 @@
 import { router } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { display } from '@kit.ArkUI';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
 
@@ -37,17 +38,37 @@ struct ZoomableImage {
   @Monitor('pageKey')
   onPageChange(): void {
     animateTo({ duration: 120, curve: Curve.EaseOut }, () => { this.reset(); });
+    this.updateImgCache();
   }
 
-  aboutToAppear(): void { this.updateImgCache(); }
+  @Monitor('photoW')
+  onPhotoWChange(): void {
+    this.updateImgCache();
+  }
+
+  aboutToAppear(): void {
+    this.initContainerDims();
+    this.updateImgCache();
+  }
+
+  private initContainerDims(): void {
+    try {
+      const d = display.getDefaultDisplaySync();
+      if (d) {
+        this.compW = d.width;
+        this.compH = d.height;
+        hilog.info(0x0001, 'ZoomClamp', 'display=%{public}dx%{public}d', d.width, d.height);
+      }
+    } catch (_e) { /* fallback to onAreaChange */ }
+  }
 
   private updateImgCache(): void {
-    const pw = this.photoW > 0 ? this.photoW : (this.compW > 0 ? this.compW : 360);
-    const ph = this.photoH > 0 ? this.photoH : (this.compH > 0 ? this.compH : 360);
-    const s = Math.min(this.compW > 0 ? this.compW / pw : 1,
-      this.compH > 0 ? this.compH / ph : 1);
-    this.imgW = pw * s;
-    this.imgH = ph * s;
+    const s = Math.min(this.compW > 0 ? this.compW / this.photoW : 1,
+      this.compH > 0 ? this.compH / this.photoH : 1);
+    this.imgW = this.photoW * s;
+    this.imgH = this.photoH * s;
+    hilog.info(0x0001, 'ZoomClamp', 'cache photo=%{public}dx%{public}d comp=%{public}dx%{public}d img=%{public}dx%{public}d s=%{public}f',
+      this.photoW, this.photoH, this.compW, this.compH, this.imgW, this.imgH, s);
   }
 
   private reset(): void {
@@ -73,18 +94,20 @@ struct ZoomableImage {
   private clampAndCheckEdge(): void {
     const iw = this.imgW * this.scaleVal;
     const ih = this.imgH * this.scaleVal;
+    const mx = iw > this.compW ? (iw - this.compW) / 2 : 0;
+    const my = ih > this.compH ? (ih - this.compH) / 2 : 0;
     if (iw > this.compW) {
-      const mx = (iw - this.compW) / 2;
       this.offX = Math.max(-mx, Math.min(mx, this.offX));
     } else {
       this.offX = 0;
     }
     if (ih > this.compH) {
-      const my = (ih - this.compH) / 2;
       this.offY = Math.max(-my, Math.min(my, this.offY));
     } else {
       this.offY = 0;
     }
+    hilog.info(0x0001, 'ZoomClamp', 'clamp scale=%{public}f iw=%{public}d ih=%{public}d mx=%{public}d my=%{public}d off=%{public}d,%{public}d',
+      this.scaleVal, iw, ih, mx, my, this.offX, this.offY);
   }
 
   private onPinchStart(e: GestureEvent): void {
@@ -658,8 +681,9 @@ struct PhotoViewer {
 
     this.loadingHandle = handle;
     try {
-      const pixelMap = await this.svc.loadFullPhoto(handle);
-      if (pixelMap !== null) {
+      const result = await this.svc.loadFullPhoto(handle);
+      if (result !== null) {
+        const pixelMap = result.pixelMap;
         this.fullResMap.set(handle, pixelMap);
         // Only trigger preloads if this photo is still the current one
         if (handle === this.currentHandle()) {
@@ -776,9 +800,9 @@ struct PhotoViewer {
       }
 
       try {
-        const pixelMap = await this.svc.loadFullPhoto(task.handle);
-        if (pixelMap !== null) {
-          this.fullResMap.set(task.handle, pixelMap);
+        const result = await this.svc.loadFullPhoto(task.handle);
+        if (result !== null) {
+          this.fullResMap.set(task.handle, result.pixelMap);
         }
       } catch (_e) {
         // Silent
@@ -943,13 +967,23 @@ struct PhotoViewer {
     return null;
   }
 
+  private orientedW(ri: RepeatItem<PhotoEntry>): number {
+    const s = this.svc.orientedDisplaySizes.get(ri.item.handle);
+    return s ? s.w : (ri.item.imagePixWidth ?? 1);
+  }
+
+  private orientedH(ri: RepeatItem<PhotoEntry>): number {
+    const s = this.svc.orientedDisplaySizes.get(ri.item.handle);
+    return s ? s.h : (ri.item.imagePixHeight ?? 1);
+  }
+
   @Builder
   buildMainImage(ri: RepeatItem<PhotoEntry>) {
     MainImageView({
       pixelMap: this.fullResMap.has(ri.item.handle)
         ? this.fullResMap.get(ri.item.handle)! : this.getThumbPixelMap(ri.index),
-      photoW: ri.item.imagePixWidth ?? 1,
-      photoH: ri.item.imagePixHeight ?? 1,
+      photoW: this.orientedW(ri),
+      photoH: this.orientedH(ri),
       pageKey: ri.index,
       isLoading: this.loadingHandle === ri.item.handle,
       hasThumb: this.svc.thumbnailPixelMapMap.has(ri.item.handle),

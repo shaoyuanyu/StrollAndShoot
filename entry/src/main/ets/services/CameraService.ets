@@ -13,6 +13,39 @@ import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } fro
 const DOMAIN = 0x0000;
 const TAG = 'CameraService';
 
+// ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
+
+class OrientationTransform {
+  rotate: number = 0;
+  flipH: boolean = false;
+  flipV: boolean = false;
+  constructor(rotate: number = 0, flipH: boolean = false, flipV: boolean = false) {
+    this.rotate = rotate;
+    this.flipH = flipH;
+    this.flipV = flipV;
+  }
+}
+
+class OrientedSize {
+  w: number = 0;
+  h: number = 0;
+  constructor(w: number = 0, h: number = 0) {
+    this.w = w;
+    this.h = h;
+  }
+}
+
+class DecodedPhotoResult {
+  pixelMap: image.PixelMap;
+  displayW: number;
+  displayH: number;
+  constructor(pixelMap: image.PixelMap, displayW: number, displayH: number) {
+    this.pixelMap = pixelMap;
+    this.displayW = displayW;
+    this.displayH = displayH;
+  }
+}
+
 @ObservedV2
 export class CameraService {
   private static instance: CameraService;
@@ -32,6 +65,12 @@ export class CameraService {
   thumbnailLoadedSet: Set<number> = new Set();
   @Trace thumbnailVersion: number = 0;
 
+  // Raw thumbnail data cache (needed to re-decode with orientation correction)
+  private thumbnailRawCache: Map<number, Uint8Array> = new Map();
+
+  // Orientation-corrected display dimensions (populated during thumbnail/full decode)
+  orientedDisplaySizes: Map<number, OrientedSize> = new Map();
+
   // Full-resolution compressed cache for preloading
   private compressedCache: Map<number, Uint8Array> = new Map();
   private preloadingSet: Set<number> = new Set();
@@ -48,6 +87,70 @@ export class CameraService {
 
   // Format filter support detection (cached across directory levels)
   private formatFilterWorks: boolean | null = null;
+
+  // Orientation cache (EXIF Orientation → rotate/flipH/flipV)
+  private orientationMap: Map<number, OrientationTransform> = new Map();
+
+  /**
+   * Map EXIF Orientation value (1–8) to DecodingOptions rotation + pixelMap flip.
+   * Reference: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/image-rotate-faq
+   *
+   * HarmonyOS getImageProperty(PropertyKey.ORIENTATION) returns the string name
+   * (e.g. "Top-left"), not the numeric string. Both formats are handled here for safety.
+   */
+  private static mapExifOrientation(orientation: string): OrientationTransform {
+    switch (orientation) {
+      // String names (HarmonyOS getImageProperty return value)
+      case 'Top-left':     return new OrientationTransform(0, false, false);
+      case 'Top-right':    return new OrientationTransform(0, true, false);
+      case 'Bottom-right': return new OrientationTransform(180, false, false);
+      case 'Bottom-left':  return new OrientationTransform(0, false, true);
+      case 'Left-top':     return new OrientationTransform(90, true, false);
+      case 'Right-top':    return new OrientationTransform(90, false, false);
+      case 'Right-bottom': return new OrientationTransform(270, true, false);
+      case 'Left-bottom':  return new OrientationTransform(270, false, false);
+      // Numeric strings (fallback for other implementations)
+      case '1': return new OrientationTransform(0, false, false);
+      case '2': return new OrientationTransform(0, true, false);
+      case '3': return new OrientationTransform(180, false, false);
+      case '4': return new OrientationTransform(0, false, true);
+      case '5': return new OrientationTransform(90, true, false);
+      case '6': return new OrientationTransform(90, false, false);
+      case '7': return new OrientationTransform(270, true, false);
+      case '8': return new OrientationTransform(270, false, false);
+      // Unknown / unsupported → no transform
+      default:
+        return new OrientationTransform(0, false, false);
+    }
+  }
+
+  /**
+   * Read EXIF Orientation from raw image data and return the corresponding transform.
+   * Caches result by handle so subsequent decodes skip re-parsing.
+   */
+  private async getOrientation(handle: number, data: ArrayBuffer): Promise<OrientationTransform> {
+    if (this.orientationMap.has(handle)) {
+      return this.orientationMap.get(handle)!;
+    }
+    try {
+      const imgSrc = image.createImageSource(data);
+      const orientation = await imgSrc.getImageProperty(image.PropertyKey.ORIENTATION);
+      imgSrc.release();
+      hilog.info(DOMAIN, TAG, `[ORIENT] handle=0x%{public}s raw="%{public}s"`, handle.toString(16), orientation);
+      const result = CameraService.mapExifOrientation(orientation);
+      hilog.info(DOMAIN, TAG, `[ORIENT] handle=0x%{public}s → rotate=%{public}d flipH=%{public}s flipV=%{public}s`,
+        handle.toString(16), result.rotate, result.flipH.toString(), result.flipV.toString());
+      this.orientationMap.set(handle, result);
+      return result;
+    } catch (err) {
+      // No EXIF / unsupported format → treat as normal
+      hilog.error(DOMAIN, TAG, `[ORIENT] getOrientation FAIL handle=0x%{public}s err=%{public}s`,
+        handle.toString(16), JSON.stringify(err));
+      const result = new OrientationTransform(0, false, false);
+      this.orientationMap.set(handle, result);
+      return result;
+    }
+  }
 
   // Download registry — persisted across sessions
   private downloadRegistry: Map<string, DownloadRecord> = new Map();
@@ -496,6 +599,9 @@ export class CameraService {
         this.photoCount = 0;
         this.thumbnailPixelMapMap.clear();
         this.thumbnailLoadedSet.clear();
+        this.thumbnailRawCache.clear();
+        this.orientationMap.clear();
+        this.orientedDisplaySizes.clear();
         this.clearFullCache();
         this.statusText = '已连接';
 
@@ -706,6 +812,8 @@ export class CameraService {
     try {
       const data = await this.session.getThumb(handle);
       if (data && data.length > 0) {
+        // Cache raw data for potential re-decode with orientation correction
+        this.thumbnailRawCache.set(handle, data);
         await this.decodeThumbnail(handle, data);
         this.thumbnailVersion++;
       }
@@ -716,17 +824,56 @@ export class CameraService {
 
   private async decodeThumbnail(handle: number, data: Uint8Array): Promise<void> {
     try {
+      // PTP thumbnail JPEGs rarely contain EXIF — skip orientation reading
+      // at initial decode. Orientation will be applied later (if available via
+      // redecodeThumbnailWithOrientation after loadFullPhoto caches it).
       const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
       const pixelMap = await imageSource.createPixelMap();
       this.thumbnailPixelMapMap.set(handle, pixelMap);
       this.thumbnailLoadedSet.add(handle);
+      // Cache raw pixelMap dimensions (pre-orientation)
+      const info = await pixelMap.getImageInfo();
+      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
       imageSource.release();
     } catch (err) {
       this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
     }
   }
 
-  async loadFullPhoto(handle: number): Promise<image.PixelMap | null> {
+  /**
+   * Re-decode a thumbnail with known orientation. Called after loadFullPhoto
+   * successfully reads EXIF Orientation and caches the transform.
+   */
+  private async redecodeThumbnailWithOrientation(handle: number, orient: OrientationTransform): Promise<void> {
+    if (!this.thumbnailRawCache.has(handle)) return;
+    const raw = this.thumbnailRawCache.get(handle)!;
+    const needsFlip = orient.flipH || orient.flipV;
+    try {
+      const imageSource = image.createImageSource(raw.buffer as ArrayBuffer);
+      const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || orient.rotate !== 0 });
+      if (orient.rotate !== 0) {
+        await pixelMap.rotate(orient.rotate);
+      }
+      if (needsFlip) {
+        pixelMap.flip(orient.flipH, orient.flipV);
+      }
+      // Release old pixelMap
+      const old = this.thumbnailPixelMapMap.get(handle);
+      if (old) {
+        try { old.release(); } catch (_) { /* ignore */ }
+      }
+      this.thumbnailPixelMapMap.set(handle, pixelMap);
+      // pixelMap.rotate() swapped width/height — read actual dimensions.
+      const info = await pixelMap.getImageInfo();
+      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
+      imageSource.release();
+      this.thumbnailVersion++;
+    } catch (_err) {
+      // Re-decode failed — keep the original (unrotated) thumbnail
+    }
+  }
+
+  async loadFullPhoto(handle: number): Promise<DecodedPhotoResult | null> {
     try {
       const t0 = Date.now();
       let data: Uint8Array | null = null;
@@ -769,16 +916,82 @@ export class CameraService {
         this.addToCache(handle, data);
       }
 
+      // Decode with orientation correction
       const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
-      const pixelMap = await imageSource.createPixelMap();
+      const orient = await this.getPhotoOrientation(handle, data.buffer as ArrayBuffer);
+      // pixelMap.rotate() swaps BOTH pixel data AND width/height, so
+      // ImageFit.Contain will use the correct post-rotation aspect ratio.
+      const needsFlip = orient.flipH || orient.flipV;
+      const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || orient.rotate !== 0 });
+      if (orient.rotate !== 0) {
+        await pixelMap.rotate(orient.rotate);
+      }
+      if (needsFlip) {
+        pixelMap.flip(orient.flipH, orient.flipV);
+      }
       imageSource.release();
       const t2 = Date.now();
       const tag = hit ? '缓存命中' : '下载完成';
       this.log.add(`${tag}: ${((t2 - t0) / 1000).toFixed(1)}s`);
-      return pixelMap;
+
+      // pixelMap.rotate() swapped width/height — read actual dimensions.
+      const info = await pixelMap.getImageInfo();
+      const displayW = info.size.width;
+      const displayH = info.size.height;
+      this.orientedDisplaySizes.set(handle, new OrientedSize(displayW, displayH));
+
+      // Update thumbnails with correct orientation now that we know it
+      this.redecodeThumbnailWithOrientation(handle, orient);
+
+      return new DecodedPhotoResult(pixelMap, displayW, displayH);
     } catch (err) {
       this.log.add(`全尺寸加载失败: handle=0x${handle.toString(16)}`);
       return null;
+    }
+  }
+
+  /**
+   * Read EXIF orientation from full photo data. Unlike thumbnails, full-resolution
+   * camera files (JPEG/RAW) contain EXIF metadata with the Orientation tag.
+   * Falls back to cached orientation (from a prior thumbnail decode) if available.
+   */
+  private async getPhotoOrientation(handle: number, data: ArrayBuffer): Promise<OrientationTransform> {
+    // Check cache first (might have been populated by a prior full decode)
+    if (this.orientationMap.has(handle)) {
+      const cached = this.orientationMap.get(handle)!;
+      if (cached.rotate !== 0 || cached.flipH || cached.flipV) {
+        return cached;
+      }
+    }
+    try {
+      const imgSrc = image.createImageSource(data);
+      const orientation = await imgSrc.getImageProperty(image.PropertyKey.ORIENTATION);
+      imgSrc.release();
+      hilog.info(DOMAIN, TAG, `[ORIENT] full res handle=0x%{public}s raw="%{public}s"`,
+        handle.toString(16), orientation);
+      const result = CameraService.mapExifOrientation(orientation);
+      this.orientationMap.set(handle, result);
+      return result;
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `[ORIENT] full res FAIL handle=0x%{public}s err=%{public}s`,
+        handle.toString(16), JSON.stringify(err));
+      // Fallback: use cached value or default
+      const result = new OrientationTransform(0, false, false);
+      this.orientationMap.set(handle, result);
+      return result;
+    }
+  }
+
+  /**
+   * Read the actual pixelMap dimensions and cache them (post-rotation/flip).
+   * For 90°/270° rotation the display aspect ratio is swapped vs PTP ObjectInfo.
+   */
+  private async cacheOrientedSize(handle: number, pixelMap: image.PixelMap, _orient: OrientationTransform): Promise<void> {
+    try {
+      const info = await pixelMap.getImageInfo();
+      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
+    } catch (_err) {
+      // Fallback: skip — ZoomableImage will use PTP ObjectInfo dimensions
     }
   }
 
@@ -892,6 +1105,9 @@ export class CameraService {
     this.photos = [];
     this.thumbnailPixelMapMap.clear();
     this.thumbnailLoadedSet.clear();
+    this.thumbnailRawCache.clear();
+    this.orientationMap.clear();
+    this.orientedDisplaySizes.clear();
     this.clearFullCache();
     this.statusText = '已断开连接';
     this.log.add('已断开连接');
