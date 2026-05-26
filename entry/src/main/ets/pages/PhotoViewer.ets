@@ -1,7 +1,11 @@
 import { router } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
+
+const TAG = 'PhotoViewer';
+const DOMAIN = 0x0001;
 
 // ---- ZoomableImage ----
 @ComponentV2
@@ -13,6 +17,7 @@ struct ZoomableImage {
   @Event onZoomChange: (zoomed: boolean) => void = () => {};
   @Event onEdgeChange: (atEdge: boolean) => void = () => {};
   @Event onGestureStart: () => void = () => {};
+  @Event onGestureEnd: () => void = () => {};
   @Local scaleVal: number = 1.0;
   @Local offX: number = 0;
   @Local offY: number = 0;
@@ -111,12 +116,14 @@ struct ZoomableImage {
       this.onZoomChange(false);
       this.onEdgeChange(false);
       animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
+      this.onGestureEnd();
       return;
     }
     this.lastScale = this.scaleVal;
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
     this.onZoomChange(true);
+    this.onGestureEnd();
   }
 
   private onPanStart(_e: GestureEvent): void {
@@ -147,6 +154,7 @@ struct ZoomableImage {
         this.onEdgeChange(atEdge);
       }
     }
+    this.onGestureEnd();
   }
 
   private onDblTap(e: GestureEvent): void {
@@ -181,6 +189,7 @@ struct ZoomableImage {
       this.lastOffX = this.offX;
       this.lastOffY = this.offY;
     });
+    this.onGestureEnd();
   }
 
   build() {
@@ -213,6 +222,62 @@ struct ZoomableImage {
   }
 }
 
+// ---- MainImageView (top-level @ComponentV2 for Repeat+virtualScroll recycling) ----
+@ComponentV2
+struct MainImageView {
+  @Param pixelMap: image.PixelMap | null = null;
+  @Param photoW: number = 1;
+  @Param photoH: number = 1;
+  @Param pageKey: number = 0;
+  @Param isLoading: boolean = false;
+  @Param hasThumb: boolean = false;
+  @Param filename: string = '';
+  @Event onZoomChange: (zoomed: boolean) => void = () => {};
+  @Event onGestureStart: () => void = () => {};
+  @Event onGestureEnd: () => void = () => {};
+  @Event onOverlayToggle: () => void = () => {};
+
+  build() {
+    Stack() {
+      if (this.hasThumb) {
+        ZoomableImage({
+          pixelMap: this.pixelMap,
+          photoW: this.photoW,
+          photoH: this.photoH,
+          pageKey: this.pageKey,
+          onZoomChange: this.onZoomChange,
+          onGestureStart: this.onGestureStart,
+          onGestureEnd: this.onGestureEnd
+        })
+      } else {
+        Column() {
+          Text(this.filename)
+            .fontSize(14).fontColor('#aaa')
+            .maxLines(2).textAlign(TextAlign.Center)
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('#222')
+        .onClick(() => { this.onOverlayToggle(); })
+      }
+
+      if (this.isLoading) {
+        Column() {
+          LoadingProgress()
+            .color(Color.White)
+            .width(48).height(48)
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('rgba(0,0,0,0.3)')
+        .hitTestBehavior(HitTestMode.None)
+      }
+    }
+    .width('100%').height('100%')
+    .onClick(() => { this.onOverlayToggle(); })
+  }
+}
+
 // ---- Constants (from SwiperSyncTestPage) ----
 const MAX_S = 1.3;
 const MIN_S = 1.0;
@@ -222,6 +287,12 @@ const SNAP_DURATION = 150;
 const INERTIA_THRESHOLD = 3000;
 const INERTIA_FACTOR = 150;
 const INERTIA_DURATION = 5000;
+
+// Preload queue item
+interface PreloadTask {
+  handle: number;
+  priority: number;
+}
 
 function buildDisplayIndices(total: number): number[] {
   const arr: number[] = [];
@@ -325,8 +396,18 @@ struct PhotoViewer {
   private preloadWindow: number = 3;
   private preloadedHandles: Set<number> = new Set();
 
+  // ---- Interaction-aware serial preload queue ----
+  private preloadQueue: PreloadTask[] = [];
+  private preloadActive: boolean = false;
+  private loadingPaused: boolean = false;
+  private pauseTimerId: number = -1;
+  private readonly RESUME_COOLDOWN_MS: number = 300;
+  private lastInteractionTs: number = 0;
+
   // Filtered photo list (from gallery's filter)
   @Local photoList: PhotoEntry[] = [];
+  // Stable cached copy of photos for Repeat data source (avoids reference changes)
+  @Local mainPhotos: PhotoEntry[] = [];
 
   private getPhotos(): PhotoEntry[] {
     return this.photoList.length > 0 ? this.photoList : this.svc.photos;
@@ -342,6 +423,8 @@ struct PhotoViewer {
       const handleSet = new Set(handles);
       this.photoList = this.svc.photos.filter(p => handleSet.has(p.handle));
     }
+    // Cache a stable reference for Repeat data source
+    this.mainPhotos = this.photoList.length > 0 ? this.photoList : this.svc.photos;
 
     this.rebuildDisplayArrays();
     let initialIndex = 0;
@@ -456,6 +539,7 @@ struct PhotoViewer {
   }
 
   private onMainAnimationEnd(index: number): void {
+    hilog.info(DOMAIN, TAG, `onMainAnimationEnd idx=${index} mainIdx=${this.mainIdx}`);
     if (this._isDragging) {
       this.thumbCtrl.stopFakeDrag();
       this._isDragging = false;
@@ -470,6 +554,7 @@ struct PhotoViewer {
   }
 
   private onMainChange(idx: number): void {
+    hilog.info(DOMAIN, TAG, `onMainChange idx=${idx} mainIdx=${this.mainIdx} total=${this.mainPhotos.length}`);
     this.mainIdx = idx;
     if (this._fromMain && !this._inertiaAnim) {
       this._fromMain = false;
@@ -537,8 +622,14 @@ struct PhotoViewer {
 
     const handle = this.currentHandle();
     if (handle < 0) return;
-    // Already loaded or loading
-    if (this.fullResMap.has(handle) || this.loadingHandle === handle) return;
+
+    // If already loaded, just ensure preload window is populated
+    if (this.fullResMap.has(handle)) {
+      this.preloadNeighbors();
+      return;
+    }
+    // Already loading
+    if (this.loadingHandle === handle) return;
 
     this.stableTimerId = setTimeout(() => {
       this.stableTimerId = -1;
@@ -570,53 +661,172 @@ struct PhotoViewer {
       const pixelMap = await this.svc.loadFullPhoto(handle);
       if (pixelMap !== null) {
         this.fullResMap.set(handle, pixelMap);
-        // Trigger preload of adjacent photos
-        this.preloadNeighbors();
+        // Only trigger preloads if this photo is still the current one
+        if (handle === this.currentHandle()) {
+          this.preloadNeighbors();
+          // Resume queue processing (may have been paused waiting for current)
+          if (!this.loadingPaused && !this.preloadActive) {
+            this.processPreloadQueue();
+          }
+        }
       }
     } catch (_e) {
       // Silently fail — thumbnail stays visible
     } finally {
       if (this.loadingHandle === handle) {
         this.loadingHandle = -1;
+        // If queue was waiting for current load to finish, resume now
+        if (!this.loadingPaused && this.preloadQueue.length > 0 && !this.preloadActive) {
+          setTimeout(() => { this.processPreloadQueue(); }, 50);
+        }
       }
     }
   }
 
   /**
-   * Preload adjacent photos within the sliding window (±preloadWindow).
-   * Uses a background queue to avoid blocking the current load.
+   * Enqueue adjacent photos for serial preloading, ordered by distance from current.
+   * Does NOT fire concurrent loads — processPreloadQueue() drains one at a time.
    */
   private preloadNeighbors(): void {
     const photos = this.getPhotos();
     const center = this.mainIdx;
     const window = this.preloadWindow;
-    // Collect handles to preload: nearby, not yet loaded, not already queued
-    const toPreload: number[] = [];
+
+    // Evict far-away full-res images (> 2× window)
+    this.evictDistantFullRes(center);
+
+    // Build priority queue: closer photos = lower priority number = loaded first
+    const newQueue: PreloadTask[] = [];
     for (let i = center - window; i <= center + window; i++) {
       if (i === center || i < 0 || i >= photos.length) continue;
       const h = photos[i].handle;
       if (!this.fullResMap.has(h) && !this.preloadedHandles.has(h)) {
-        toPreload.push(h);
+        const dist = Math.abs(i - center);
+        newQueue.push({ handle: h, priority: dist });
         this.preloadedHandles.add(h);
       }
     }
-    // Evict far-away full-res images (> 2× window)
-    this.evictDistantFullRes(center);
-    // Fire preloads asynchronously
-    for (const h of toPreload) {
-      this.preloadOne(h);
+    // Sort by priority (closer first), then replace existing queue
+    newQueue.sort((a, b) => a.priority - b.priority);
+
+    // Merge with existing queue: keep items not yet loaded, prepend new items
+    const existing = this.preloadQueue.filter(
+      q => !this.fullResMap.has(q.handle) && this.isInPreloadWindow(q.handle)
+    );
+    // Merge: existing items keep their position, new items inserted by priority
+    const merged = newQueue.concat(existing);
+    merged.sort((a, b) => a.priority - b.priority);
+    // Deduplicate by handle
+    const seen = new Set<number>();
+    this.preloadQueue = merged.filter(q => {
+      if (seen.has(q.handle)) return false;
+      seen.add(q.handle);
+      return true;
+    });
+
+    // Start draining the queue if not already running
+    if (!this.preloadActive && !this.loadingPaused) {
+      this.processPreloadQueue();
     }
   }
 
-  private async preloadOne(handle: number): Promise<void> {
-    try {
-      const pixelMap = await this.svc.loadFullPhoto(handle);
-      if (pixelMap !== null) {
-        this.fullResMap.set(handle, pixelMap);
+  /**
+   * Drain the preload queue one item at a time, yielding to the UI between each.
+   * Pauses automatically when loadingPaused is set (during user gestures).
+   */
+  private async processPreloadQueue(): Promise<void> {
+    if (this.preloadActive) return;
+    this.preloadActive = true;
+
+    while (this.preloadQueue.length > 0) {
+      // Check pause flag — if paused, stop and schedule resume
+      if (this.loadingPaused) {
+        this.preloadActive = false;
+        return;
       }
-    } catch (_e) {
-      // Silent
+
+      // Check if current photo needs loading (higher priority)
+      const curHandle = this.currentHandle();
+      if (curHandle >= 0 && !this.fullResMap.has(curHandle) && this.loadingHandle < 0) {
+        // Current photo not loaded yet — pause preload and load it first
+        this.preloadActive = false;
+        this.loadFullRes(curHandle);
+        return;
+      }
+
+      const task = this.preloadQueue.shift();
+      if (!task) break;
+
+      // Skip if already loaded or no longer in window
+      if (this.fullResMap.has(task.handle) || !this.isInPreloadWindow(task.handle)) {
+        this.preloadedHandles.delete(task.handle);
+        continue;
+      }
+
+      // Skip if current photo is loading (don't compete with it)
+      if (this.loadingHandle >= 0) {
+        // Put it back and wait
+        this.preloadQueue.unshift(task);
+        this.preloadActive = false;
+        // Retry after current load finishes
+        setTimeout(() => {
+          if (!this.loadingPaused) this.processPreloadQueue();
+        }, 200);
+        return;
+      }
+
+      try {
+        const pixelMap = await this.svc.loadFullPhoto(task.handle);
+        if (pixelMap !== null) {
+          this.fullResMap.set(task.handle, pixelMap);
+        }
+      } catch (_e) {
+        // Silent
+      }
+
+      // Yield to the UI thread before next preload
+      await new Promise<void>(r => setTimeout(r, 0));
     }
+
+    this.preloadActive = false;
+  }
+
+  /** Check if a handle is still within the current preload window. */
+  private isInPreloadWindow(handle: number): boolean {
+    const photos = this.getPhotos();
+    const center = this.mainIdx;
+    const window = this.preloadWindow;
+    for (let i = center - window; i <= center + window; i++) {
+      if (i < 0 || i >= photos.length) continue;
+      if (photos[i].handle === handle) return true;
+    }
+    return false;
+  }
+
+  /** Pause all preloading (called on gesture start). */
+  private pausePreloading(): void {
+    this.loadingPaused = true;
+    this.lastInteractionTs = Date.now();
+    if (this.pauseTimerId >= 0) {
+      clearTimeout(this.pauseTimerId);
+      this.pauseTimerId = -1;
+    }
+  }
+
+  /** Schedule resume of preloading after interaction cooldown. */
+  private scheduleResumePreloading(): void {
+    this.lastInteractionTs = Date.now();
+    if (this.pauseTimerId >= 0) {
+      clearTimeout(this.pauseTimerId);
+    }
+    this.pauseTimerId = setTimeout(() => {
+      this.pauseTimerId = -1;
+      this.loadingPaused = false;
+      // Resume preloading if queue has items
+      if (this.preloadQueue.length > 0 && !this.preloadActive) {
+        this.processPreloadQueue();
+      }
+    }, this.RESUME_COOLDOWN_MS);
   }
 
   /**
@@ -734,38 +944,20 @@ struct PhotoViewer {
   }
 
   @Builder
-  MainImageContent(photo: PhotoEntry, idx: number) {
-    Stack() {
-      // Zoomable image (pinch/pan/double-tap)
-      ZoomableImage({
-        pixelMap: this.fullResMap.has(photo.handle)
-          ? this.fullResMap.get(photo.handle)! : this.getThumbPixelMap(idx),
-        photoW: photo.imagePixWidth ?? 1,
-        photoH: photo.imagePixHeight ?? 1,
-        pageKey: idx,
-        onZoomChange: (zoomed: boolean) => {
-          this.isZoomed = zoomed;
-        }
-      })
-
-      // Loading overlay
-      if (this.loadingHandle === photo.handle) {
-        Column() {
-          LoadingProgress()
-            .color(Color.White)
-            .width(48).height(48)
-        }
-        .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor('rgba(0,0,0,0.3)')
-        .hitTestBehavior(HitTestMode.None)
-      }
-    }
-    .width('100%').height('100%')
-    .onClick(() => { this._overlayVisible = !this._overlayVisible; })
-    .onAreaChange((_o: Area, n: Area) => {
-      const w = n.width as number;
-      if (w > 0) { this._swiperWidth = w; }
+  buildMainImage(ri: RepeatItem<PhotoEntry>) {
+    MainImageView({
+      pixelMap: this.fullResMap.has(ri.item.handle)
+        ? this.fullResMap.get(ri.item.handle)! : this.getThumbPixelMap(ri.index),
+      photoW: ri.item.imagePixWidth ?? 1,
+      photoH: ri.item.imagePixHeight ?? 1,
+      pageKey: ri.index,
+      isLoading: this.loadingHandle === ri.item.handle,
+      hasThumb: this.svc.thumbnailPixelMapMap.has(ri.item.handle),
+      filename: ri.item.filename,
+      onZoomChange: (zoomed: boolean) => { this.isZoomed = zoomed; },
+      onGestureStart: () => { this.pausePreloading(); },
+      onGestureEnd: () => { this.scheduleResumePreloading(); },
+      onOverlayToggle: () => { this._overlayVisible = !this._overlayVisible; }
     })
   }
 
@@ -793,27 +985,19 @@ struct PhotoViewer {
       Stack() {
         // ===== Main Swiper =====
         Swiper(this.mainCtrl) {
-          Repeat<PhotoEntry>(this.getPhotos())
+          Repeat<PhotoEntry>(this.mainPhotos)
             .each((ri: RepeatItem<PhotoEntry>) => {
-              Stack() {
-                if (this.svc.thumbnailPixelMapMap.has(ri.item.handle)) {
-                  this.MainImageContent(ri.item, ri.index);
-                } else {
-                  Column() {
-                    Text(ri.item.filename)
-                      .fontSize(14).fontColor('#aaa')
-                      .maxLines(2).textAlign(TextAlign.Center)
-                  }
-                  .width('100%').height('100%')
-                  .justifyContent(FlexAlign.Center)
-                  .backgroundColor('#222')
-                  .onClick(() => { this._overlayVisible = !this._overlayVisible; })
-                }
+              Column() {
+                this.buildMainImage(ri);
               }
               .width('100%').height('100%')
+              .onAreaChange((_o: Area, n: Area) => {
+                const w = n.width as number;
+                if (w > 0) { this._swiperWidth = w; }
+              })
             })
             .key((_photo: PhotoEntry, idx: number) => idx.toString())
-            .virtualScroll({ totalCount: this._realTotal })
+            .virtualScroll({ totalCount: this.mainPhotos.length })
         }
         .index(this.mainIdx)
         .disableSwipe(this.isZoomed)
