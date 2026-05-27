@@ -1,9 +1,10 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
-import { util } from '@kit.ArkTS';
+import { util, taskpool } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
 import { PtpSession, setPtpLog } from '../pages/PtpHost';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -1081,73 +1082,40 @@ export class CameraService {
 
   private async decodeThumbnail(handle: number, data: Uint8Array): Promise<void> {
     try {
-      // Check if orientation was pre-loaded via GetPartialObject during scan.
-      // If so, apply rotate/flip in one pass so thumbnails display correctly
-      // immediately, without waiting for full photo load + re-decode.
       const orient = this.preloadedOrientations.get(handle);
-      const needsFlip = orient ? (orient.flipH || orient.flipV) : false;
-      const needsRotate = orient ? (orient.rotate !== 0) : false;
-
-      const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
-      const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
-      if (needsRotate) {
-        await pixelMap.rotate(orient!.rotate);
-      }
-      if (needsFlip) {
-        pixelMap.flip(orient!.flipH, orient!.flipV);
-      }
-
-      // Crop to pure content (remove only black bars, keep aspect ratio).
-      // Gallery/strip use objectFit(ImageFit.Cover) to fill square cells;
-      // the main viewer uses Contain to display the full content naturally.
-      const imgInfo = await pixelMap.getImageInfo();
-      const tw = imgInfo.size.width;
-      const th = imgInfo.size.height;
-
-      let cropW: number;
-      let cropH: number;
       const exifDim = this.exifOrigDims.get(handle);
-      if (exifDim) {
-        let origW = exifDim.w;
-        let origH = exifDim.h;
-        // Swap EXIF dimensions if orientation involves 90°/270° rotation
-        if (orient && (orient.rotate === 90 || orient.rotate === 270)) {
-          const tmp = origW;
-          origW = origH;
-          origH = tmp;
-        }
-        // Compute natural content size: original photo downscaled to fit
-        // within the thumbnail canvas (camera then padded to canvas size).
-        const scale = Math.min(tw / origW, th / origH);
-        cropW = Math.floor(origW * scale);
-        cropH = Math.floor(origH * scale);
-        const msg = `[CROP] handle=0x${handle.toString(16)} thumb=${tw}x${th} orig=${origW}x${origH} content=${cropW}x${cropH}`;
+
+      // 为 TaskPool 复制一份 ArrayBuffer（源数据不会被缓存，直接转移所有权）
+      const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+
+      const task = new taskpool.Task(
+        decodeThumbnailTask,
+        decodeBuf,
+        orient?.rotate ?? 0,
+        orient?.flipH ?? false,
+        orient?.flipV ?? false,
+        exifDim?.w ?? 0,
+        exifDim?.h ?? 0
+      );
+
+      try {
+        const pixelMap = await taskpool.execute(task) as image.PixelMap;
+        const info = await pixelMap.getImageInfo();
+        this.thumbnailPixelMapMap.set(handle, pixelMap);
+        this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
+        this.thumbnailLoadedSet.add(handle);
+        const msg = `[TASKPOOL_THUMB] handle=0x${handle.toString(16)} done ${info.size.width}x${info.size.height}`;
         hilog.info(DOMAIN, TAG, '%{public}s', msg);
         this.log.add(msg);
-      } else {
-        // No dimensions available — passthrough (no crop).
-        const msg = `[CROP] handle=0x${handle.toString(16)} no-dims passthrough=${tw}x${th}`;
-        hilog.warn(DOMAIN, TAG, '%{public}s', msg);
-        this.log.add(msg);
-        cropW = tw;
-        cropH = th;
+      } catch (err) {
+        hilog.error(DOMAIN, TAG, `[TASKPOOL_THUMB] FAIL handle=0x%{public}s err=%{public}s`,
+          handle.toString(16), JSON.stringify(err));
+        this.log.add(`缩略图解码失败(worker): handle=0x${handle.toString(16)}`);
       }
-
-      const region: image.Region = {
-        x: Math.floor((tw - cropW) / 2),
-        y: Math.floor((th - cropH) / 2),
-        size: { width: cropW, height: cropH }
-      };
-      const cropped = await pixelMap.createCroppedAndScaledPixelMap(region, 1.0, 1.0);
-      pixelMap.release();
-      this.thumbnailPixelMapMap.set(handle, cropped);
-      this.orientedDisplaySizes.set(handle, new OrientedSize(cropW, cropH));
-      this.thumbnailLoadedSet.add(handle);
-      imageSource.release();
     } catch (err) {
-      hilog.error(DOMAIN, TAG, `[THUMB_CROP] FAIL handle=0x%{public}s err=%{public}s`,
+      hilog.error(DOMAIN, TAG, `[THUMB_SUBMIT] FAIL handle=0x%{public}s err=%{public}s`,
         handle.toString(16), JSON.stringify(err));
-      this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
+      this.log.add(`缩略图提交失败: handle=0x${handle.toString(16)}`);
     }
   }
 
@@ -1197,32 +1165,37 @@ export class CameraService {
         this.addToCache(handle, data);
       }
 
-      // Decode with orientation correction
-      const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
+      // 读取 EXIF 方向（主线程读取元数据，很快）
       const orient = await this.getPhotoOrientation(handle, data.buffer as ArrayBuffer);
-      // pixelMap.rotate() swaps BOTH pixel data AND width/height, so
-      // ImageFit.Contain will use the correct post-rotation aspect ratio.
-      const needsFlip = orient.flipH || orient.flipV;
-      const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || orient.rotate !== 0 });
-      if (orient.rotate !== 0) {
-        await pixelMap.rotate(orient.rotate);
+
+      // 为 TaskPool 克隆一份 ArrayBuffer，主线程保留原始数据用于缓存
+      const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+
+      const task = new taskpool.Task(
+        decodeFullPhotoTask,
+        decodeBuf,
+        orient.rotate,
+        orient.flipH,
+        orient.flipV
+      );
+
+      let pixelMap: image.PixelMap;
+      try {
+        pixelMap = await taskpool.execute(task) as image.PixelMap;
+      } catch (err) {
+        this.log.add(`全尺寸解码失败(worker): handle=0x${handle.toString(16)}`);
+        return null;
       }
-      if (needsFlip) {
-        pixelMap.flip(orient.flipH, orient.flipV);
-      }
-      imageSource.release();
+
       const t2 = Date.now();
       const tag = hit ? '缓存命中' : '下载完成';
       this.log.add(`${tag}: ${((t2 - t0) / 1000).toFixed(1)}s`);
 
-      // pixelMap.rotate() swapped width/height — read actual dimensions.
+      // 读取旋转后的实际尺寸
       const info = await pixelMap.getImageInfo();
       const displayW = info.size.width;
       const displayH = info.size.height;
       this.orientedDisplaySizes.set(handle, new OrientedSize(displayW, displayH));
-
-      // Thumbnail already has correct orientation applied during scan-time
-      // decode (via preloadedOrientations). No re-decode needed.
 
       return new DecodedPhotoResult(pixelMap, displayW, displayH);
     } catch (err) {
