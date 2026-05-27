@@ -183,6 +183,18 @@ static napi_value BuildGetObject(napi_env env, napi_callback_info info) {
     return MakeUint8Array(env, data);
 }
 
+static napi_value BuildGetPartialObject(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value args[3] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint32_t objectHandle = 0, offset = 0, maxBytes = 16384;
+    if (argc > 0) napi_get_value_uint32(env, args[0], &objectHandle);
+    if (argc > 1) napi_get_value_uint32(env, args[1], &offset);
+    if (argc > 2) napi_get_value_uint32(env, args[2], &maxBytes);
+    auto data = g_engine.buildGetPartialObject(objectHandle, offset, maxBytes);
+    return MakeUint8Array(env, data);
+}
+
 // ---- Response processor ----
 
 static napi_value ProcessResponse(napi_env env, napi_callback_info info) {
@@ -285,6 +297,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"buildGetObjectInfo", nullptr, BuildGetObjectInfo, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"buildGetThumb",    nullptr, BuildGetThumb,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"buildGetObject",   nullptr, BuildGetObject,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"buildGetPartialObject", nullptr, BuildGetPartialObject, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"processResponse",    nullptr, ProcessResponse,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseDeviceInfo",    nullptr, ParseDeviceInfo,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseStorageIDs",    nullptr, ParseStorageIDs,    nullptr, nullptr, nullptr, napi_default, nullptr},

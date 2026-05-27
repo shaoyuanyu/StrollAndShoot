@@ -65,9 +65,6 @@ export class CameraService {
   thumbnailLoadedSet: Set<number> = new Set();
   @Trace thumbnailVersion: number = 0;
 
-  // Raw thumbnail data cache (needed to re-decode with orientation correction)
-  private thumbnailRawCache: Map<number, Uint8Array> = new Map();
-
   // Orientation-corrected display dimensions (populated during thumbnail/full decode)
   orientedDisplaySizes: Map<number, OrientedSize> = new Map();
 
@@ -90,6 +87,14 @@ export class CameraService {
 
   // Orientation cache (EXIF Orientation → rotate/flipH/flipV)
   private orientationMap: Map<number, OrientationTransform> = new Map();
+
+  // Orientations pre-loaded via GetPartialObject during scan, used to
+  // apply correct rotate/flip at first thumbnail decode (no re-decode needed).
+  private preloadedOrientations: Map<number, OrientationTransform> = new Map();
+
+  // Original photo dimensions read from EXIF during scan (via GetPartialObject).
+  // Used to compute precise thumbnail content area for black-bar-free cropping.
+  private exifOrigDims: Map<number, OrientedSize> = new Map();
 
   /**
    * Map EXIF Orientation value (1–8) to DecodingOptions rotation + pixelMap flip.
@@ -122,6 +127,162 @@ export class CameraService {
       default:
         return new OrientationTransform(0, false, false);
     }
+  }
+
+  /**
+   * Manually parse EXIF TIFF structure from raw JPEG data to extract
+   * original image dimensions (ImageWidth/ImageLength).
+   * The getImageProperty API fails for these tags (error 62980123).
+   */
+  private static parseExifDims(data: ArrayBuffer): OrientedSize | null {
+    const bytes = new Uint8Array(data);
+    if (bytes.length < 20) {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] data too short: %{public}d', bytes.length);
+      return null;
+    }
+
+    // Locate TIFF header: either at start (RAW/TIFF) or after JPEG APP1 Exif marker.
+    let off = 0;
+    const isTiff = (bytes[0] === 0x49 && bytes[1] === 0x49) || (bytes[0] === 0x4D && bytes[1] === 0x4D);
+    if (!isTiff) {
+      // Must be JPEG — find APP1/Exif marker
+      if (bytes[0] !== 0xFF || bytes[1] !== 0xD8) {
+        return null; // not a recognized format
+      }
+      const foundApp1 = false;
+      while (off < bytes.length - 14) {
+        if (bytes[off] === 0xFF && bytes[off + 1] === 0xE1) {
+          const app1Size = (bytes[off + 2] << 8) | bytes[off + 3];
+          // Check "Exif\0\0" identifier
+          if (off + 6 <= bytes.length &&
+              bytes[off + 4] === 0x45 && bytes[off + 5] === 0x78 &&
+              bytes[off + 6] === 0x69 && bytes[off + 7] === 0x66 &&
+              bytes[off + 8] === 0x00 && bytes[off + 9] === 0x00) {
+            off += 10; // skip to TIFF header
+            break;
+          }
+          // Skip to next marker (even if APP1 exceeds buffer, we already
+          // checked the Exif\0\0 identifier above)
+          off += 2 + app1Size;
+        } else if (bytes[off] === 0xFF && bytes[off + 1] >= 0xE0 && bytes[off + 1] <= 0xEF) {
+          const skip = (bytes[off + 2] << 8) | bytes[off + 3];
+          off += 2 + (skip || 2);
+        } else {
+          off++;
+        }
+      }
+      if (off >= bytes.length - 14) return null;
+    }
+    // Now `off` points to TIFF header (II\0x2A\0 or MM\0x00\x2A)
+
+    // Determine byte order: "II" (little-endian) or "MM" (big-endian)
+    const le = (bytes[off] === 0x49 && bytes[off + 1] === 0x49);
+    const be = (bytes[off] === 0x4D && bytes[off + 1] === 0x4D);
+    if (!le && !be) {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] unknown byte order: b0=%{public}d b1=%{public}d', bytes[off], bytes[off + 1]);
+      return null;
+    }
+
+    // Helper: read 2 bytes at offset p
+    const r16 = (p: number): number => {
+      if (p + 2 > bytes.length) return 0;
+      return le ? (bytes[p] | (bytes[p + 1] << 8)) : ((bytes[p] << 8) | bytes[p + 1]);
+    };
+    // Helper: read 4 bytes at offset p
+    const r32 = (p: number): number => {
+      if (p + 4 > bytes.length) return 0;
+      if (le) return bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24);
+      return (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
+    };
+
+    // Validate TIFF magic 0x002A
+    if (r16(off + 2) !== 0x002A) return null;
+
+    // IFD0 offset is relative to start of TIFF header
+    const ifd0Off = off + r32(off + 4);
+
+    let imgW = 0, imgH = 0;
+    let exifIfdOff = 0;
+
+    // Parse IFD0 entries (12 bytes each)
+    const entryCount = r16(ifd0Off);
+    if (isTiff) {
+      for (let di = 0; di < entryCount && ifd0Off + 2 + di * 12 + 10 <= bytes.length; di++) {
+        const eBase = ifd0Off + 2 + di * 12;
+        const tag = r16(eBase);
+        const typ = r16(eBase + 2);
+        const cnt = r32(eBase + 4);
+        const val = r32(eBase + 8);
+        hilog.info(DOMAIN, TAG, '[EXIF_PARSE] IFD0[%{public}d] tag=0x%{public}s typ=%{public}d cnt=%{public}d val=%{public}d',
+          di, tag.toString(16), typ, cnt, val);
+      }
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] RAW IFD0 entries=%{public}d', entryCount);
+    }
+    for (let i = 0; i < entryCount; i++) {
+      const eOff = ifd0Off + 2 + i * 12;
+      if (eOff + 12 > bytes.length) break;
+      const tag = r16(eOff);
+      const typ = r16(eOff + 2);
+      if (tag === 0x0100) { // ImageWidth in IFD0
+        imgW = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+      } else if (tag === 0x0101) { // ImageLength in IFD0
+        imgH = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+      } else if (tag === 0x8769) { // ExifIFD pointer
+        exifIfdOff = off + r32(eOff + 8);
+      } else if (tag === 0x014A) { // SubIFD — beyond 192KB USB limit, skip
+      } else if (tag === 0x0201) { // JPEGInterchangeFormat (embedded JPEG offset)
+        if (imgW === 0 || imgH === 0) {
+          // Parse the embedded JPEG preview's SOF marker for dimensions
+          const jpegOff = off + r32(eOff + 8);
+          if (jpegOff + 4 < bytes.length && bytes[jpegOff] === 0xFF && bytes[jpegOff + 1] === 0xD8) {
+            // Scan JPEG markers for SOF (0xFFC0, 0xFFC1, 0xFFC2)
+            let sp = jpegOff + 2;
+            while (sp + 8 < bytes.length) {
+              if (bytes[sp] !== 0xFF) break;
+              const marker = bytes[sp + 1];
+              if (marker >= 0xC0 && marker <= 0xC3) {
+                imgH = (bytes[sp + 5] << 8) | bytes[sp + 6];
+                imgW = (bytes[sp + 7] << 8) | bytes[sp + 8];
+                break;
+              }
+              const segLen = (bytes[sp + 2] << 8) | bytes[sp + 3];
+              sp += 2 + segLen;
+            }
+          }
+        }
+      }
+    }
+
+    if (imgW > 0 && imgH > 0) {
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] IFD0/SubIFD found %{public}dx%{public}d', imgW, imgH);
+      return new OrientedSize(imgW, imgH);
+    }
+
+    // Try ExifIFD sub-directory
+    if (exifIfdOff > 0 && exifIfdOff + 2 <= bytes.length) {
+      const exifCount = r16(exifIfdOff);
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] ExifIFD at 0x%{public}x entries=%{public}d', exifIfdOff, exifCount);
+      for (let i = 0; i < exifCount; i++) {
+        const eOff = exifIfdOff + 2 + i * 12;
+        if (eOff + 12 > bytes.length) break;
+        const tag = r16(eOff);
+        const typ = r16(eOff + 2);
+        if (tag === 0xA002) { // ExifImageWidth
+          imgW = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+        } else if (tag === 0xA003) { // ExifImageLength
+          imgH = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+        }
+      }
+    } else {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] no ExifIFD pointer (tag 0x8769) in IFD0');
+    }
+
+    if (imgW > 0 && imgH > 0) {
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] ExifIFD found %{public}dx%{public}d', imgW, imgH);
+      return new OrientedSize(imgW, imgH);
+    }
+    hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] failed IFD0 W=%{public}d H=%{public}d exifOff=%{public}d', imgW, imgH, exifIfdOff);
+    return null;
   }
 
   /**
@@ -599,7 +760,8 @@ export class CameraService {
         this.photoCount = 0;
         this.thumbnailPixelMapMap.clear();
         this.thumbnailLoadedSet.clear();
-        this.thumbnailRawCache.clear();
+        this.preloadedOrientations.clear();
+        this.exifOrigDims.clear();
         this.orientationMap.clear();
         this.orientedDisplaySizes.clear();
         this.clearFullCache();
@@ -779,11 +941,108 @@ export class CameraService {
           });
         }
 
+        // Fetch thumbnail raw data first
+        let thumbData: Uint8Array | null = null;
         if (!this.thumbnailLoadedSet.has(h)) {
-          const data = await this.session.getThumb(h);
-          if (data && data.length > 0) {
-            decodeJobs.push(this.decodeThumbnail(h, data));
+          thumbData = await this.session.getThumb(h);
+        }
+
+        // Pre-read first 16KB via GetPartialObject to extract EXIF Orientation
+        // and original image dimensions (ImageWidth/ImageLength).
+        // If the camera doesn't support GetPartialObject, this gracefully fails
+        // and the thumbnail will decode without orientation correction.
+        const partial = await this.session.getPartialObject(h, 0, 16384);
+        if (partial && partial.length > 0) {
+          try {
+            const orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
+            if (orient.rotate !== 0 || orient.flipH || orient.flipV) {
+              this.preloadedOrientations.set(h, orient);
+              hilog.info(DOMAIN, TAG, `[PARTIAL_ORIENT] handle=0x%{public}s rotate=%{public}d flipH=%{public}s flipV=%{public}s`,
+                h.toString(16), orient.rotate, orient.flipH.toString(), orient.flipV.toString());
+            }
+            // Use manual EXIF parsing (faster than getImageInfo, works on 16KB)
+            const parsed = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
+            if (parsed) {
+              this.exifOrigDims.set(h, parsed);
+              this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} parsed=${parsed.w}x${parsed.h}`);
+            }
+            // Dump IFD0 + NextIFD chain to persistent log for diagnosis (RAW/tiff only)
+            if (partial && partial.length > 12) {
+              const raw = new Uint8Array(partial.buffer as ArrayBuffer);
+              if ((raw[0] === 0x49 && raw[1] === 0x49) || (raw[0] === 0x4D && raw[1] === 0x4D)) {
+                const le = (raw[0] === 0x49);
+                const r16 = (p: number) => (p + 2 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8)) : ((raw[p] << 8) | raw[p+1]);
+                const r32 = (p: number) => (p + 4 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8) | (raw[p+2] << 16) | (raw[p+3] << 24)) : ((raw[p] << 24) | (raw[p+1] << 16) | (raw[p+2] << 8) | raw[p+3]);
+                if (r16(2) === 0x002A) {
+                  const tiffBase = r32(4); // IFD0 offset is absolute from TIFF header start
+                  let nextOff = tiffBase;
+                  let ifdIdx = 0;
+                  while (nextOff > 0 && nextOff + 2 < raw.length && ifdIdx < 5) {
+                    const eCnt = r16(nextOff);
+                    const nxt = r32(nextOff + 2 + eCnt * 12); // NextIFD offset (absolute)
+                    let ifdDump = '';
+                    for (let di = 0; di < eCnt && nextOff + 2 + di * 12 + 10 < raw.length; di++) {
+                      const b = nextOff + 2 + di * 12;
+                      const tag = r16(b);
+                      if (di > 0) ifdDump += ';';
+                      ifdDump += `t0x${tag.toString(16)}:T${r16(b+2)}:C${r32(b+4)}:V${r32(b+8)}`;
+                    }
+                    this.log.add(`[IFD_CHAIN] handle=0x${h.toString(16)} IFD#${ifdIdx} off=${nextOff} entries=${eCnt} next=${nxt} ${ifdDump}`);
+                    nextOff = nxt;
+                    ifdIdx++;
+                  }
+                  // SubIFD fallback: scan IFD0 for 0x014A, parse offset array,
+                  // fetch SubIFD via second GetPartialObject to read 0x0100/0x0101
+                  if (!this.exifOrigDims.has(h)) {
+                    const ifd0Off = tiffBase;
+                    const eCnt = r16(ifd0Off);
+                    for (let i = 0; i < eCnt && ifd0Off + 2 + (i+1) * 12 <= raw.length; i++) {
+                      const b = ifd0Off + 2 + i * 12;
+                      if (r16(b) === 0x014A && r16(b+2) === 4) {
+                        const cnt = r32(b+4);
+                        const arrOff = r32(b+8);
+                        if (cnt > 0 && arrOff > 0 && arrOff + cnt * 4 <= raw.length) {
+                          for (let si = 0; si < cnt; si++) {
+                            const subOff = r32(arrOff + si * 4);
+                            if (subOff < 100) continue;
+                            try {
+                              const sub = await this.session.getPartialObject(h, subOff, 8192);
+                              if (sub && sub.length > 20) {
+                                const sr = new Uint8Array(sub.buffer as ArrayBuffer);
+                                const scnt = le ? (sr[0] | (sr[1] << 8)) : ((sr[0] << 8) | sr[1]);
+                                let sw = 0, sh = 0;
+                                for (let j = 0; j < scnt && 2 + (j+1) * 12 <= sr.length; j++) {
+                                  const sb = 2 + j * 12;
+                                  const stag = le ? (sr[sb] | (sr[sb+1] << 8)) : ((sr[sb] << 8) | sr[sb+1]);
+                                  const sv = le ? (sr[sb+8] | (sr[sb+9] << 8) | (sr[sb+10] << 16) | (sr[sb+11] << 24))
+                                              : ((sr[sb+8] << 24) | (sr[sb+9] << 16) | (sr[sb+10] << 8) | sr[sb+11]);
+                                  if (stag === 0x0100) sw = sv;
+                                  if (stag === 0x0101) sh = sv;
+                                }
+                                if (sw > 100 && sh > 100) {
+                                  this.exifOrigDims.set(h, new OrientedSize(sw, sh));
+                                  this.log.add(`[SUBIFD_DIMS] handle=0x${h.toString(16)} idx=${si} off=${subOff} ${sw}x${sh}`);
+                                  break; // found dimensions, stop iterating SubIFDs
+                                }
+                              }
+                            } catch (_eSub) { /* try next SubIFD */ }
+                          }
+                        }
+                        break; // found 0x014A, stop iterating IFD0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } catch (_e) {
+            // Not supported / data incomplete — skip orientation
           }
+        }
+
+        // Decode thumbnail AFTER preloadedOrientations is populated
+        if (thumbData && thumbData.length > 0) {
+          decodeJobs.push(this.decodeThumbnail(h, thumbData));
         }
 
         this.scanProgress = i + 1;
@@ -812,8 +1071,6 @@ export class CameraService {
     try {
       const data = await this.session.getThumb(handle);
       if (data && data.length > 0) {
-        // Cache raw data for potential re-decode with orientation correction
-        this.thumbnailRawCache.set(handle, data);
         await this.decodeThumbnail(handle, data);
         this.thumbnailVersion++;
       }
@@ -824,54 +1081,78 @@ export class CameraService {
 
   private async decodeThumbnail(handle: number, data: Uint8Array): Promise<void> {
     try {
-      // PTP thumbnail JPEGs rarely contain EXIF — skip orientation reading
-      // at initial decode. Orientation will be applied later (if available via
-      // redecodeThumbnailWithOrientation after loadFullPhoto caches it).
+      // Check if orientation was pre-loaded via GetPartialObject during scan.
+      // If so, apply rotate/flip in one pass so thumbnails display correctly
+      // immediately, without waiting for full photo load + re-decode.
+      const orient = this.preloadedOrientations.get(handle);
+      const needsFlip = orient ? (orient.flipH || orient.flipV) : false;
+      const needsRotate = orient ? (orient.rotate !== 0) : false;
+
       const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
-      const pixelMap = await imageSource.createPixelMap();
-      this.thumbnailPixelMapMap.set(handle, pixelMap);
+      const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
+      if (needsRotate) {
+        await pixelMap.rotate(orient!.rotate);
+      }
+      if (needsFlip) {
+        pixelMap.flip(orient!.flipH, orient!.flipV);
+      }
+
+      // Crop to pure content (remove only black bars, keep aspect ratio).
+      // Gallery/strip use objectFit(ImageFit.Cover) to fill square cells;
+      // the main viewer uses Contain to display the full content naturally.
+      const imgInfo = await pixelMap.getImageInfo();
+      const tw = imgInfo.size.width;
+      const th = imgInfo.size.height;
+
+      let cropW: number;
+      let cropH: number;
+      const exifDim = this.exifOrigDims.get(handle);
+      if (exifDim) {
+        let origW = exifDim.w;
+        let origH = exifDim.h;
+        // Swap EXIF dimensions if orientation involves 90°/270° rotation
+        if (orient && (orient.rotate === 90 || orient.rotate === 270)) {
+          const tmp = origW;
+          origW = origH;
+          origH = tmp;
+        }
+        // Compute natural content size: original photo downscaled to fit
+        // within the thumbnail canvas (camera then padded to canvas size).
+        const scale = Math.min(tw / origW, th / origH);
+        cropW = Math.floor(origW * scale);
+        cropH = Math.floor(origH * scale);
+        const msg = `[CROP] handle=0x${handle.toString(16)} thumb=${tw}x${th} orig=${origW}x${origH} content=${cropW}x${cropH}`;
+        hilog.info(DOMAIN, TAG, '%{public}s', msg);
+        this.log.add(msg);
+      } else {
+        // No dimensions available — passthrough (no crop).
+        const msg = `[CROP] handle=0x${handle.toString(16)} no-dims passthrough=${tw}x${th}`;
+        hilog.warn(DOMAIN, TAG, '%{public}s', msg);
+        this.log.add(msg);
+        cropW = tw;
+        cropH = th;
+      }
+
+      const region: image.Region = {
+        x: Math.floor((tw - cropW) / 2),
+        y: Math.floor((th - cropH) / 2),
+        size: { width: cropW, height: cropH }
+      };
+      const cropped = await pixelMap.createCroppedAndScaledPixelMap(region, 1.0, 1.0);
+      pixelMap.release();
+      this.thumbnailPixelMapMap.set(handle, cropped);
+      this.orientedDisplaySizes.set(handle, new OrientedSize(cropW, cropH));
       this.thumbnailLoadedSet.add(handle);
-      // Cache raw pixelMap dimensions (pre-orientation)
-      const info = await pixelMap.getImageInfo();
-      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
       imageSource.release();
     } catch (err) {
+      hilog.error(DOMAIN, TAG, `[THUMB_CROP] FAIL handle=0x%{public}s err=%{public}s`,
+        handle.toString(16), JSON.stringify(err));
       this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
     }
   }
 
-  /**
-   * Re-decode a thumbnail with known orientation. Called after loadFullPhoto
-   * successfully reads EXIF Orientation and caches the transform.
-   */
-  private async redecodeThumbnailWithOrientation(handle: number, orient: OrientationTransform): Promise<void> {
-    if (!this.thumbnailRawCache.has(handle)) return;
-    const raw = this.thumbnailRawCache.get(handle)!;
-    const needsFlip = orient.flipH || orient.flipV;
-    try {
-      const imageSource = image.createImageSource(raw.buffer as ArrayBuffer);
-      const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || orient.rotate !== 0 });
-      if (orient.rotate !== 0) {
-        await pixelMap.rotate(orient.rotate);
-      }
-      if (needsFlip) {
-        pixelMap.flip(orient.flipH, orient.flipV);
-      }
-      // Release old pixelMap
-      const old = this.thumbnailPixelMapMap.get(handle);
-      if (old) {
-        try { old.release(); } catch (_) { /* ignore */ }
-      }
-      this.thumbnailPixelMapMap.set(handle, pixelMap);
-      // pixelMap.rotate() swapped width/height — read actual dimensions.
-      const info = await pixelMap.getImageInfo();
-      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
-      imageSource.release();
-      this.thumbnailVersion++;
-    } catch (_err) {
-      // Re-decode failed — keep the original (unrotated) thumbnail
-    }
-  }
+  // (redecodeThumbnailWithOrientation removed — orientation is now applied
+  // at initial thumbnail decode via preloadedOrientations)
 
   async loadFullPhoto(handle: number): Promise<DecodedPhotoResult | null> {
     try {
@@ -940,8 +1221,8 @@ export class CameraService {
       const displayH = info.size.height;
       this.orientedDisplaySizes.set(handle, new OrientedSize(displayW, displayH));
 
-      // Update thumbnails with correct orientation now that we know it
-      this.redecodeThumbnailWithOrientation(handle, orient);
+      // Thumbnail already has correct orientation applied during scan-time
+      // decode (via preloadedOrientations). No re-decode needed.
 
       return new DecodedPhotoResult(pixelMap, displayW, displayH);
     } catch (err) {
@@ -1105,7 +1386,8 @@ export class CameraService {
     this.photos = [];
     this.thumbnailPixelMapMap.clear();
     this.thumbnailLoadedSet.clear();
-    this.thumbnailRawCache.clear();
+    this.preloadedOrientations.clear();
+    this.exifOrigDims.clear();
     this.orientationMap.clear();
     this.orientedDisplaySizes.clear();
     this.clearFullCache();

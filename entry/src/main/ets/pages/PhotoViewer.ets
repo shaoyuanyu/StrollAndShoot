@@ -355,6 +355,7 @@ struct ThumbCellView {
   @Param pixelMap: image.PixelMap | null = null;
   @Param s: number = 1.0;
   @Param ox: number = 0;
+  @Param isActive: boolean = false;
   @Event onCellClick: () => void = () => {};
 
   build() {
@@ -364,6 +365,7 @@ struct ThumbCellView {
           .objectFit(ImageFit.Cover)
           .width('100%').height('100%')
           .borderRadius(4)
+          .border({ width: this.isActive ? 2 : 0, color: '#2196F3', radius: 4 })
       } else if (this.realIdx >= 0) {
         Column()
           .width('100%').height('100%')
@@ -1002,6 +1004,7 @@ struct PhotoViewer {
       pixelMap: this.isPlaceholder(ri.item) ? null : this.getThumbPixelMap(this.toReal(ri.item)),
       s: this.scaleArr[ri.item] ?? MIN_S,
       ox: this.offsetArr[ri.item] ?? 0,
+      isActive: !this.isPlaceholder(ri.item) && this.toReal(ri.item) === this.thumbIdx,
       onCellClick: (): void => {
         if (!this.isPlaceholder(ri.item)) { this.onThumbClick(this.toReal(ri.item)); }
       }

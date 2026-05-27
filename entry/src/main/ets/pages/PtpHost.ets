@@ -14,6 +14,7 @@ interface PtpApi {
   buildGetObjectInfo(objectHandle: number): Uint8Array;
   buildGetThumb(objectHandle: number): Uint8Array;
   buildGetObject(objectHandle: number): Uint8Array;
+  buildGetPartialObject(objectHandle: number, offset: number, maxBytes: number): Uint8Array;
   processResponse(data: Uint8Array, expectData: boolean): ProcessResult;
   parseDeviceInfo(data: Uint8Array): DeviceInfo;
   parseStorageIDs(data: Uint8Array): number[];
@@ -266,6 +267,39 @@ export class PtpSession {
     const cmd = ptpNative.buildGetObject(handle);
     const result = await this.ptpCommandGetLargeData(cmd);
     this.usbBusy = false;
+    return result;
+  }
+
+  /**
+   * Read a partial segment of an object via PTP GetPartialObject.
+   * Used to fetch the first 16KB of a photo for EXIF orientation reading
+   * without downloading the full image.
+   * @param handle PTP object handle
+   * @param offset byte offset (typically 0)
+   * @param maxBytes number of bytes to read (typically 16384)
+   * @returns the partial data, or null if the camera doesn't support this operation
+   */
+  async getPartialObject(handle: number, offset: number, maxBytes: number): Promise<Uint8Array | null> {
+    if (!this.sessionOpen) return null;
+    // Wait for USB pipe to become free
+    for (let wait = 0; wait < 150; wait++) {
+      if (!this.usbBusy) break;
+      await new Promise<void>((r: () => void) => setTimeout(r, 200));
+    }
+    if (this.usbBusy) {
+      log('USB busy timeout');
+      return null;
+    }
+    this.usbBusy = true;
+    log(`Getting partial object for handle 0x${handle.toString(16)} offset=${offset} maxBytes=${maxBytes}`);
+    const cmd = ptpNative.buildGetPartialObject(handle, offset, maxBytes);
+    const result = await this.ptpCommandGetLargeData(cmd);
+    this.usbBusy = false;
+    if (result && result.length > 0) {
+      log(`Got partial data: ${result.length} bytes`);
+    } else {
+      log('GetPartialObject returned no data (camera may not support it)');
+    }
     return result;
   }
 

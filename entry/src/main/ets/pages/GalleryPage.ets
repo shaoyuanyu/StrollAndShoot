@@ -305,8 +305,8 @@ export struct GalleryPage {
       Stack() {
         if (this.hasThumb(cellRi.item!.displayPhoto.handle)) {
           Image(this.svc.thumbnailPixelMapMap.get(cellRi.item!.displayPhoto.handle)!)
-            .objectFit(ImageFit.Cover)
             .width('100%').height('100%')
+            .objectFit(ImageFit.Cover)
         } else {
           Column() { Text('📷').fontSize(20) }
           .width('100%').height('100%')
@@ -341,8 +341,9 @@ export struct GalleryPage {
       .aspectRatio(1)
       .borderRadius(4)
       .border({
-        width: this.isDownloaded(cellRi.item!.displayPhoto) ? 2 : 0,
-        color: '#4CAF50', radius: 4
+        width: this.isDownloaded(cellRi.item!.displayPhoto) || this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 2 : 0,
+        color: this.isDownloaded(cellRi.item!.displayPhoto) ? '#4CAF50' : '#2196F3',
+        radius: 4
       })
       .clip(true)
       .parallelGesture(
