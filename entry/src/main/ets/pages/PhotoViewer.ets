@@ -608,7 +608,10 @@ struct PhotoViewer {
       this.thumbCtrl.changeIndex(idx, false);
       this.updateScales(idx);
     }
-    this.scheduleFullResLoad();
+    // Skip full-res download during inertial scrolling — only show what's already cached
+    if (!this._inertiaAnim) {
+      this.scheduleFullResLoad();
+    }
   }
 
   // ========== Thumb -> Main ==========
@@ -661,6 +664,12 @@ struct PhotoViewer {
   private scheduleFullResLoad(): void {
     // Cancel any pending timer
     this.cancelStableTimer();
+
+    // During inertial scrolling of the thumbnail strip, don't start any downloads.
+    // Already-cached full-res photos will still display; un-cached ones fall back to thumbnail.
+    if (this._inertiaAnim) {
+      return;
+    }
 
     const handle = this.currentHandle();
     if (handle < 0) return;
@@ -731,6 +740,11 @@ struct PhotoViewer {
    * Does NOT fire concurrent loads — processPreloadQueue() drains one at a time.
    */
   private preloadNeighbors(): void {
+    // Don't rebuild preload queue during inertial scrolling
+    if (this._inertiaAnim) {
+      return;
+    }
+
     const photos = this.getPhotos();
     const center = this.mainIdx;
     const window = this.preloadWindow;
@@ -782,8 +796,8 @@ struct PhotoViewer {
     this.preloadActive = true;
 
     while (this.preloadQueue.length > 0) {
-      // Check pause flag — if paused, stop and schedule resume
-      if (this.loadingPaused) {
+      // Check pause flag — if paused or in inertial scroll, stop and schedule resume
+      if (this.loadingPaused || this._inertiaAnim) {
         this.preloadActive = false;
         return;
       }
