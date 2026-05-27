@@ -435,7 +435,7 @@ struct PhotoViewer {
   @Local mainPhotos: PhotoEntry[] = [];
 
   private getPhotos(): PhotoEntry[] {
-    return this.photoList.length > 0 ? this.photoList : this.svc.photos;
+    return this.mainPhotos;
   }
 
   aboutToAppear(): void {
@@ -443,17 +443,34 @@ struct PhotoViewer {
     const handle = params ? (params['handle'] as number) : undefined;
     const handles = params ? (params['handles'] as number[] | undefined) : undefined;
 
-    // Build filtered photo list if handles were passed
+    // Build filtered photo list if handles were passed.
+    // IMPORTANT: preserve the EXACT order from the gallery, not svc.photos order.
     if (handles && handles.length > 0) {
-      const handleSet = new Set(handles);
-      this.photoList = this.svc.photos.filter(p => handleSet.has(p.handle));
+      const photoByHandle = new Map<number, PhotoEntry>();
+      for (const p of this.svc.photos) {
+        photoByHandle.set(p.handle, p);
+      }
+      this.photoList = [];
+      for (const h of handles) {
+        const p = photoByHandle.get(h);
+        if (p) this.photoList.push(p);
+      }
+      // When handles from gallery, their order is already the gallery's visual order.
+      // Do NOT reverse — the gallery already decides the ordering.
+      this.mainPhotos = this.photoList;
+    } else {
+      // No handles: load all from service and reverse for newest-first
+      this.mainPhotos = [...this.svc.photos].reverse();
     }
-    // Cache a stable reference for Repeat data source
-    this.mainPhotos = this.photoList.length > 0 ? this.photoList : this.svc.photos;
 
     this.rebuildDisplayArrays();
     let initialIndex = 0;
-    if (handle !== undefined && this.getPhotos().length > 0) {
+    // Use the visual position index directly from the gallery (avoids handle-lookup mismatch
+    // when the gallery's visual order differs from getFilteredDisplayGroups() due to date sorting).
+    const startIndex = params ? (params['startIndex'] as number) : undefined;
+    if (startIndex !== undefined && startIndex >= 0 && startIndex < this.mainPhotos.length) {
+      initialIndex = startIndex;
+    } else if (handle !== undefined && this.getPhotos().length > 0) {
       for (let i = 0; i < this.getPhotos().length; i++) {
         if (this.getPhotos()[i].handle === handle) {
           initialIndex = i;

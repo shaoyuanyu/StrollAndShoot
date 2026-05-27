@@ -138,6 +138,11 @@ export struct GalleryPage {
       return this._allGroupsCache;
     }
     this._allGroupsCache = buildDisplayGroups(this.svc.photos, this.displayMode);
+    // Sort by captureDate DESC so getFilteredDisplayGroups() matches gallery visual order.
+    // This ensures handles/index are in visual order — eliminating extra sorting in Index.ets
+    // and keeping PhotoViewer's thumbnail strip consistent with gallery positions.
+    this._allGroupsCache.sort((a: DisplayGroup, b: DisplayGroup): number =>
+      (b.displayPhoto.captureDate ?? '').localeCompare(a.displayPhoto.captureDate ?? ''));
     this._cachePhotosVer = this.svc.photosVersion;
     this._cacheMode = this.displayMode;
     return this._allGroupsCache;

@@ -137,14 +137,15 @@ struct Index {
             displayMode: this.settings.displayMode,
             onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {
               const handle = _displayGroups[index].displayPhoto.handle;
-              // Build filtered handles list for the viewer
+              // _displayGroups is already in gallery visual order (sorted by captureDate DESC
+              // in allDisplayGroups()), so handles/index match the visual position directly.
               const handles: number[] = [];
               for (const g of _displayGroups) {
                 handles.push(g.displayPhoto.handle);
               }
               router.pushUrl({
                 url: 'pages/PhotoViewer',
-                params: { handle: handle, handles: handles }
+                params: { handle: handle, handles: handles, startIndex: index }
               });
             },
             onDownloadSelected: async (handles: number[]) => {

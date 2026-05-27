@@ -909,8 +909,8 @@ export class CameraService {
           this.photoCount += count;
       
         });
-      // TEST: only load first 100 photos
-      const handles = allHandles.slice(0, 100);
+      // TEST: only load first 150 photos
+      const handles = allHandles.slice(0, 150);
 
       hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}, limited to: ${handles.length}`);
 
