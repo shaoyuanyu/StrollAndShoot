@@ -355,7 +355,7 @@ struct ThumbCellView {
   @Param pixelMap: image.PixelMap | null = null;
   @Param s: number = 1.0;
   @Param ox: number = 0;
-  @Param isActive: boolean = false;
+  @Param borderWeight: number = 0;
   @Event onCellClick: () => void = () => {};
 
   build() {
@@ -365,7 +365,7 @@ struct ThumbCellView {
           .objectFit(ImageFit.Cover)
           .width('100%').height('100%')
           .borderRadius(4)
-          .border({ width: this.isActive ? 2 : 0, color: '#2196F3', radius: 4 })
+          .border({ width: this.borderWeight * 2, color: '#2196F3', radius: 4 })
       } else if (this.realIdx >= 0) {
         Column()
           .width('100%').height('100%')
@@ -412,6 +412,7 @@ struct PhotoViewer {
   @Local displayIndices: number[] = [];
   @Local scaleArr: number[] = [];
   @Local offsetArr: number[] = [];
+  @Local thumbFrac: number = 0;
 
   // ---- Full-resolution loading state ----
   @Local fullResMap: Map<number, image.PixelMap> = new Map();
@@ -530,6 +531,7 @@ struct PhotoViewer {
   }
 
   private updateScales(realFrac: number): void {
+    this.thumbFrac = realFrac;
     const half = this._half;
     const dt = this._displayTotal;
     const centerFrac = realFrac + half;
@@ -570,14 +572,14 @@ struct PhotoViewer {
   }
 
   private onMainContentDidScroll(_sel: number, index: number, position: number): void {
+    const mainFrac = index - position;
+    this.updateScales(mainFrac);
     if (!this._isDragging) return;
     if (index !== this.mainIdx) return;
     if (Math.abs(position) < 0.005) return;
-    const mainFrac = index - position;
     const delta = mainFrac - this._lastMainFrac;
     this._lastMainFrac = mainFrac;
     this.thumbCtrl.fakeDragBy(-delta * (this._thumbItemW + ITEM_SPACE));
-    this.updateScales(mainFrac);
   }
 
   private onMainAnimationEnd(index: number): void {
@@ -1035,7 +1037,8 @@ struct PhotoViewer {
       pixelMap: this.isPlaceholder(ri.item) ? null : this.getThumbPixelMap(this.toReal(ri.item)),
       s: this.scaleArr[ri.item] ?? MIN_S,
       ox: this.offsetArr[ri.item] ?? 0,
-      isActive: !this.isPlaceholder(ri.item) && this.toReal(ri.item) === this.thumbIdx,
+      borderWeight: this.isPlaceholder(ri.item) ? 0 :
+        Math.max(0, 1 - Math.abs(this.toReal(ri.item) - this.thumbFrac)),
       onCellClick: (): void => {
         if (!this.isPlaceholder(ri.item)) { this.onThumbClick(this.toReal(ri.item)); }
       }
