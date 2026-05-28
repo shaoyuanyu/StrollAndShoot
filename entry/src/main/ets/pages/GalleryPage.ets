@@ -335,33 +335,53 @@ export struct GalleryPage {
             .fontSize(8).fontColor($r('app.color.text_on_dark'))
             .padding({ left: 3, right: 3, top: 1, bottom: 1 })
             .backgroundColor('rgba(0,0,0,0.5)').borderRadius(3)
-            .position({ x: 0, y: '100%' }).markAnchor({ x: 0, y: '100%' })
-            .margin({ left: 3, bottom: 3 })
+            .position({ bottom: 0, left: 0 })
         }
+        // 边框覆盖层始终在最上层（文本/指示器之后渲染），有边框时自然盖住日期文本底部2px
+        Stack()
+          .width('100%').height('100%')
+          .border({
+            width: 2,
+            color: this.isDownloaded(cellRi.item!.displayPhoto) ? '#4CAF50'
+              : this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? '#2196F3'
+              : Color.Transparent,
+            radius: 4
+          })
+          .hitTestBehavior(HitTestMode.None)
         if (this.selectMode && !this.isDownloaded(cellRi.item!.displayPhoto)) {
-          Checkbox()
-            .select(this.selectedHandles.has(cellRi.item!.displayPhoto.handle))
-            .width(18).height(18)
-            .position({ x: '100%', y: 0 }).markAnchor({ x: '100%', y: 0 })
-            .margin({ top: 3, right: 3 })
-            .hitTestBehavior(HitTestMode.None)
+          // 12x12 选择指示圆，Path 绘制对勾
+          Stack() {
+            Circle()
+              .width(12).height(12)
+              .fill(this.selectedHandles.has(cellRi.item!.displayPhoto.handle)
+                ? '#2196F3' : 'rgba(0,0,0,0.3)')
+              .strokeWidth(this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 0 : 2)
+              .stroke(Color.White)
+            if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
+              Path()
+                .width(7).height(6)
+                .commands('M1.5 3.5 L3 5 L5.5 1.5')
+                .stroke(Color.White)
+                .strokeWidth(1.5)
+                .fillOpacity(0)
+                .strokeLineCap(LineCapStyle.Round)
+                .strokeLineJoin(LineJoinStyle.Round)
+            }
+          }
+          .width(12).height(12)
+          .position({ top: 3, right: 3 })
+          .hitTestBehavior(HitTestMode.None)
         }
         if (this.isDownloaded(cellRi.item!.displayPhoto)) {
-          Circle({ width: 6, height: 6 })
+          Circle({ width: 8, height: 8 })
             .fill('#4CAF50')
-            .position({ x: '100%', y: 0 }).markAnchor({ x: '100%', y: 0 })
-            .margin({ top: 4, right: 4 })
+            .position({ top: 3, right: 3 })
             .hitTestBehavior(HitTestMode.None)
         }
       }
       .layoutWeight(1)
       .aspectRatio(1)
       .borderRadius(4)
-      .border({
-        width: this.isDownloaded(cellRi.item!.displayPhoto) || this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 2 : 0,
-        color: this.isDownloaded(cellRi.item!.displayPhoto) ? '#4CAF50' : '#2196F3',
-        radius: 4
-      })
       .clip(true)
       .parallelGesture(
         GestureGroup(GestureMode.Exclusive,

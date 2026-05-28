@@ -44,6 +44,11 @@ export struct MainScreen {
   @Local gallerySelectMode: boolean = false;
   @Local exitSelectModeVersion: number = 0;
 
+  @Monitor('svc.photosVersion')
+  onPhotosChanged(): void {
+    this.syncDownloadedKeys();
+  }
+
   aboutToAppear(): void {
     // Initialize the global BuilderNode for shared element transitions
     createMyNode(this.getUIContext());
