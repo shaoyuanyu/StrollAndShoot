@@ -312,6 +312,7 @@ export struct GalleryPage {
           Image(this.svc.thumbnailPixelMapMap.get(cellRi.item!.displayPhoto.handle)!)
             .width('100%').height('100%')
             .objectFit(ImageFit.Cover)
+            .id('thumb_' + cellRi.item!.displayPhoto.handle)
         } else {
           Column() { Text('📷').fontSize(20) }
           .width('100%').height('100%')

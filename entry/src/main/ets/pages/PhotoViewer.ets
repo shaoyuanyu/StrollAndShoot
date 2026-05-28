@@ -1,9 +1,12 @@
-import { router } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { display } from '@kit.ArkUI';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
+import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
+import { AnimationProperties } from '../CustomTransition/AnimationProperties';
+import { getMyNode, MyNodeController } from '../NodeContainer/CustomComponent';
+import { ComponentAttrUtils, RectInfoInPx } from '../utils/ComponentAttrUtils';
 
 const TAG = 'PhotoViewer';
 const DOMAIN = 0x0001;
@@ -387,10 +390,27 @@ struct ThumbCellView {
   }
 }
 
-// ---- PhotoViewer @Entry ----
-@Entry
+// ---- PhotoViewerScreen @Builder export (NavDestination) ----
+@Builder
+export function PhotoViewerScreenBuilder() {
+  PhotoViewerScreen();
+}
+
 @ComponentV2
-struct PhotoViewer {
+export struct PhotoViewerScreen {
+  // Navigation
+  private pageInfos: NavPathStack = new NavPathStack();
+  private pageId: number = -1;
+
+  // Shared element transition
+  private cardItemInfo: RectInfoInPx = new RectInfoInPx();
+  @Local animationProperties: AnimationProperties | null = null;
+  @Local myNodeController: MyNodeController | undefined = undefined;
+  private prePageDoFinishTransition: () => void = () => {};
+  private shouldDoDefaultTransition: boolean = false;
+  private positionLookup: ((handle: number) => string) | undefined = undefined;
+  private posCache: Record<string, string> = {};
+
   @Local svc: CameraService = CameraService.getInstance();
   @Local mainIdx: number = 0;
   @Local thumbIdx: number = 0;
@@ -440,12 +460,20 @@ struct PhotoViewer {
   }
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object> | undefined;
-    const handle = params ? (params['handle'] as number) : undefined;
-    const handles = params ? (params['handles'] as number[] | undefined) : undefined;
+    // Initialize animation properties (params will be read in onReady)
+    this.animationProperties = new AnimationProperties(this.getUIContext());
+    // Pick up the BuilderNode shared from MainScreen/GalleryPage
+    this.myNodeController = getMyNode();
+  }
 
-    // Build filtered photo list if handles were passed.
-    // IMPORTANT: preserve the EXACT order from the gallery, not svc.photos order.
+  aboutToDisappear(): void {
+    this.cancelStableTimer();
+  }
+
+  /**
+   * Initialize photo list from NavDestination params (called from onReady).
+   */
+  private initFromParams(handle: number, handles: number[] | undefined, startIndex: number | undefined): void {
     if (handles && handles.length > 0) {
       const photoByHandle = new Map<number, PhotoEntry>();
       for (const p of this.svc.photos) {
@@ -466,9 +494,6 @@ struct PhotoViewer {
 
     this.rebuildDisplayArrays();
     let initialIndex = 0;
-    // Use the visual position index directly from the gallery (avoids handle-lookup mismatch
-    // when the gallery's visual order differs from getFilteredDisplayGroups() due to date sorting).
-    const startIndex = params ? (params['startIndex'] as number) : undefined;
     if (startIndex !== undefined && startIndex >= 0 && startIndex < this.mainPhotos.length) {
       initialIndex = startIndex;
     } else if (handle !== undefined && this.getPhotos().length > 0) {
@@ -484,10 +509,6 @@ struct PhotoViewer {
     this.updateScales(initialIndex);
     // Start loading full-res for initial photo after a short delay
     setTimeout(() => { this.scheduleFullResLoad(); }, 200);
-  }
-
-  aboutToDisappear(): void {
-    this.cancelStableTimer();
   }
 
   private rebuildDisplayArrays(): void {
@@ -952,7 +973,7 @@ struct PhotoViewer {
       }
       .width(36).height(36)
       .backgroundColor('rgba(255,255,255,0.15)')
-      .onClick(() => { router.back(); })
+      .onClick(() => { this.pageInfos.pop(); })
 
       // Title block
       Column() {
@@ -1046,117 +1067,237 @@ struct PhotoViewer {
   }
 
   build() {
-    Column() {
-      // ===== Custom Title Bar =====
-      if (this._overlayVisible) {
-        this.TitleBar()
-      }
-
-      // ===== Main + Thumb Swipers =====
-      Stack() {
-        // ===== Main Swiper =====
-        Swiper(this.mainCtrl) {
-          Repeat<PhotoEntry>(this.mainPhotos)
-            .each((ri: RepeatItem<PhotoEntry>) => {
-              Column() {
-                this.buildMainImage(ri);
-              }
-              .width('100%').height('100%')
-              .onAreaChange((_o: Area, n: Area) => {
-                const w = n.width as number;
-                if (w > 0) { this._swiperWidth = w; }
-              })
-            })
-            .key((_photo: PhotoEntry, idx: number) => idx.toString())
-            .virtualScroll({ totalCount: this.mainPhotos.length })
+    NavDestination() {
+      Stack({ alignContent: Alignment.TopStart }) {
+        // Shared element in positioned inner Stack so translateY aligns
+        // with window coordinates (see FAQ: expandSafeArea doesn't change
+        // layout origin).
+        Stack({ alignContent: Alignment.TopStart }) {
+          if (this.myNodeController && this.animationProperties && !this.animationProperties.showDetailContent) {
+            NodeContainer(this.myNodeController)
+              .width('100%')
+              .height('100%')
+          }
         }
-        .index(this.mainIdx)
-        .disableSwipe(this.isZoomed)
-        .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
-        .onContentDidScroll((s: number, i: number, p: number) => { this.onMainContentDidScroll(s, i, p); })
-        .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
-        .onChange((i: number) => { this.onMainChange(i); })
-        .cachedCount(2).loop(false).indicator(false)
-        .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
-        .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
-        .width('100%').height('100%')
+        .position({ y: this.animationProperties?.positionValue ?? 0 })
 
-        // ===== Thumb Swiper =====
+        // ===== Regular content (visible after transition completes) =====
         Column() {
-          Blank()
-          Row() {
-            Swiper(this.thumbCtrl) {
-              Repeat<number>(this.displayIndices)
-                .each((ri: RepeatItem<number>) => {
-                  this.ThumbCell(ri)
+          // ===== Custom Title Bar =====
+          if (this._overlayVisible) {
+            this.TitleBar()
+          }
+
+          // ===== Main + Thumb Swipers =====
+          Stack() {
+            // ===== Main Swiper =====
+            Swiper(this.mainCtrl) {
+              Repeat<PhotoEntry>(this.mainPhotos)
+                .each((ri: RepeatItem<PhotoEntry>) => {
+                  Column() {
+                    this.buildMainImage(ri);
+                  }
+                  .width('100%').height('100%')
+                  .onAreaChange((_o: Area, n: Area) => {
+                    const w = n.width as number;
+                    if (w > 0) { this._swiperWidth = w; }
+                  })
                 })
-                .key((idx: number) => idx.toString())
-                .virtualScroll({ totalCount: this._displayTotal })
+                .key((_photo: PhotoEntry, idx: number) => idx.toString())
+                .virtualScroll({ totalCount: this.mainPhotos.length })
             }
-            .cachedCount(6)
-            .index(this.thumbIdx)
-            .displayCount(this._displayCount)
-            .indicator(false).itemSpace(ITEM_SPACE)
-            .width('100%').height(this._thumbItemW).clip(false)
-            .disableSwipe(false).loop(false)
+            .index(this.mainIdx)
+            .disableSwipe(this.isZoomed)
+            .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
+            .onContentDidScroll((s: number, i: number, p: number) => { this.onMainContentDidScroll(s, i, p); })
+            .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
+            .onChange((i: number) => { this.onMainChange(i); })
+            .cachedCount(2).loop(false).indicator(false)
             .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
             .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
-            .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onThumbGestureSwipe(i, e); })
-            .onAnimationStart((i: number, t: number) => { this.onThumbAnimationStart(i, t); })
-            .onAnimationEnd((i: number) => { this.onThumbAnimationEnd(i); })
-            .onChange((i: number) => { this.onThumbChange(i); })
-            .onAreaChange((_o: Area, n: Area) => {
-              const sw = n.width as number;
-              if (sw > 0) {
-                this._thumbItemW = (sw - (this._displayCount - 1) * ITEM_SPACE) / this._displayCount;
+            .width('100%').height('100%')
+
+            // ===== Thumb Swiper =====
+            Column() {
+              Blank()
+              Row() {
+                Swiper(this.thumbCtrl) {
+                  Repeat<number>(this.displayIndices)
+                    .each((ri: RepeatItem<number>) => {
+                      this.ThumbCell(ri)
+                    })
+                    .key((idx: number) => idx.toString())
+                    .virtualScroll({ totalCount: this._displayTotal })
+                }
+                .cachedCount(6)
+                .index(this.thumbIdx)
+                .displayCount(this._displayCount)
+                .indicator(false).itemSpace(ITEM_SPACE)
+                .width('100%').height(this._thumbItemW).clip(false)
+                .disableSwipe(false).loop(false)
+                .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
+                .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
+                .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onThumbGestureSwipe(i, e); })
+                .onAnimationStart((i: number, t: number) => { this.onThumbAnimationStart(i, t); })
+                .onAnimationEnd((i: number) => { this.onThumbAnimationEnd(i); })
+                .onChange((i: number) => { this.onThumbChange(i); })
+                .onAreaChange((_o: Area, n: Area) => {
+                  const sw = n.width as number;
+                  if (sw > 0) {
+                    this._thumbItemW = (sw - (this._displayCount - 1) * ITEM_SPACE) / this._displayCount;
+                  }
+                })
+                .parallelGesture(
+                  PanGesture()
+                    .onActionUpdate((e: GestureEvent) => {
+                      const vx = e.velocityX || 0;
+                      if (Math.abs(vx) >= INERTIA_THRESHOLD && !this._inertiaAnim) {
+                        this._inertiaAnim = true;
+                      }
+                    })
+                    .onActionEnd((e: GestureEvent) => {
+                      const vx = e.velocityX || 0;
+                      if (Math.abs(vx) < INERTIA_THRESHOLD) {
+                        this._inertiaAnim = false;
+                        return;
+                      }
+                      const jump = Math.max(1, Math.round(Math.abs(vx) / INERTIA_FACTOR));
+                      const step = vx > 0 ? -jump : jump;
+                      const target = Math.max(0, Math.min(this.mainIdx + step, this._realTotal - 1));
+                      if (target !== this.mainIdx) {
+                        const dt = this._displayTotal;
+                        for (let i = 0; i < dt; i++) {
+                          this.scaleArr[i] = this.isPlaceholder(i) ? 0 : MIN_S;
+                          this.offsetArr[i] = 0;
+                        }
+                        this._fromMain = true;
+                        this.thumbCtrl.changeIndex(target, true);
+                        this.mainCtrl.changeIndex(target, true);
+                      } else {
+                        this._inertiaAnim = false;
+                      }
+                    })
+                )
               }
-            })
-            .parallelGesture(
-              PanGesture()
-                .onActionUpdate((e: GestureEvent) => {
-                  const vx = e.velocityX || 0;
-                  if (Math.abs(vx) >= INERTIA_THRESHOLD && !this._inertiaAnim) {
-                    this._inertiaAnim = true;
-                  }
-                })
-                .onActionEnd((e: GestureEvent) => {
-                  const vx = e.velocityX || 0;
-                  if (Math.abs(vx) < INERTIA_THRESHOLD) {
-                    this._inertiaAnim = false;
-                    return;
-                  }
-                  const jump = Math.max(1, Math.round(Math.abs(vx) / INERTIA_FACTOR));
-                  const step = vx > 0 ? -jump : jump;
-                  const target = Math.max(0, Math.min(this.mainIdx + step, this._realTotal - 1));
-                  if (target !== this.mainIdx) {
-                    const dt = this._displayTotal;
-                    for (let i = 0; i < dt; i++) {
-                      this.scaleArr[i] = this.isPlaceholder(i) ? 0 : MIN_S;
-                      this.offsetArr[i] = 0;
-                    }
-                    this._fromMain = true;
-                    this.thumbCtrl.changeIndex(target, true);
-                    this.mainCtrl.changeIndex(target, true);
-                  } else {
-                    this._inertiaAnim = false;
-                  }
-                })
-            )
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+            }
+            .width('100%').height('100%')
+            .hitTestBehavior(HitTestMode.Transparent)
+            .visibility(this._overlayVisible ? Visibility.Visible : Visibility.Hidden)
+            .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
           }
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .width('100%').height('100%')
+          .backgroundColor(Color.Black)
+          .layoutWeight(1)
         }
         .width('100%').height('100%')
-        .hitTestBehavior(HitTestMode.Transparent)
-        .visibility(this._overlayVisible ? Visibility.Visible : Visibility.Hidden)
+        .opacity(this.animationProperties?.showDetailContent ? 1.0 : 0.0)
         .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
       }
-      .width('100%').height('100%')
-      .backgroundColor(Color.Black)
-      .layoutWeight(1)
+      // Animation transforms applied to the outer Stack:
+      .scale({ x: this.animationProperties?.scaleValue ?? 1, y: this.animationProperties?.scaleValue ?? 1 })
+      .translate({ x: this.animationProperties?.translateX ?? 0, y: this.animationProperties?.translateY ?? 0 })
+      .width(this.animationProperties?.clipWidth ?? '100%')
+      .height(this.animationProperties?.clipHeight ?? '100%')
+      .borderRadius(this.animationProperties?.radius ?? 0)
+      .clip(true)
+      .expandSafeArea([SafeAreaType.SYSTEM])
     }
-    .width('100%').height('100%')
-    .backgroundColor(Color.Black)
+    .hideTitleBar(true)
+    .backgroundColor(this.animationProperties?.navDestinationBgColor ?? Color.Black)
+    .onReady((context: NavDestinationContext) => {
+      this.pageInfos = context.pathStack;
+      this.pageId = this.pageInfos.getAllPathName().length - 1;
+
+      // Read navigation params
+      const param = context.pathInfo?.param as Record<string, Object>;
+      const handle = param['handle'] as number;
+      const handles = param['handles'] as number[] | undefined;
+      const startIndex = param['startIndex'] as number | undefined;
+
+      // Read card position info for shared element animation
+      const cardItemInfoStr = param['cardItemInfo'] as string;
+      if (cardItemInfoStr) {
+        try {
+          this.cardItemInfo = JSON.parse(cardItemInfoStr) as RectInfoInPx;
+        } catch (_e) {}
+      }
+
+      // Back-transition callback
+      this.prePageDoFinishTransition = param['doDefaultTransition'] as () => void;
+      if (!this.prePageDoFinishTransition) {
+        this.prePageDoFinishTransition = () => {};
+      }
+
+      // Position lookup callback + cached positions (from push time)
+      this.positionLookup = param['positionLookup'] as ((handle: number) => string) | undefined;
+      const posCacheStr = param['posCache'] as string | undefined;
+      if (posCacheStr) {
+        try { this.posCache = JSON.parse(posCacheStr) as Record<string, string>; } catch (_e) {}
+      }
+
+      // Initialize photo list and starting index
+      this.initFromParams(handle, handles, startIndex);
+
+      // Set initial animation state to thumbnail position (BEFORE first render).
+      // This ensures the first frame shows the shared element at the correct starting
+      // position, then animateTo smoothly expands it to full screen.
+      if (this.animationProperties) {
+        this.animationProperties.setInitialState(this.cardItemInfo, 0);
+        this.svc.getLog().add('setInitialState called, cardInfo=' + JSON.stringify(this.cardItemInfo));
+      } else {
+        this.svc.getLog().add('setInitialState SKIP: animationProperties is null');
+      }
+
+      // Register custom transition animation callback
+      CustomTransition.getInstance().registerNavParam(this.pageId,
+        (isPush: boolean, isExit: boolean, transitionProxy: NavigationTransitionProxy) => {
+          this.animationProperties?.doAnimation(
+            this.cardItemInfo, isPush, isExit, transitionProxy, 0,
+            this.prePageDoFinishTransition, this.myNodeController);
+        }, 500);
+    })
+    .onBackPressed(() => {
+      const curHandle = this.currentHandle();
+      if (curHandle >= 0) {
+        // 1. Update the shared element (BuilderNode) with the CURRENT photo's
+        //    thumbnail (not the originally-clicked one).
+        if (this.myNodeController) {
+          const pm = this.svc.thumbnailPixelMapMap.get(curHandle);
+          if (pm) {
+            this.myNodeController.setPixelMap(this.getUIContext(), pm);
+            this.svc.getLog().add('pop: updated BuilderNode pixelMap for handle=' + curHandle);
+          }
+        }
+
+        // 2. Look up the current thumbnail's grid position for the return animation.
+        //    Priority: positionLookup (live) > posCache (cached at push time) > original cardItemInfo
+        let rectStr: string = '';
+        if (this.positionLookup) {
+          try { rectStr = this.positionLookup(curHandle); } catch (_e) {}
+        }
+        if (!rectStr) {
+          rectStr = this.posCache[String(curHandle)] ?? '';
+          if (rectStr) {
+            this.svc.getLog().add('pop: used posCache for handle=' + curHandle);
+          }
+        }
+        if (rectStr) {
+          try {
+            this.cardItemInfo = JSON.parse(rectStr) as RectInfoInPx;
+            this.svc.getLog().add('pop: updated cardItemInfo for handle=' + curHandle);
+          } catch (_e) {}
+        } else {
+          this.svc.getLog().add('pop: no position found for handle=' + curHandle + ', using original');
+        }
+      }
+      this.pageInfos.pop();
+      return true;
+    })
+    .onDisAppear(() => {
+      CustomTransition.getInstance().unRegisterNavParam(this.pageId);
+    })
   }
 }
