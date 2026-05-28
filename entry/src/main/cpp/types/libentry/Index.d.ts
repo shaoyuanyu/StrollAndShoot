@@ -34,6 +34,7 @@ export const buildGetObjectHandles: (storageId: number, formatCode?: number, par
 export const buildGetObjectInfo: (objectHandle: number) => Uint8Array;
 export const buildGetThumb: (objectHandle: number) => Uint8Array;
 export const buildGetObject: (objectHandle: number) => Uint8Array;
+export const buildGetPartialObject: (objectHandle: number, offset: number, maxBytes: number) => Uint8Array;
 export const processResponse: (data: Uint8Array, expectData: boolean) => ProcessResult;
 export const parseDeviceInfo: (data: Uint8Array) => PtpDeviceInfo;
 export const parseStorageIDs: (data: Uint8Array) => number[];

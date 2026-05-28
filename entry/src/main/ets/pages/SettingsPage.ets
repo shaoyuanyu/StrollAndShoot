@@ -1,6 +1,7 @@
-import { ConfigurationConstant } from '@kit.AbilityKit';
+import { ConfigurationConstant, bundleManager } from '@kit.AbilityKit';
 import { router } from '@kit.ArkUI';
 import { SettingsStore } from '../model/SettingsStore';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 const COLUMN_OPTIONS: number[] = [-1, 3, 4, 5, 6];
 
@@ -21,6 +22,16 @@ export struct SettingsPage {
   @Event onGpsModeChange: (mode: number) => void = (_m: number) => {};
   @Event onGpsClear: () => void = () => {};
   settings: SettingsStore = SettingsStore.getInstance();
+  @Local versionName: string = '';
+
+  aboutToAppear(): void {
+    try {
+      const info = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+      this.versionName = info.versionName;
+    } catch (err) {
+      this.versionName = `${(err as BusinessError).message}`;
+    }
+  }
 
   gotoManage(): void {
     router.pushUrl({ url: 'pages/GpsManagementPage' });
@@ -144,7 +155,7 @@ export struct SettingsPage {
         Row() {
           Text('版本').fontSize(14).fontColor($r('app.color.text_primary'))
           Blank()
-          Text('1.0.0').fontSize(14).fontColor($r('app.color.text_secondary'))
+          Text(this.versionName).fontSize(14).fontColor($r('app.color.text_secondary'))
         }
         .width('100%').padding(14)
         .backgroundColor($r('app.color.bg_surface')).borderRadius(8)

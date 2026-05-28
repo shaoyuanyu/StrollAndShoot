@@ -34,6 +34,7 @@ static constexpr uint16_t PTP_OC_GetObjectHandles    = 0x1007;
 static constexpr uint16_t PTP_OC_GetObjectInfo       = 0x1008;
 static constexpr uint16_t PTP_OC_GetObject           = 0x1009;
 static constexpr uint16_t PTP_OC_GetThumb            = 0x100A;
+static constexpr uint16_t PTP_OC_GetPartialObject    = 0x101B;
 
 // PTP Response Codes (ptp.h)
 static constexpr uint16_t PTP_RC_OK                  = 0x2001;
@@ -195,6 +196,9 @@ public:
     std::vector<uint8_t> buildGetObjectInfo(uint32_t objectHandle);
     std::vector<uint8_t> buildGetThumb(uint32_t objectHandle);
     std::vector<uint8_t> buildGetObject(uint32_t objectHandle);
+    std::vector<uint8_t> buildGetPartialObject(uint32_t objectHandle,
+                                                uint32_t offset,
+                                                uint32_t maxBytes);
 
     // ---- Response handling ----
     // Process a raw USB IN transfer. Returns:

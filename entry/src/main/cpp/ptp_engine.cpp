@@ -106,6 +106,12 @@ std::vector<uint8_t> PTPEngine::buildGetObject(uint32_t objectHandle) {
     return buildCommand(PTP_OC_GetObject, {objectHandle});
 }
 
+std::vector<uint8_t> PTPEngine::buildGetPartialObject(uint32_t objectHandle,
+                                                       uint32_t offset,
+                                                       uint32_t maxBytes) {
+    return buildCommand(PTP_OC_GetPartialObject, {objectHandle, offset, maxBytes});
+}
+
 // ---- getResp: parse response container (usb.c:466) ----
 uint16_t PTPEngine::getResp(const uint8_t* data, size_t len, PTPContainer& resp) {
     if (len < 12) return 0xFFFF; // error

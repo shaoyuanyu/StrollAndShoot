@@ -1,0 +1,381 @@
+import { router } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
+const TAG = 'SwiperTest';
+const DOMAIN = 0x0001;
+
+const TOTAL = 1000;
+const COLORS: string[] = (() => {
+  const arr: string[] = [];
+  for (let i = 0; i < TOTAL; i++) {
+    const h = (i * 37) % 360;
+    const s = 0.7, l = 0.55;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+    let r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; g = x; }
+    const hex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+    arr.push(`#${hex(r)}${hex(g)}${hex(b)}`);
+  }
+  return arr;
+})();
+const DISPLAY_COUNT = 9;
+const HALF = Math.floor(DISPLAY_COUNT / 2);
+const DISPLAY_TOTAL = TOTAL + HALF * 2;
+
+function buildIndices(): number[] {
+  const arr: number[] = [];
+  for (let i = 0; i < DISPLAY_TOTAL; i++) { arr.push(i); }
+  return arr;
+}
+const DISPLAY_INDICES = buildIndices();
+
+function isPlaceholder(displayIdx: number): boolean {
+  return displayIdx < HALF || displayIdx >= HALF + TOTAL;
+}
+
+function toReal(displayIdx: number): number {
+  return displayIdx - HALF;
+}
+
+@ComponentV2
+struct ThumbBlock {
+  @Param color: string = '#888';
+  @Param label: string = '';
+  @Param isPlaceholder: boolean = false;
+  @Param s: number = 1.0;
+  @Param ox: number = 0;
+  @Event onCellClick?: () => void;
+
+  build() {
+    Column() {
+      Text(this.isPlaceholder ? '' : this.label)
+        .fontSize(9).fontColor(Color.White).textAlign(TextAlign.Center)
+    }
+    .width('100%').aspectRatio(1)
+    .borderRadius(4)
+    .backgroundColor(this.isPlaceholder ? Color.Transparent : this.color)
+    .justifyContent(FlexAlign.Center)
+    .offset({ x: this.ox })
+    .scale({ x: this.s, y: this.s })
+    .animation({ duration: 200, curve: Curve.Linear })
+    .onClick(() => { if (!this.isPlaceholder) { this.onCellClick?.(); } })
+  }
+}
+
+const MAX_S = 1.3;          // center item enlarged
+const MIN_S = 1.0;          // non-center items fill slot, no visual gaps
+const ITEM_SPACE = 2;       // base layout gap
+const CENTER_OFFSET = 14;   // push neighbors away from center
+const SNAP_DURATION = 150;  // both swipers snap animation duration (ms)
+const INERTIA_THRESHOLD = 3000; // min velocity (px/s) to trigger inertial scroll
+const INERTIA_FACTOR = 150;   // velocity / factor = items to jump (smaller = more jump)
+const INERTIA_DURATION = 5000; // friction curve animation duration for inertia (ms)
+
+@Entry
+@ComponentV2
+struct SwiperSyncTestPage {
+  @Local mainIdx: number = 0;
+  @Local thumbIdx: number = 0;
+  private mainCtrl: SwiperController = new SwiperController();
+  private thumbCtrl: SwiperController = new SwiperController();
+
+  // Drag tracking
+  private _fromMain: boolean = false;
+  private _isDragging: boolean = false;
+  private _lastMainFrac: number = 0;
+  @Local _swiperWidth: number = 360; // default, updated by onAreaChange
+  @Local _thumbItemW: number = 60;
+  private _seq: number = 0;
+  @Local scaleArr: number[] = [];
+  @Local offsetArr: number[] = [];
+  @Local _inertiaAnim: boolean = false; // true = use friction curve for inertia deceleration
+  @Local _overlayVisible: boolean = true;
+  private navStack: NavPathStack = new NavPathStack();
+
+  aboutToAppear(): void {
+    this.scaleArr = new Array(DISPLAY_TOTAL).fill(MIN_S);
+    this.offsetArr = new Array(DISPLAY_TOTAL).fill(0);
+    if (DISPLAY_TOTAL > HALF) {
+      this.scaleArr[HALF] = MAX_S;
+      for (let i = 0; i < DISPLAY_TOTAL; i++) {
+        if (!isPlaceholder(i) && i !== HALF) {
+          this.offsetArr[i] = i > HALF ? CENTER_OFFSET : -CENTER_OFFSET;
+        }
+      }
+    }
+  }
+
+  private log(msg: string): void {
+    this._seq++;
+    hilog.info(DOMAIN, TAG, `[${this._seq}] ${msg}`);
+  }
+
+  private updateScales(realFrac: number): void {
+    const centerFrac = realFrac + HALF;
+    const centerIdx = Math.round(centerFrac);
+    for (let i = 0; i < DISPLAY_TOTAL; i++) {
+      if (isPlaceholder(i)) {
+        this.scaleArr[i] = 0;
+        this.offsetArr[i] = 0;
+      } else {
+        const d = i - centerIdx;
+        if (d === 0) {
+          this.scaleArr[i] = MAX_S;
+          this.offsetArr[i] = 0;
+        } else {
+          this.scaleArr[i] = MIN_S;
+          this.offsetArr[i] = d > 0 ? CENTER_OFFSET : -CENTER_OFFSET;
+        }
+      }
+    }
+  }
+
+  // ========== Main → Thumb ==========
+
+  private onMainGestureSwipe(index: number, extraInfo: SwiperAnimationEvent): void {
+    if (!this._isDragging && Math.abs(extraInfo.currentOffset) > 0.5) {
+      this._fromMain = true;
+      this._isDragging = true;
+      this._inertiaAnim = false;
+      this._lastMainFrac = this.mainIdx;
+      this.thumbCtrl.startFakeDrag();
+      this.log(`M-drag start @${this.mainIdx}`);
+    }
+
+    if (!this._isDragging) return;
+
+    const mainFrac = index - extraInfo.currentOffset / this._swiperWidth;
+    const delta = mainFrac - this._lastMainFrac;
+    this._lastMainFrac = mainFrac;
+    this.thumbCtrl.fakeDragBy(-delta * (this._thumbItemW + ITEM_SPACE));
+    this.updateScales(mainFrac);
+  }
+
+  // Track snap animation via onContentDidScroll — uses main's ACTUAL position
+  // to drive thumb position, guaranteeing sync regardless of animation duration
+  private onMainContentDidScroll(_sel: number, index: number, position: number): void {
+    if (!this._isDragging) return;
+    // mainIdx is unchanged during snap; use it to filter relevant page events
+    if (index !== this.mainIdx) return;
+    if (Math.abs(position) < 0.005) return;
+
+    const mainFrac = index - position;
+    const delta = mainFrac - this._lastMainFrac;
+    this._lastMainFrac = mainFrac;
+    this.thumbCtrl.fakeDragBy(-delta * (this._thumbItemW + ITEM_SPACE));
+    this.updateScales(mainFrac);
+  }
+
+  private onMainAnimationEnd(index: number): void {
+    this.log(`M-animEnd @${index}`);
+    if (this._isDragging) {
+      this.thumbCtrl.stopFakeDrag();
+      this._isDragging = false;
+    }
+    this._fromMain = false;
+    this._inertiaAnim = false;
+    this.mainIdx = index;
+    this.thumbIdx = index;
+    this.thumbCtrl.changeIndex(index, false);
+    this.updateScales(index);
+  }
+
+  private onMainChange(idx: number): void {
+    this.mainIdx = idx;
+    // During inertia, skip cleanup — let onMainAnimationEnd handle it
+    if (this._fromMain && !this._inertiaAnim) {
+      this._fromMain = false;
+      if (this._isDragging) {
+        this.thumbCtrl.stopFakeDrag();
+        this._isDragging = false;
+      }
+      this.thumbIdx = idx;
+      this.thumbCtrl.changeIndex(idx, false);
+      this.updateScales(idx);
+    }
+  }
+
+  // ========== Thumb → Main ==========
+
+  private onThumbGestureSwipe(index: number, extraInfo: SwiperAnimationEvent): void {
+    if (this._fromMain || this._inertiaAnim) return;
+
+    // Compute which real item is at center of thumb strip
+    const centerReal = index - extraInfo.currentOffset / (this._thumbItemW + ITEM_SPACE);
+    const clamped = Math.max(0, Math.min(Math.round(centerReal), TOTAL - 1));
+    if (clamped !== this.mainIdx) {
+      this.mainIdx = clamped;
+    }
+    // Update scales based on current drag position
+    this.updateScales(centerReal);
+  }
+
+  private onThumbAnimationStart(_index: number, targetIndex: number): void {
+    if (this._fromMain || this._inertiaAnim) return;
+    // targetIndex is the first-visible display index, which equals the center real index
+    const realTarget = Math.max(0, Math.min(targetIndex, TOTAL - 1));
+    this.mainCtrl.changeIndex(realTarget, true);
+  }
+
+  private onThumbAnimationEnd(index: number): void {
+    if (this._fromMain || this._inertiaAnim) return;
+    // index is the first-visible display index, which equals the center real index
+    const realIdx = Math.max(0, Math.min(index, TOTAL - 1));
+    this.mainIdx = realIdx;
+    this.thumbIdx = index;
+    this.updateScales(realIdx);
+  }
+
+  private onThumbChange(idx: number): void {
+    this.thumbIdx = idx;
+    if (this._fromMain || this._inertiaAnim) return;
+    const centerIdx = idx + HALF;
+    if (isPlaceholder(centerIdx)) return;
+    const realIdx = Math.max(0, Math.min(toReal(centerIdx), TOTAL - 1));
+    this.mainIdx = realIdx;
+    this.updateScales(realIdx);
+  }
+
+  // ========== Click ==========
+
+  private onThumbClick(realIdx: number): void {
+    if (realIdx === this.mainIdx) return;
+    this.log(`click ${realIdx}`);
+    this._fromMain = true;
+    // _isDragging stays false — onMainAnimationStart will skip stopFakeDrag
+    this.thumbCtrl.changeIndex(realIdx, true);
+    this.mainCtrl.changeIndex(realIdx, true);
+  }
+
+  // ========== Build ==========
+
+  @Builder
+  ThumbCell(ri: RepeatItem<number>) {
+    ThumbBlock({
+      color: COLORS[toReal(ri.item)],
+      label: `${toReal(ri.item)}`,
+      isPlaceholder: isPlaceholder(ri.item),
+      s: this.scaleArr[ri.item] ?? MIN_S,
+      ox: this.offsetArr[ri.item] ?? 0,
+      onCellClick: () => { this.onThumbClick(toReal(ri.item)); }
+    })
+  }
+
+  build() {
+    Navigation(this.navStack) {
+      Stack() {
+        // ===== Main Swiper =====
+        Swiper(this.mainCtrl) {
+          Repeat<string>(COLORS)
+            .each((ri: RepeatItem<string>) => {
+              Column() {
+                Text(`${ri.index}`).fontSize(72).fontColor(Color.White)
+              }
+              .width('100%').height('100%')
+              .backgroundColor(ri.item)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => { this._overlayVisible = !this._overlayVisible; })
+              .onAreaChange((_o: Area, n: Area) => {
+                const w = n.width as number;
+                if (w > 0) { this._swiperWidth = w; }
+              })
+            })
+            .key((_color: string, idx: number) => idx.toString())
+            .virtualScroll({ totalCount: TOTAL })
+        }
+        .index(this.mainIdx)
+        .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
+        .onContentDidScroll((s: number, i: number, p: number) => { this.onMainContentDidScroll(s, i, p); })
+        .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
+        .onChange((i: number) => { this.onMainChange(i); })
+        .cachedCount(2).loop(false).indicator(false)
+        .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear).duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
+        .width('100%').height('100%')
+
+        // ===== Thumb Swiper =====
+        Column() {
+          Blank()
+          Row() {
+            Swiper(this.thumbCtrl) {
+              Repeat<number>(DISPLAY_INDICES)
+                .each((ri: RepeatItem<number>) => {
+                  this.ThumbCell(ri)
+                })
+                .key((displayIdx: number) => displayIdx.toString())
+                .virtualScroll({ totalCount: DISPLAY_TOTAL })
+            }
+            .cachedCount(6)
+            .index(this.thumbIdx)
+            .displayCount(DISPLAY_COUNT)
+            .indicator(false).itemSpace(ITEM_SPACE)
+            .width('100%').height(this._thumbItemW).clip(false)
+            .disableSwipe(false).loop(false)
+            .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear).duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
+            .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onThumbGestureSwipe(i, e); })
+            .onAnimationStart((i: number, t: number) => { this.onThumbAnimationStart(i, t); })
+            .onAnimationEnd((i: number) => { this.onThumbAnimationEnd(i); })
+            .onChange((i: number) => { this.onThumbChange(i); })
+            .onAreaChange((_o: Area, n: Area) => {
+              const sw = n.width as number;
+              this._thumbItemW = (sw - (DISPLAY_COUNT - 1) * ITEM_SPACE) / DISPLAY_COUNT;
+            })
+            .parallelGesture(
+              PanGesture()
+                .onActionUpdate((e: GestureEvent) => {
+                  // Preemptively set _inertiaAnim to block thumb callbacks
+                  // before finger lifts, avoiding race with Swiper's internal snap
+                  const vx = e.velocityX || 0;
+                  if (Math.abs(vx) >= INERTIA_THRESHOLD && !this._inertiaAnim) {
+                    this._inertiaAnim = true;
+                  }
+                })
+                .onActionEnd((e: GestureEvent) => {
+                  const vx = e.velocityX || 0;
+                  if (Math.abs(vx) < INERTIA_THRESHOLD) {
+                    // Normal swipe — allow thumb callbacks to proceed
+                    this._inertiaAnim = false;
+                    return;
+                  }
+                  const jump = Math.max(1, Math.round(Math.abs(vx) / INERTIA_FACTOR));
+                  const step = vx > 0 ? -jump : jump;
+                  const target = Math.max(0, Math.min(this.mainIdx + step, TOTAL - 1));
+                  if (target !== this.mainIdx) {
+                    // Flatten all scales/offsets — center thumb returns to normal before scroll
+                    for (let i = 0; i < DISPLAY_TOTAL; i++) {
+                      this.scaleArr[i] = isPlaceholder(i) ? 0 : MIN_S;
+                      this.offsetArr[i] = 0;
+                    }
+                    this._fromMain = true;
+                    this.thumbCtrl.changeIndex(target, true);
+                    this.mainCtrl.changeIndex(target, true);
+                  } else {
+                    this._inertiaAnim = false;
+                  }
+                })
+            )
+          }
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        }
+        .width('100%').height('100%')
+        .hitTestBehavior(HitTestMode.Transparent)
+        .visibility(this._overlayVisible ? Visibility.Visible : Visibility.Hidden)
+        .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
+      }
+      .width('100%').height('100%')
+      .backgroundColor(Color.Black)
+    }
+  .hideTitleBar(!this._overlayVisible)
+  .title('', { barStyle: BarStyle.STACK, backgroundBlurStyle: BlurStyle.COMPONENT_THICK })
+  .titleMode(NavigationTitleMode.Mini)
+  .hideBackButton(false)
+}
+}

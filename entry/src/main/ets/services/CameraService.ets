@@ -1,9 +1,10 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
-import { util } from '@kit.ArkTS';
+import { util, taskpool } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
+import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
 import { PtpSession, setPtpLog } from '../pages/PtpHost';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -13,22 +14,60 @@ import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } fro
 const DOMAIN = 0x0000;
 const TAG = 'CameraService';
 
+// ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
+
+class OrientationTransform {
+  rotate: number = 0;
+  flipH: boolean = false;
+  flipV: boolean = false;
+  constructor(rotate: number = 0, flipH: boolean = false, flipV: boolean = false) {
+    this.rotate = rotate;
+    this.flipH = flipH;
+    this.flipV = flipV;
+  }
+}
+
+class OrientedSize {
+  w: number = 0;
+  h: number = 0;
+  constructor(w: number = 0, h: number = 0) {
+    this.w = w;
+    this.h = h;
+  }
+}
+
+class DecodedPhotoResult {
+  pixelMap: image.PixelMap;
+  displayW: number;
+  displayH: number;
+  constructor(pixelMap: image.PixelMap, displayW: number, displayH: number) {
+    this.pixelMap = pixelMap;
+    this.displayW = displayW;
+    this.displayH = displayH;
+  }
+}
+
+@ObservedV2
 export class CameraService {
   private static instance: CameraService;
   private session: PtpSession = new PtpSession();
   private log: AppLog = new AppLog();
 
   // State
-  statusText: string = '就绪';
-  cameraName: string = '';
-  photoCount: number = 0;
-  photos: PhotoEntry[] = [];
-  scanning: boolean = false;
-  connected: boolean = false;
+  @Trace statusText: string = '就绪';
+  @Trace cameraName: string = '';
+  @Trace photoCount: number = 0;
+  @Trace photos: PhotoEntry[] = [];
+  @Trace scanning: boolean = false;
+  @Trace connected: boolean = false;
 
   // Thumbnail cache
   thumbnailPixelMapMap: Map<number, image.PixelMap> = new Map();
   thumbnailLoadedSet: Set<number> = new Set();
+  @Trace thumbnailVersion: number = 0;
+
+  // Orientation-corrected display dimensions (populated during thumbnail/full decode)
+  orientedDisplaySizes: Map<number, OrientedSize> = new Map();
 
   // Full-resolution compressed cache for preloading
   private compressedCache: Map<number, Uint8Array> = new Map();
@@ -41,11 +80,239 @@ export class CameraService {
   private preloading: boolean = false;
 
   // Scan progress
-  scanProgress: number = 0;
-  scanTotal: number = 0;
+  @Trace scanProgress: number = 0;
+  @Trace scanTotal: number = 0;
 
   // Format filter support detection (cached across directory levels)
   private formatFilterWorks: boolean | null = null;
+
+  // Orientation cache (EXIF Orientation → rotate/flipH/flipV)
+  private orientationMap: Map<number, OrientationTransform> = new Map();
+
+  // Orientations pre-loaded via GetPartialObject during scan, used to
+  // apply correct rotate/flip at first thumbnail decode (no re-decode needed).
+  private preloadedOrientations: Map<number, OrientationTransform> = new Map();
+
+  // Original photo dimensions read from EXIF during scan (via GetPartialObject).
+  // Used to compute precise thumbnail content area for black-bar-free cropping.
+  private exifOrigDims: Map<number, OrientedSize> = new Map();
+
+  /**
+   * Map EXIF Orientation value (1–8) to DecodingOptions rotation + pixelMap flip.
+   * Reference: https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/image-rotate-faq
+   *
+   * HarmonyOS getImageProperty(PropertyKey.ORIENTATION) returns the string name
+   * (e.g. "Top-left"), not the numeric string. Both formats are handled here for safety.
+   */
+  private static mapExifOrientation(orientation: string): OrientationTransform {
+    switch (orientation) {
+      // String names (HarmonyOS getImageProperty return value)
+      case 'Top-left':     return new OrientationTransform(0, false, false);
+      case 'Top-right':    return new OrientationTransform(0, true, false);
+      case 'Bottom-right': return new OrientationTransform(180, false, false);
+      case 'Bottom-left':  return new OrientationTransform(0, false, true);
+      case 'Left-top':     return new OrientationTransform(90, true, false);
+      case 'Right-top':    return new OrientationTransform(90, false, false);
+      case 'Right-bottom': return new OrientationTransform(270, true, false);
+      case 'Left-bottom':  return new OrientationTransform(270, false, false);
+      // Numeric strings (fallback for other implementations)
+      case '1': return new OrientationTransform(0, false, false);
+      case '2': return new OrientationTransform(0, true, false);
+      case '3': return new OrientationTransform(180, false, false);
+      case '4': return new OrientationTransform(0, false, true);
+      case '5': return new OrientationTransform(90, true, false);
+      case '6': return new OrientationTransform(90, false, false);
+      case '7': return new OrientationTransform(270, true, false);
+      case '8': return new OrientationTransform(270, false, false);
+      // Unknown / unsupported → no transform
+      default:
+        return new OrientationTransform(0, false, false);
+    }
+  }
+
+  /**
+   * Manually parse EXIF TIFF structure from raw JPEG data to extract
+   * original image dimensions (ImageWidth/ImageLength).
+   * The getImageProperty API fails for these tags (error 62980123).
+   */
+  private static parseExifDims(data: ArrayBuffer): OrientedSize | null {
+    const bytes = new Uint8Array(data);
+    if (bytes.length < 20) {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] data too short: %{public}d', bytes.length);
+      return null;
+    }
+
+    // Locate TIFF header: either at start (RAW/TIFF) or after JPEG APP1 Exif marker.
+    let off = 0;
+    const isTiff = (bytes[0] === 0x49 && bytes[1] === 0x49) || (bytes[0] === 0x4D && bytes[1] === 0x4D);
+    if (!isTiff) {
+      // Must be JPEG — find APP1/Exif marker
+      if (bytes[0] !== 0xFF || bytes[1] !== 0xD8) {
+        return null; // not a recognized format
+      }
+      const foundApp1 = false;
+      while (off < bytes.length - 14) {
+        if (bytes[off] === 0xFF && bytes[off + 1] === 0xE1) {
+          const app1Size = (bytes[off + 2] << 8) | bytes[off + 3];
+          // Check "Exif\0\0" identifier
+          if (off + 6 <= bytes.length &&
+              bytes[off + 4] === 0x45 && bytes[off + 5] === 0x78 &&
+              bytes[off + 6] === 0x69 && bytes[off + 7] === 0x66 &&
+              bytes[off + 8] === 0x00 && bytes[off + 9] === 0x00) {
+            off += 10; // skip to TIFF header
+            break;
+          }
+          // Skip to next marker (even if APP1 exceeds buffer, we already
+          // checked the Exif\0\0 identifier above)
+          off += 2 + app1Size;
+        } else if (bytes[off] === 0xFF && bytes[off + 1] >= 0xE0 && bytes[off + 1] <= 0xEF) {
+          const skip = (bytes[off + 2] << 8) | bytes[off + 3];
+          off += 2 + (skip || 2);
+        } else {
+          off++;
+        }
+      }
+      if (off >= bytes.length - 14) return null;
+    }
+    // Now `off` points to TIFF header (II\0x2A\0 or MM\0x00\x2A)
+
+    // Determine byte order: "II" (little-endian) or "MM" (big-endian)
+    const le = (bytes[off] === 0x49 && bytes[off + 1] === 0x49);
+    const be = (bytes[off] === 0x4D && bytes[off + 1] === 0x4D);
+    if (!le && !be) {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] unknown byte order: b0=%{public}d b1=%{public}d', bytes[off], bytes[off + 1]);
+      return null;
+    }
+
+    // Helper: read 2 bytes at offset p
+    const r16 = (p: number): number => {
+      if (p + 2 > bytes.length) return 0;
+      return le ? (bytes[p] | (bytes[p + 1] << 8)) : ((bytes[p] << 8) | bytes[p + 1]);
+    };
+    // Helper: read 4 bytes at offset p
+    const r32 = (p: number): number => {
+      if (p + 4 > bytes.length) return 0;
+      if (le) return bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24);
+      return (bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
+    };
+
+    // Validate TIFF magic 0x002A
+    if (r16(off + 2) !== 0x002A) return null;
+
+    // IFD0 offset is relative to start of TIFF header
+    const ifd0Off = off + r32(off + 4);
+
+    let imgW = 0, imgH = 0;
+    let exifIfdOff = 0;
+
+    // Parse IFD0 entries (12 bytes each)
+    const entryCount = r16(ifd0Off);
+    if (isTiff) {
+      for (let di = 0; di < entryCount && ifd0Off + 2 + di * 12 + 10 <= bytes.length; di++) {
+        const eBase = ifd0Off + 2 + di * 12;
+        const tag = r16(eBase);
+        const typ = r16(eBase + 2);
+        const cnt = r32(eBase + 4);
+        const val = r32(eBase + 8);
+        hilog.info(DOMAIN, TAG, '[EXIF_PARSE] IFD0[%{public}d] tag=0x%{public}s typ=%{public}d cnt=%{public}d val=%{public}d',
+          di, tag.toString(16), typ, cnt, val);
+      }
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] RAW IFD0 entries=%{public}d', entryCount);
+    }
+    for (let i = 0; i < entryCount; i++) {
+      const eOff = ifd0Off + 2 + i * 12;
+      if (eOff + 12 > bytes.length) break;
+      const tag = r16(eOff);
+      const typ = r16(eOff + 2);
+      if (tag === 0x0100) { // ImageWidth in IFD0
+        imgW = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+      } else if (tag === 0x0101) { // ImageLength in IFD0
+        imgH = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+      } else if (tag === 0x8769) { // ExifIFD pointer
+        exifIfdOff = off + r32(eOff + 8);
+      } else if (tag === 0x014A) { // SubIFD — beyond 192KB USB limit, skip
+      } else if (tag === 0x0201) { // JPEGInterchangeFormat (embedded JPEG offset)
+        if (imgW === 0 || imgH === 0) {
+          // Parse the embedded JPEG preview's SOF marker for dimensions
+          const jpegOff = off + r32(eOff + 8);
+          if (jpegOff + 4 < bytes.length && bytes[jpegOff] === 0xFF && bytes[jpegOff + 1] === 0xD8) {
+            // Scan JPEG markers for SOF (0xFFC0, 0xFFC1, 0xFFC2)
+            let sp = jpegOff + 2;
+            while (sp + 8 < bytes.length) {
+              if (bytes[sp] !== 0xFF) break;
+              const marker = bytes[sp + 1];
+              if (marker >= 0xC0 && marker <= 0xC3) {
+                imgH = (bytes[sp + 5] << 8) | bytes[sp + 6];
+                imgW = (bytes[sp + 7] << 8) | bytes[sp + 8];
+                break;
+              }
+              const segLen = (bytes[sp + 2] << 8) | bytes[sp + 3];
+              sp += 2 + segLen;
+            }
+          }
+        }
+      }
+    }
+
+    if (imgW > 0 && imgH > 0) {
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] IFD0/SubIFD found %{public}dx%{public}d', imgW, imgH);
+      return new OrientedSize(imgW, imgH);
+    }
+
+    // Try ExifIFD sub-directory
+    if (exifIfdOff > 0 && exifIfdOff + 2 <= bytes.length) {
+      const exifCount = r16(exifIfdOff);
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] ExifIFD at 0x%{public}x entries=%{public}d', exifIfdOff, exifCount);
+      for (let i = 0; i < exifCount; i++) {
+        const eOff = exifIfdOff + 2 + i * 12;
+        if (eOff + 12 > bytes.length) break;
+        const tag = r16(eOff);
+        const typ = r16(eOff + 2);
+        if (tag === 0xA002) { // ExifImageWidth
+          imgW = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+        } else if (tag === 0xA003) { // ExifImageLength
+          imgH = (typ === 3) ? r16(eOff + 8) : r32(eOff + 8);
+        }
+      }
+    } else {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] no ExifIFD pointer (tag 0x8769) in IFD0');
+    }
+
+    if (imgW > 0 && imgH > 0) {
+      hilog.info(DOMAIN, TAG, '[EXIF_PARSE] ExifIFD found %{public}dx%{public}d', imgW, imgH);
+      return new OrientedSize(imgW, imgH);
+    }
+    hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] failed IFD0 W=%{public}d H=%{public}d exifOff=%{public}d', imgW, imgH, exifIfdOff);
+    return null;
+  }
+
+  /**
+   * Read EXIF Orientation from raw image data and return the corresponding transform.
+   * Caches result by handle so subsequent decodes skip re-parsing.
+   */
+  private async getOrientation(handle: number, data: ArrayBuffer): Promise<OrientationTransform> {
+    if (this.orientationMap.has(handle)) {
+      return this.orientationMap.get(handle)!;
+    }
+    try {
+      const imgSrc = image.createImageSource(data);
+      const orientation = await imgSrc.getImageProperty(image.PropertyKey.ORIENTATION);
+      imgSrc.release();
+      hilog.info(DOMAIN, TAG, `[ORIENT] handle=0x%{public}s raw="%{public}s"`, handle.toString(16), orientation);
+      const result = CameraService.mapExifOrientation(orientation);
+      hilog.info(DOMAIN, TAG, `[ORIENT] handle=0x%{public}s → rotate=%{public}d flipH=%{public}s flipV=%{public}s`,
+        handle.toString(16), result.rotate, result.flipH.toString(), result.flipV.toString());
+      this.orientationMap.set(handle, result);
+      return result;
+    } catch (err) {
+      // No EXIF / unsupported format → treat as normal
+      hilog.error(DOMAIN, TAG, `[ORIENT] getOrientation FAIL handle=0x%{public}s err=%{public}s`,
+        handle.toString(16), JSON.stringify(err));
+      const result = new OrientationTransform(0, false, false);
+      this.orientationMap.set(handle, result);
+      return result;
+    }
+  }
 
   // Download registry — persisted across sessions
   private downloadRegistry: Map<string, DownloadRecord> = new Map();
@@ -53,8 +320,9 @@ export class CameraService {
   private downloadAborted: boolean = false;
   private registryLoaded: boolean = false;
 
-  // Change callback
-  onChange: () => void = () => {};
+  // Change tracking
+  @Trace registryVersion: number = 0;
+  @Trace photosVersion: number = 0;
 
   static getInstance(): CameraService {
     if (!CameraService.instance) {
@@ -98,6 +366,8 @@ export class CameraService {
     return false;
   }
 
+  @Trace downloadedCount: number = 0;
+
   getDownloadedKeys(): string[] {
     const keys: string[] = [];
     for (const p of this.photos) {
@@ -106,6 +376,7 @@ export class CameraService {
         keys.push(k);
       }
     }
+    this.downloadedCount = keys.length;
     return keys;
   }
 
@@ -406,6 +677,7 @@ export class CameraService {
         this.downloadRegistry.set(k, obj[k]);
       }
       this.log.add(`加载下载记录: ${this.downloadRegistry.size} 条`);
+    this.registryVersion++;
     } catch (_e) {
       // File doesn't exist yet — registry stays empty
     }
@@ -455,14 +727,9 @@ export class CameraService {
         fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
       await fileIo.write(f.fd, text);
       await fileIo.close(f);
+    this.registryVersion++;
     } catch (err) {
       this.log.add(`保存下载记录失败: ${JSON.stringify(err)}`);
-    }
-  }
-
-  private notify(): void {
-    if (this.onChange) {
-      this.onChange();
     }
   }
 
@@ -470,10 +737,9 @@ export class CameraService {
     this.scanning = true;
     this.log.clear();
     this.log.add('=== 开始扫描 ===');
-    this.notify();
 
     this.statusText = '正在搜索USB相机...';
-    this.notify();
+
 
     try {
       const cameras = PtpSession.findCameras();
@@ -482,7 +748,7 @@ export class CameraService {
         this.connected = false;
         this.cameraName = '';
         this.scanning = false;
-        this.notify();
+
         return;
       }
 
@@ -495,9 +761,13 @@ export class CameraService {
         this.photoCount = 0;
         this.thumbnailPixelMapMap.clear();
         this.thumbnailLoadedSet.clear();
+        this.preloadedOrientations.clear();
+        this.exifOrigDims.clear();
+        this.orientationMap.clear();
+        this.orientedDisplaySizes.clear();
         this.clearFullCache();
         this.statusText = '已连接';
-        this.notify();
+
       } else {
         // Different camera or first connect
         if (this.connected) {
@@ -505,14 +775,14 @@ export class CameraService {
         }
 
         this.statusText = `发现相机: ${cameras[0].productName}`;
-        this.notify();
+    
 
         const ok = await this.session.connect(cameras[0]);
         if (!ok) {
           this.statusText = '连接相机失败';
           this.connected = false;
           this.scanning = false;
-          this.notify();
+      
           return;
         }
 
@@ -520,7 +790,7 @@ export class CameraService {
                           cameras[0].name;
         this.statusText = '已连接';
         this.connected = true;
-        this.notify();
+
       }
 
       await this.loadPhotosAndThumbnails();
@@ -533,7 +803,7 @@ export class CameraService {
       this.connected = false;
     } finally {
       this.scanning = false;
-      this.notify();
+
     }
   }
 
@@ -616,7 +886,7 @@ export class CameraService {
     this.photoCount = 0;
     this.scanProgress = 0;
     this.scanTotal = 0;
-    this.notify();
+
 
     try {
       const storageIDs = await this.session.getStorageIDs();
@@ -626,29 +896,31 @@ export class CameraService {
         this.photoCount = 0;
         this.photos = [];
         this.statusText = '已连接 (无存储设备)';
-        this.notify();
+    
         return;
       }
 
       // ---- Phase 1: traverse directories (2 getObjectHandles per level) ----
       this.statusText = '正在遍历目录...';
       this.formatFilterWorks = null; // re-detect for this connection
-      this.notify();
+  
 
-      const handles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0,
+      const allHandles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0,
         (count: number) => {
           this.photoCount += count;
-          this.notify();
+      
         });
+      // TEST: only load first 150 photos
+      const handles = allHandles.slice(0, 150);
 
-      hilog.info(DOMAIN, TAG, `ObjectHandles total: ${handles.length}`);
+      hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}, limited to: ${handles.length}`);
 
       // ---- Phase 2: getObjectInfo + getThumb in a single pass ----
       this.log.add(`开始加载 ${handles.length} 张照片...`);
       this.scanProgress = 0;
       this.scanTotal = handles.length;
       this.statusText = '正在加载照片...';
-      this.notify();
+  
 
       const decodeJobs: Promise<void>[] = [];
       const photoList: PhotoEntry[] = [];
@@ -670,22 +942,118 @@ export class CameraService {
           });
         }
 
+        // Fetch thumbnail raw data first
+        let thumbData: Uint8Array | null = null;
         if (!this.thumbnailLoadedSet.has(h)) {
-          const data = await this.session.getThumb(h);
-          if (data && data.length > 0) {
-            decodeJobs.push(this.decodeThumbnail(h, data));
+          thumbData = await this.session.getThumb(h);
+        }
+
+        // Pre-read first 16KB via GetPartialObject to extract EXIF Orientation
+        // and original image dimensions (ImageWidth/ImageLength).
+        // If the camera doesn't support GetPartialObject, this gracefully fails
+        // and the thumbnail will decode without orientation correction.
+        const partial = await this.session.getPartialObject(h, 0, 16384);
+        if (partial && partial.length > 0) {
+          try {
+            const orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
+            if (orient.rotate !== 0 || orient.flipH || orient.flipV) {
+              this.preloadedOrientations.set(h, orient);
+              hilog.info(DOMAIN, TAG, `[PARTIAL_ORIENT] handle=0x%{public}s rotate=%{public}d flipH=%{public}s flipV=%{public}s`,
+                h.toString(16), orient.rotate, orient.flipH.toString(), orient.flipV.toString());
+            }
+            // Use manual EXIF parsing (faster than getImageInfo, works on 16KB)
+            const parsed = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
+            if (parsed) {
+              this.exifOrigDims.set(h, parsed);
+              this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} parsed=${parsed.w}x${parsed.h}`);
+            }
+            // Dump IFD0 + NextIFD chain to persistent log for diagnosis (RAW/tiff only)
+            if (partial && partial.length > 12) {
+              const raw = new Uint8Array(partial.buffer as ArrayBuffer);
+              if ((raw[0] === 0x49 && raw[1] === 0x49) || (raw[0] === 0x4D && raw[1] === 0x4D)) {
+                const le = (raw[0] === 0x49);
+                const r16 = (p: number) => (p + 2 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8)) : ((raw[p] << 8) | raw[p+1]);
+                const r32 = (p: number) => (p + 4 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8) | (raw[p+2] << 16) | (raw[p+3] << 24)) : ((raw[p] << 24) | (raw[p+1] << 16) | (raw[p+2] << 8) | raw[p+3]);
+                if (r16(2) === 0x002A) {
+                  const tiffBase = r32(4); // IFD0 offset is absolute from TIFF header start
+                  let nextOff = tiffBase;
+                  let ifdIdx = 0;
+                  while (nextOff > 0 && nextOff + 2 < raw.length && ifdIdx < 5) {
+                    const eCnt = r16(nextOff);
+                    const nxt = r32(nextOff + 2 + eCnt * 12); // NextIFD offset (absolute)
+                    let ifdDump = '';
+                    for (let di = 0; di < eCnt && nextOff + 2 + di * 12 + 10 < raw.length; di++) {
+                      const b = nextOff + 2 + di * 12;
+                      const tag = r16(b);
+                      if (di > 0) ifdDump += ';';
+                      ifdDump += `t0x${tag.toString(16)}:T${r16(b+2)}:C${r32(b+4)}:V${r32(b+8)}`;
+                    }
+                    this.log.add(`[IFD_CHAIN] handle=0x${h.toString(16)} IFD#${ifdIdx} off=${nextOff} entries=${eCnt} next=${nxt} ${ifdDump}`);
+                    nextOff = nxt;
+                    ifdIdx++;
+                  }
+                  // SubIFD fallback: scan IFD0 for 0x014A, parse offset array,
+                  // fetch SubIFD via second GetPartialObject to read 0x0100/0x0101
+                  if (!this.exifOrigDims.has(h)) {
+                    const ifd0Off = tiffBase;
+                    const eCnt = r16(ifd0Off);
+                    for (let i = 0; i < eCnt && ifd0Off + 2 + (i+1) * 12 <= raw.length; i++) {
+                      const b = ifd0Off + 2 + i * 12;
+                      if (r16(b) === 0x014A && r16(b+2) === 4) {
+                        const cnt = r32(b+4);
+                        const arrOff = r32(b+8);
+                        if (cnt > 0 && arrOff > 0 && arrOff + cnt * 4 <= raw.length) {
+                          for (let si = 0; si < cnt; si++) {
+                            const subOff = r32(arrOff + si * 4);
+                            if (subOff < 100) continue;
+                            try {
+                              const sub = await this.session.getPartialObject(h, subOff, 8192);
+                              if (sub && sub.length > 20) {
+                                const sr = new Uint8Array(sub.buffer as ArrayBuffer);
+                                const scnt = le ? (sr[0] | (sr[1] << 8)) : ((sr[0] << 8) | sr[1]);
+                                let sw = 0, sh = 0;
+                                for (let j = 0; j < scnt && 2 + (j+1) * 12 <= sr.length; j++) {
+                                  const sb = 2 + j * 12;
+                                  const stag = le ? (sr[sb] | (sr[sb+1] << 8)) : ((sr[sb] << 8) | sr[sb+1]);
+                                  const sv = le ? (sr[sb+8] | (sr[sb+9] << 8) | (sr[sb+10] << 16) | (sr[sb+11] << 24))
+                                              : ((sr[sb+8] << 24) | (sr[sb+9] << 16) | (sr[sb+10] << 8) | sr[sb+11]);
+                                  if (stag === 0x0100) sw = sv;
+                                  if (stag === 0x0101) sh = sv;
+                                }
+                                if (sw > 100 && sh > 100) {
+                                  this.exifOrigDims.set(h, new OrientedSize(sw, sh));
+                                  this.log.add(`[SUBIFD_DIMS] handle=0x${h.toString(16)} idx=${si} off=${subOff} ${sw}x${sh}`);
+                                  break; // found dimensions, stop iterating SubIFDs
+                                }
+                              }
+                            } catch (_eSub) { /* try next SubIFD */ }
+                          }
+                        }
+                        break; // found 0x014A, stop iterating IFD0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          } catch (_e) {
+            // Not supported / data incomplete — skip orientation
           }
         }
 
-        this.scanProgress = i + 1;
-        if ((i + 1) % 3 === 0 || i === handles.length - 1) {
-          this.notify();
+        // Decode thumbnail AFTER preloadedOrientations is populated
+        if (thumbData && thumbData.length > 0) {
+          decodeJobs.push(this.decodeThumbnail(h, thumbData));
         }
+
+        this.scanProgress = i + 1;
       }
 
       this.photos = photoList;
+      this.photosVersion++;
 
       await Promise.all(decodeJobs);
+      this.thumbnailVersion++;
       this.log.add('缩略图加载完成');
 
       this.statusText = `已连接 - ${this.photoCount} 张照片`;
@@ -695,7 +1063,7 @@ export class CameraService {
     } finally {
       this.scanProgress = 0;
       this.scanTotal = 0;
-      this.notify();
+  
     }
   }
 
@@ -705,6 +1073,7 @@ export class CameraService {
       const data = await this.session.getThumb(handle);
       if (data && data.length > 0) {
         await this.decodeThumbnail(handle, data);
+        this.thumbnailVersion++;
       }
     } catch (err) {
       this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
@@ -713,17 +1082,47 @@ export class CameraService {
 
   private async decodeThumbnail(handle: number, data: Uint8Array): Promise<void> {
     try {
-      const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
-      const pixelMap = await imageSource.createPixelMap();
-      this.thumbnailPixelMapMap.set(handle, pixelMap);
-      this.thumbnailLoadedSet.add(handle);
-      imageSource.release();
+      const orient = this.preloadedOrientations.get(handle);
+      const exifDim = this.exifOrigDims.get(handle);
+
+      // 为 TaskPool 复制一份 ArrayBuffer（源数据不会被缓存，直接转移所有权）
+      const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+
+      const task = new taskpool.Task(
+        decodeThumbnailTask,
+        decodeBuf,
+        orient?.rotate ?? 0,
+        orient?.flipH ?? false,
+        orient?.flipV ?? false,
+        exifDim?.w ?? 0,
+        exifDim?.h ?? 0
+      );
+
+      try {
+        const pixelMap = await taskpool.execute(task) as image.PixelMap;
+        const info = await pixelMap.getImageInfo();
+        this.thumbnailPixelMapMap.set(handle, pixelMap);
+        this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
+        this.thumbnailLoadedSet.add(handle);
+        const msg = `[TASKPOOL_THUMB] handle=0x${handle.toString(16)} done ${info.size.width}x${info.size.height}`;
+        hilog.info(DOMAIN, TAG, '%{public}s', msg);
+        this.log.add(msg);
+      } catch (err) {
+        hilog.error(DOMAIN, TAG, `[TASKPOOL_THUMB] FAIL handle=0x%{public}s err=%{public}s`,
+          handle.toString(16), JSON.stringify(err));
+        this.log.add(`缩略图解码失败(worker): handle=0x${handle.toString(16)}`);
+      }
     } catch (err) {
-      this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
+      hilog.error(DOMAIN, TAG, `[THUMB_SUBMIT] FAIL handle=0x%{public}s err=%{public}s`,
+        handle.toString(16), JSON.stringify(err));
+      this.log.add(`缩略图提交失败: handle=0x${handle.toString(16)}`);
     }
   }
 
-  async loadFullPhoto(handle: number): Promise<image.PixelMap | null> {
+  // (redecodeThumbnailWithOrientation removed — orientation is now applied
+  // at initial thumbnail decode via preloadedOrientations)
+
+  async loadFullPhoto(handle: number): Promise<DecodedPhotoResult | null> {
     try {
       const t0 = Date.now();
       let data: Uint8Array | null = null;
@@ -766,16 +1165,87 @@ export class CameraService {
         this.addToCache(handle, data);
       }
 
-      const imageSource = image.createImageSource(data.buffer as ArrayBuffer);
-      const pixelMap = await imageSource.createPixelMap();
-      imageSource.release();
+      // 读取 EXIF 方向（主线程读取元数据，很快）
+      const orient = await this.getPhotoOrientation(handle, data.buffer as ArrayBuffer);
+
+      // 为 TaskPool 克隆一份 ArrayBuffer，主线程保留原始数据用于缓存
+      const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+
+      const task = new taskpool.Task(
+        decodeFullPhotoTask,
+        decodeBuf,
+        orient.rotate,
+        orient.flipH,
+        orient.flipV
+      );
+
+      let pixelMap: image.PixelMap;
+      try {
+        pixelMap = await taskpool.execute(task) as image.PixelMap;
+      } catch (err) {
+        this.log.add(`全尺寸解码失败(worker): handle=0x${handle.toString(16)}`);
+        return null;
+      }
+
       const t2 = Date.now();
       const tag = hit ? '缓存命中' : '下载完成';
       this.log.add(`${tag}: ${((t2 - t0) / 1000).toFixed(1)}s`);
-      return pixelMap;
+
+      // 读取旋转后的实际尺寸
+      const info = await pixelMap.getImageInfo();
+      const displayW = info.size.width;
+      const displayH = info.size.height;
+      this.orientedDisplaySizes.set(handle, new OrientedSize(displayW, displayH));
+
+      return new DecodedPhotoResult(pixelMap, displayW, displayH);
     } catch (err) {
       this.log.add(`全尺寸加载失败: handle=0x${handle.toString(16)}`);
       return null;
+    }
+  }
+
+  /**
+   * Read EXIF orientation from full photo data. Unlike thumbnails, full-resolution
+   * camera files (JPEG/RAW) contain EXIF metadata with the Orientation tag.
+   * Falls back to cached orientation (from a prior thumbnail decode) if available.
+   */
+  private async getPhotoOrientation(handle: number, data: ArrayBuffer): Promise<OrientationTransform> {
+    // Check cache first (might have been populated by a prior full decode)
+    if (this.orientationMap.has(handle)) {
+      const cached = this.orientationMap.get(handle)!;
+      if (cached.rotate !== 0 || cached.flipH || cached.flipV) {
+        return cached;
+      }
+    }
+    try {
+      const imgSrc = image.createImageSource(data);
+      const orientation = await imgSrc.getImageProperty(image.PropertyKey.ORIENTATION);
+      imgSrc.release();
+      hilog.info(DOMAIN, TAG, `[ORIENT] full res handle=0x%{public}s raw="%{public}s"`,
+        handle.toString(16), orientation);
+      const result = CameraService.mapExifOrientation(orientation);
+      this.orientationMap.set(handle, result);
+      return result;
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, `[ORIENT] full res FAIL handle=0x%{public}s err=%{public}s`,
+        handle.toString(16), JSON.stringify(err));
+      // Fallback: use cached value or default
+      const result = new OrientationTransform(0, false, false);
+      this.orientationMap.set(handle, result);
+      return result;
+    }
+  }
+
+  /**
+   * Read the actual pixelMap dimensions and cache them (post-rotation/flip).
+   * For 90°/270° rotation the display aspect ratio is swapped vs PTP ObjectInfo.
+   */
+  private async cacheOrientedSize(handle: number, pixelMap: image.PixelMap, _orient: OrientationTransform): Promise<void> {
+    try {
+      const info = await pixelMap.getImageInfo();
+      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
+    } catch (_err) {
+      // Fallback: skip — ZoomableImage will use PTP ObjectInfo dimensions
     }
   }
 
@@ -889,10 +1359,13 @@ export class CameraService {
     this.photos = [];
     this.thumbnailPixelMapMap.clear();
     this.thumbnailLoadedSet.clear();
+    this.preloadedOrientations.clear();
+    this.exifOrigDims.clear();
+    this.orientationMap.clear();
+    this.orientedDisplaySizes.clear();
     this.clearFullCache();
     this.statusText = '已断开连接';
     this.log.add('已断开连接');
-    this.notify();
   }
 
   formatSize(bytes: number): string {
