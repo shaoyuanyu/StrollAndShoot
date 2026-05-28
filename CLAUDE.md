@@ -262,3 +262,50 @@ When you need API reference, guides, or system interfaces, use Playwright to bro
 ### Test workflow for camera-required features
 
 After any code change that involves camera/USB interaction: build → deploy → tell user what changed → user disconnects phone from PC, connects to camera, tests → user reports results → user reconnects phone to PC → check hilog for debug info. Do NOT assume gestures or camera features work until confirmed on actual camera hardware.
+
+## 版本管理
+
+agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版本号。版本号定义在 `AppScope/app.json5` 中：
+
+```json5
+{
+  "app": {
+    "versionName": "1.1.0",  // 语义化版本字符串
+    "versionCode": 1001000,   // 整数编码，用于程序化比较
+  }
+}
+```
+
+### 版本号规则
+
+采用语义化版本（SemVer）：`MAJOR.MINOR.PATCH`
+
+| 分段 | 何时递增 | 示例 |
+|------|----------|------|
+| **MAJOR** | 不兼容的 API / 行为变更（极少发生） | `1.1.0` → `2.0.0` |
+| **MINOR** | 新增功能（向后兼容） | `1.1.0` → `1.2.0` |
+| **PATCH** | Bug 修复（向后兼容） | `1.1.0` → `1.1.1` |
+
+### versionCode 编码规则
+
+`versionCode = MAJOR * 1_000_000 + MINOR * 1_000 + PATCH`
+
+例如 `1.2.3` → `1_002_003` → `1002003`。
+
+### 操作步骤
+
+每次 agent 完成代码变更后，在最终确认前必须执行：
+
+1. **判断变更类型**：新增功能 → MINOR；修复 bug → PATCH；破坏性变更 → MAJOR（极少）
+2. **读取** `AppScope/app.json5` 中的当前 `versionName` 和 `versionCode`
+3. **解析**当前 `versionName` 得到 `MAJOR.MINOR.PATCH`
+4. **递增**对应分段，低分段归零（如 MINOR+1 则 PATCH 归零）
+5. **计算**新的 `versionCode`
+6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`
+
+### 重要约束
+
+- 不允许同时递增多个分段。一次变更只递增一个分段。
+- 如果一次提交同时包含新功能和 bug 修复，按 MINOR 处理。
+- 纯文档/注释/重构（无行为变化）不更新版本号。
+- 版本更新与代码变更在同一轮编辑中完成，不需要额外的提交或沟通。
