@@ -150,9 +150,6 @@ USB communication core (see "Key Modules" below).
 |-----------|----------|---------|
 | `ConnectionStatusBar` | [components/ConnectionStatusBar.ets](entry/src/main/ets/components/ConnectionStatusBar.ets) | Compact (gallery header) and full (camera page) connection status display |
 | `SelectionActionBar` | [components/SelectionActionBar.ets](entry/src/main/ets/components/SelectionActionBar.ets) | Bottom bar with selected count, cancel, and download buttons |
-| `FilterBar` | components/FilterBar.ets | Format filter chip row (unused, logic inlined in GalleryPage) |
-| `PhotoGridCell` | components/PhotoGridCell.ets | Individual photo cell (unused, logic inlined in GalleryPage) |
-| `DebugLogPanel` | components/DebugLogPanel.ets | Debug log viewer (unused, logic inlined in SettingsPage) |
 
 ## Services
 
