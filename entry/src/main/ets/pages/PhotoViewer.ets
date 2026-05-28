@@ -33,10 +33,15 @@ struct ZoomableImage {
   private imgW: number = 1;
   private imgH: number = 1;
   private pinching: boolean = false;
-  private pinchCx: number = 0.5;
-  private pinchCy: number = 0.5;
+  /** Normalized zoom center (0-1) within the image, saved at pinch start */
+  private zoomCenterX: number = 0.5;
+  private zoomCenterY: number = 0.5;
   private panEndAt: number = 0;
   private readonly PAN_DBLTAP_DEBOUNCE_MS: number = 200;
+  /** Accumulated pan offset saved when pinch is active, to prevent double-counting */
+  private accumPanOffX: number = 0;
+  private accumPanOffY: number = 0;
+  private panActive: boolean = false;
 
   @Monitor('pageKey')
   onPageChange(): void {
@@ -82,15 +87,22 @@ struct ZoomableImage {
     this.lastOffX = 0;
     this.lastOffY = 0;
     this.pinching = false;
+    this.zoomCenterX = 0.5;
+    this.zoomCenterY = 0.5;
+    this.panActive = false;
+    this.accumPanOffX = 0;
+    this.accumPanOffY = 0;
   }
 
   private applyTransform(scale: number, panOffX: number, panOffY: number): void {
     const ns = Math.max(1.0, Math.min(5.0, this.lastScale * scale));
     this.scaleVal = ns;
+    // Zoom compensation: keep the zoomCenter point fixed on screen
+    // Formula: offX = (lastOffX + panOffX) + (zoomCenterX - 0.5) * imgW * lastScale * (1 - scale)
     this.offX = (this.lastOffX + panOffX) +
-      (0.5 - this.pinchCx) * this.imgW * (1 - scale) * this.lastScale;
+      (this.zoomCenterX - 0.5) * this.imgW * (1 - scale) * this.lastScale;
     this.offY = (this.lastOffY + panOffY) +
-      (0.5 - this.pinchCy) * this.imgH * (1 - scale) * this.lastScale;
+      (this.zoomCenterY - 0.5) * this.imgH * (1 - scale) * this.lastScale;
     this.clampAndCheckEdge();
   }
 
@@ -124,15 +136,27 @@ struct ZoomableImage {
     const ih = this.imgH * this.lastScale;
     const il = (this.compW - iw) / 2 + this.lastOffX;
     const it = (this.compH - ih) / 2 + this.lastOffY;
-    const cx = iw > 0 ? Math.max(0, (e.pinchCenterX - il) / iw) : 0.5;
-    const cy = ih > 0 ? Math.max(0, (e.pinchCenterY - it) / ih) : 0.5;
-    this.pinchCx = 1 - cx;
-    this.pinchCy = 1 - cy;
+    this.zoomCenterX = iw > 0 ? Math.max(0, Math.min(1, (e.pinchCenterX - il) / iw)) : 0.5;
+    this.zoomCenterY = ih > 0 ? Math.max(0, Math.min(1, (e.pinchCenterY - it) / ih)) : 0.5;
   }
 
   private onPinchUpdate(e: GestureEvent): void {
     if (!e) return;
-    this.applyTransform(e.scale, e.offsetX, e.offsetY);
+    // Compute new scale
+    const ns = Math.max(1.0, Math.min(5.0, this.lastScale * e.scale));
+    this.scaleVal = ns;
+    // Compute offset directly from pinchCenter (screen-space absolute position)
+    // This follows the official HarmonyOS example pattern:
+    //   pointX = (compW - newDisplayW) / 2 + newDisplayW * centerX
+    //   offX = pinchCenterX - pointX
+    // where centerX is the normalized pinch position within the image.
+    const newW = this.imgW * ns;
+    const newH = this.imgH * ns;
+    const pointX = (this.compW - newW) / 2 + newW * this.zoomCenterX;
+    const pointY = (this.compH - newH) / 2 + newH * this.zoomCenterY;
+    this.offX = e.pinchCenterX - pointX;
+    this.offY = e.pinchCenterY - pointY;
+    this.clampAndCheckEdge();
   }
 
   private onPinchEnd(_e: GestureEvent): void {
@@ -153,6 +177,9 @@ struct ZoomableImage {
   }
 
   private onPanStart(_e: GestureEvent): void {
+    this.panActive = true;
+    this.accumPanOffX = 0;
+    this.accumPanOffY = 0;
     if (this.pinching) return;
     this.onGestureStart();
     this.lastOffX = this.offX;
@@ -160,14 +187,28 @@ struct ZoomableImage {
   }
 
   private onPanUpdate(e: GestureEvent): void {
-    if (!e || this.scaleVal <= 1.0 || this.pinching) return;
+    if (!e || this.scaleVal <= 1.0) return;
+    if (this.pinching) {
+      // While pinch is active, PanGesture keeps accumulating offset for the tracked finger.
+      // Save this offset so we can subtract it when the pinch ends,
+      // preventing a jump from accumulated finger movement during pinch.
+      if (this.panActive) {
+        this.accumPanOffX = e.offsetX;
+        this.accumPanOffY = e.offsetY;
+      }
+      return;
+    }
+    // Subtract offset that accumulated during pinch; only apply NEW finger movement.
+    const effectiveOffX = e.offsetX - this.accumPanOffX;
+    const effectiveOffY = e.offsetY - this.accumPanOffY;
     // Compensate for the scaled local coordinate system:
     // .scale() shrinks the component's local coordinate space, so GestureEvent.offsetX
     // reports a smaller value. Multiply by scaleVal to restore the screen-space delta.
-    this.applyTransform(1, e.offsetX * this.scaleVal, e.offsetY * this.scaleVal);
+    this.applyTransform(1, effectiveOffX * this.scaleVal, effectiveOffY * this.scaleVal);
   }
 
   private onPanEnd(_e: GestureEvent): void {
+    this.panActive = false;
     if (this.pinching) return;
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
@@ -201,10 +242,8 @@ struct ZoomableImage {
     const ih = this.imgH;
     const il = (this.compW - iw) / 2;
     const it = (this.compH - ih) / 2;
-    const tapCx = iw > 0 ? (tx - il) / iw : 0.5;
-    const tapCy = ih > 0 ? (ty - it) / ih : 0.5;
-    this.pinchCx = 1 - tapCx;
-    this.pinchCy = 1 - tapCy;
+    this.zoomCenterX = iw > 0 ? (tx - il) / iw : 0.5;
+    this.zoomCenterY = ih > 0 ? (ty - it) / ih : 0.5;
     this.lastScale = 1.0;
     this.lastOffX = 0;
     this.lastOffY = 0;
