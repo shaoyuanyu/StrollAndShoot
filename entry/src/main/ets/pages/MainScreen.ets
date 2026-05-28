@@ -41,6 +41,8 @@ export struct MainScreen {
   @Local gpsRecordCount: number = 0;
   @Local gpsMode: number = 2;
   @Local settings: SettingsStore = SettingsStore.getInstance();
+  @Local gallerySelectMode: boolean = false;
+  @Local exitSelectModeVersion: number = 0;
 
   aboutToAppear(): void {
     // Initialize the global BuilderNode for shared element transitions
@@ -105,6 +107,8 @@ export struct MainScreen {
             downloadedKeys: this.downloadedKeys,
             galleryColumnCount: this.settings.galleryColumnCount,
             displayMode: this.settings.displayMode,
+            onSelectModeChange: (v: boolean) => { this.gallerySelectMode = v; },
+            exitSelectModeVersion: this.exitSelectModeVersion,
             onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {
               const handle = _displayGroups[index].displayPhoto.handle;
               // Build handles array from visual order
@@ -271,6 +275,14 @@ export struct MainScreen {
       .width('100%').height(56)
       .backgroundColor($r('app.color.tab_bar_bg'))
     }
+    .onBackPressed(() => {
+      if (this.currentTab === 0 && this.gallerySelectMode) {
+        this.exitSelectModeVersion++;
+        this.gallerySelectMode = false;
+        return true;
+      }
+      return false;
+    })
     .onReady((context: NavDestinationContext) => {
       this.pageInfos = context.pathStack;
       this.pageId = this.pageInfos.getAllPathName().length - 1;

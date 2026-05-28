@@ -47,7 +47,18 @@ export struct GalleryPage {
   @Event onThumbClick: (displayGroups: DisplayGroup[], index: number) => void = (_g: DisplayGroup[], _i: number) => {};
   @Event onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
   @Event onCancelDownload: () => void = () => {};
+  @Event onSelectModeChange: (v: boolean) => void = (_v: boolean) => {};
+  @Param exitSelectModeVersion: number = 0;
   private pinchBaseScale: number = 1.0;
+
+  @Monitor('exitSelectModeVersion')
+  onExitSelectModeRequest(): void {
+    if (this.selectMode) {
+      this.selectMode = false;
+      this.selectedHandles.clear();
+      this.onSelectModeChange(false);
+    }
+  }
 
   // O(1) filtered index map
   private _filteredIndexMap: Map<number, number> = new Map();
@@ -359,6 +370,7 @@ export struct GalleryPage {
               if (this.isDownloaded(cellRi.item!.displayPhoto)) return;
               if (!this.selectMode) {
                 this.selectMode = true;
+                this.onSelectModeChange(true);
                 this.selectedHandles.add(cellRi.item!.displayPhoto.handle);
                 this.selectedHandles = new Set(this.selectedHandles);
               }
@@ -504,6 +516,7 @@ export struct GalleryPage {
           totalVisible: this.getSelectableGroups().length,
           onCancel: () => {
             this.selectMode = false;
+            this.onSelectModeChange(false);
             this.selectedHandles.clear();
           },
           onDownload: () => {
@@ -511,6 +524,7 @@ export struct GalleryPage {
             this.selectedHandles.forEach((key: number) => { handles.push(key); });
             this.onDownloadSelected(handles);
             this.selectMode = false;
+            this.onSelectModeChange(false);
             this.selectedHandles.clear();
           },
           onSelectAll: () => { this.toggleSelectAll(); }
