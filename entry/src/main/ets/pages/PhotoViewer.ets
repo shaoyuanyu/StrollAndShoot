@@ -260,6 +260,7 @@ struct ZoomableImage {
   build() {
     if (this.pixelMap !== null) {
       Image(this.pixelMap)
+        .draggable(false)
         .objectFit(ImageFit.Contain)
         .width('100%').height('100%')
         .scale({ x: this.scaleVal, y: this.scaleVal })
@@ -404,6 +405,7 @@ struct ThumbCellView {
     Column() {
       if (this.realIdx >= 0 && this.pixelMap !== null) {
         Image(this.pixelMap)
+          .draggable(false)
           .objectFit(ImageFit.Cover)
           .width('100%').height('100%')
           .borderRadius(4)

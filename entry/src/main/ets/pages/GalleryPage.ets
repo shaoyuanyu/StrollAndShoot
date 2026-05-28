@@ -324,6 +324,7 @@ export struct GalleryPage {
             .width('100%').height('100%')
             .objectFit(ImageFit.Cover)
             .id('thumb_' + cellRi.item!.displayPhoto.handle)
+            .draggable(false)
         } else {
           Column() { Text('📷').fontSize(20) }
           .width('100%').height('100%')
