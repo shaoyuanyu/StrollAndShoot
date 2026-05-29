@@ -1067,6 +1067,7 @@ export class CameraService {
             // Cache hit — load from file, no transforms needed
             cacheHit = true;
             statsCacheHits++;
+            statsPartialSkips++;
             decodeJobs.push(this.loadCachedThumbnail(h, cachedEntry.cacheFileName));
           } else {
             // Cache miss — log details for diagnosis
