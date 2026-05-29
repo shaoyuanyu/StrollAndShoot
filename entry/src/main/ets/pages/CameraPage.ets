@@ -12,7 +12,8 @@ export struct CameraPage {
       ConnectionStatusBar({
         connected: this.svc.connected, cameraName: this.svc.cameraName,
         photoCount: this.svc.photoCount, statusText: this.svc.statusText,
-        compact: false, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal
+        compact: false, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal,
+        scanStatsText: this.svc.scanStatsText
       }).margin({ top: 12, bottom: 12 })
 
       Row() {
@@ -38,9 +39,52 @@ export struct CameraPage {
 
         Column() {
           Row() {
+            Text('品牌').fontSize(14).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(this.svc.deviceManufacturer || '未知').fontSize(14).fontColor($r('app.color.text_primary'))
+          }.width('100%').padding(12)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
             Text('型号').fontSize(14).fontColor($r('app.color.text_secondary'))
             Blank()
-            Text(this.svc.cameraName).fontSize(14).fontColor($r('app.color.text_primary'))
+            Text(this.svc.cameraName || '未知').fontSize(14).fontColor($r('app.color.text_primary'))
+          }.width('100%').padding(12)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
+            Text('序列号(PTP)').fontSize(14).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(this.svc.deviceSerialNumber || '无').fontSize(14).fontColor($r('app.color.text_primary'))
+          }.width('100%').padding(12)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
+            Text('固件版本').fontSize(14).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(this.svc.deviceVersion || '未知').fontSize(14).fontColor($r('app.color.text_primary'))
+          }.width('100%').padding(12)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
+            Text('USB识别码').fontSize(14).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(this.svc.usbVidPid).fontSize(13).fontColor($r('app.color.text_primary'))
+          }.width('100%').padding(12)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
+            Text('USB序列号').fontSize(14).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(this.svc.usbSerialNumber || '无').fontSize(14).fontColor($r('app.color.text_primary'))
+          }.width('100%').padding(12)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
+            Text('缓存标识').fontSize(14).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(this.svc.cameraIdentity).fontSize(12).fontColor($r('app.color.text_primary'))
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           }.width('100%').padding(12)
           .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
 

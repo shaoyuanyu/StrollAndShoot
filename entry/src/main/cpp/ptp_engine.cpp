@@ -285,6 +285,7 @@ static std::string readPtpString(const uint8_t* data, size_t dataLen, size_t* of
     return out;
 }
 
+/** Read a uint32 array: 4-byte count + count × uint32 elements. */
 static std::vector<uint32_t> readU32Array(const uint8_t* data, size_t dataLen, size_t* offset) {
     std::vector<uint32_t> out;
     if (*offset + 4 > dataLen) return out;
@@ -295,6 +296,26 @@ static std::vector<uint32_t> readU32Array(const uint8_t* data, size_t dataLen, s
         out.push_back(reinterpret_cast<const uint32_t*>(data + *offset)[i]);
     }
     *offset += count * 4;
+    return out;
+}
+
+/**
+ * Read a uint16 array (PTP DeviceInfo uses uint16 arrays).
+ * Wire format: uint32 count (4 bytes) + count × uint16 elements (2 bytes each).
+ * Values are stored as uint32 in the result for simplicity.
+ */
+static std::vector<uint32_t> readU16Array(const uint8_t* data, size_t dataLen, size_t* offset) {
+    std::vector<uint32_t> out;
+    if (*offset + 4 > dataLen) return out;
+    uint32_t count = *reinterpret_cast<const uint32_t*>(data + *offset);
+    *offset += 4;
+    if (count == 0 || *offset + count * 2 > dataLen) return out;
+    for (uint32_t i = 0; i < count; i++) {
+        uint16_t val = static_cast<uint16_t>(data[*offset])
+                     | (static_cast<uint16_t>(data[*offset + 1]) << 8);
+        out.push_back(val);
+        *offset += 2;
+    }
     return out;
 }
 
@@ -318,18 +339,19 @@ PTPDeviceInfo PTPEngine::parseDeviceInfo(const uint8_t* data, size_t len) {
     di.StandardVersion = readU16();
     di.VendorExtensionID = readU32();
     di.VendorExtensionVersion = readU16();
-    di.VendorExtensionDesc = readUCS2Raw(data, len, &off); // no count byte
+    // VendorExtensionDesc is a standard PTP string with 1-byte char count
+    // prefix, NOT a raw null-terminated UCS-2. Use readPtpString.
+    // libgphoto2 confirms: ptp_unpack_string() reads count byte.
+    di.VendorExtensionDesc = readPtpString(data, len, &off);
     di.FunctionalMode = readU16();
-    di.OperationsSupported = readU32Array(data, len, &off);
-    di.EventsSupported = readU32Array(data, len, &off);
-    di.DevicePropertiesSupported = readU32Array(data, len, &off);
-    di.CaptureFormats = readU32Array(data, len, &off);
-    di.ImageFormats = readU32Array(data, len, &off);
-    // MTP devices (VendorExtensionID == 0xFFFFFFFF) have an extra
-    // PlaybackFormats array between ImageFormats and the string fields
-    if (di.VendorExtensionID == 0xFFFFFFFF || di.VendorExtensionID == 0x00000006) {
-        readU32Array(data, len, &off); // PlaybackFormats (skip)
-    }
+    // Per PTP spec (ISO 15740) all 5 DeviceInfo arrays are AUINT16
+    // (uint32 count + uint16 elements). libgphoto2 confirms this.
+    di.OperationsSupported = readU16Array(data, len, &off);
+    di.EventsSupported = readU16Array(data, len, &off);
+    di.DevicePropertiesSupported = readU16Array(data, len, &off);
+    di.CaptureFormats = readU16Array(data, len, &off);
+    di.ImageFormats = readU16Array(data, len, &off);
+    // Per PTP spec (ISO 15740), the 4 strings follow immediately:
     di.Manufacturer = readPtpString(data, len, &off);
     di.Model = readPtpString(data, len, &off);
     di.DeviceVersion = readPtpString(data, len, &off);
@@ -369,7 +391,7 @@ PTPObjectInfo PTPEngine::parseObjectInfo(const uint8_t* data, size_t len, uint32
     obj.SequenceNumber = readU32();
     obj.Filename = readPtpString(data, len, &off);
     obj.CaptureDate = readPtpString(data, len, &off);
-    obj.ModificationDate = readUCS2Raw(data, len, &off);
+    obj.ModificationDate = readPtpString(data, len, &off);
 
     // Set handle since it doesn't come in the ObjectInfo dataset
     (void)handle; // The handle is passed in separately

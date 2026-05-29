@@ -24,6 +24,7 @@ export interface PtpObjectInfo {
   imagePixHeight: number;
   filename: string;
   captureDate: string;
+  modificationDate: string;
 }
 
 export const buildOpenSession: (sessionId: number) => Uint8Array;

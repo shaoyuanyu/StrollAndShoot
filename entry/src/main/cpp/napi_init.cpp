@@ -101,6 +101,7 @@ static napi_value MakeObjectInfoObj(napi_env env, const PTPObjectInfo& obj) {
     setU32("imagePixHeight", obj.ImagePixHeight);
     setStr("filename", obj.Filename);
     setStr("captureDate", obj.CaptureDate);
+    setStr("modificationDate", obj.ModificationDate);
     return o;
 }
 

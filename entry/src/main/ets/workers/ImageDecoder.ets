@@ -46,6 +46,9 @@ export async function decodeThumbnailTask(
   const needsRotate = rotate !== 0;
   const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
 
+  hilog.info(DOMAIN, TAG, '[CROP] start orient=(%{public}d,%{public}s,%{public}s) orig=%{public}dx%{public}d',
+    rotate, flipH.toString(), flipV.toString(), origW, origH);
+
   if (needsRotate) {
     await pixelMap.rotate(rotate);
   }
@@ -72,9 +75,12 @@ export async function decodeThumbnailTask(
     const scale = Math.min(tw / ow, th / oh);
     cropW = Math.floor(ow * scale);
     cropH = Math.floor(oh * scale);
+    hilog.info(DOMAIN, TAG, '[CROP] thumb=%{public}dx%{public}d scale=%{public}s crop=%{public}dx%{public}d',
+      tw, th, scale.toFixed(4), cropW, cropH);
   } else {
     cropW = tw;
     cropH = th;
+    hilog.info(DOMAIN, TAG, '[CROP] no orig dims, skip crop thumb=%{public}dx%{public}d', tw, th);
   }
 
   const region: image.Region = {

@@ -49,6 +49,32 @@ export struct MainScreen {
     this.syncDownloadedKeys();
   }
 
+  @Monitor('svc.cachingDialogRequired')
+  onCachingDialogRequired(): void {
+    if (!this.svc.cachingDialogRequired) return;
+    const camId = this.svc.pendingCamIdForDialog;
+    const camName = this.svc.pendingCamNameForDialog;
+    if (!camId) return;
+    AlertDialog.show({
+      title: '发现新相机',
+      message: `检测到新相机「${camName}」，是否启用缩略图缓存？\n\n启用后下次连接时将直接从本地加载缩略图，大幅提升加载速度。`,
+      autoCancel: false,
+      primaryButton: {
+        value: '不缓存',
+        action: () => {
+          this.svc.setCachingPreference(camId, false);
+        }
+      },
+      secondaryButton: {
+        value: '启用缓存',
+        fontColor: '#0078D7',
+        action: () => {
+          this.svc.setCachingPreference(camId, true);
+        }
+      }
+    });
+  }
+
   aboutToAppear(): void {
     // Initialize the global BuilderNode for shared element transitions
     createMyNode(this.getUIContext());

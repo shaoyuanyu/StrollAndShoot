@@ -7,6 +7,7 @@ export struct ConnectionStatusBar {
   @Param compact: boolean = false;
   @Param scanProgress: number = 0;
   @Param scanTotal: number = 0;
+  @Param scanStatsText: string = '';
 
   build() {
     if (this.compact) {
@@ -80,6 +81,14 @@ export struct ConnectionStatusBar {
           }
           .width('100%')
           .margin({ top: 8 })
+        }
+
+        if (this.scanStatsText) {
+          Text(this.scanStatsText)
+            .fontSize(11)
+            .fontColor($r('app.color.text_secondary'))
+            .margin({ top: 8 })
+            .opacity(0.7)
         }
       }
       .width('100%')

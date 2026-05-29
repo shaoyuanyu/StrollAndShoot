@@ -7,6 +7,7 @@ export interface PhotoEntry {
   size: number;
   // Extended fields from NAPI PtpObjectInfo (populated when available)
   captureDate?: string;
+  modificationDate?: string;
   objectFormat?: number;
   imagePixWidth?: number;
   imagePixHeight?: number;

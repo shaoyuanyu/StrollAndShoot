@@ -161,6 +161,23 @@ export struct SettingsPage {
         .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
         .margin({ bottom: 16 })
 
+        Text('缓存')
+          .fontSize(13).fontColor($r('app.color.text_secondary'))
+          .fontWeight(FontWeight.Medium)
+          .alignSelf(ItemAlign.Start).margin({ bottom: 8 })
+
+        Row() {
+          Text('缩略图缓存').fontSize(14).fontColor($r('app.color.text_primary'))
+          Blank()
+          Text('管理 >').fontSize(13).fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%').padding(14)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .margin({ bottom: 16 })
+        .onClick(() => {
+          router.pushUrl({ url: 'pages/CacheManagementPage' });
+        })
+
         Text('调试日志')
           .fontSize(13).fontColor($r('app.color.text_secondary'))
           .fontWeight(FontWeight.Medium)

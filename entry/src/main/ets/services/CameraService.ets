@@ -3,12 +3,15 @@ import { image } from '@kit.ImageKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { util, taskpool } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
+import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
-import { PtpSession, setPtpLog } from '../pages/PtpHost';
+import { PtpSession, setPtpLog, type DeviceInfo } from '../pages/PtpHost';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
 import { ExifGeotagger } from './ExifGeotagger';
+import { CameraCachePrefs } from './CameraCachePrefs';
+import { ThumbnailCache, type CacheEntry } from './ThumbnailCache';
 import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } from '../model/PhotoEntry';
 
 const DOMAIN = 0x0000;
@@ -82,6 +85,7 @@ export class CameraService {
   // Scan progress
   @Trace scanProgress: number = 0;
   @Trace scanTotal: number = 0;
+  @Trace scanStatsText: string = '';
 
   // Format filter support detection (cached across directory levels)
   private formatFilterWorks: boolean | null = null;
@@ -96,6 +100,31 @@ export class CameraService {
   // Original photo dimensions read from EXIF during scan (via GetPartialObject).
   // Used to compute precise thumbnail content area for black-bar-free cropping.
   private exifOrigDims: Map<number, OrientedSize> = new Map();
+
+  // ---- Camera identity & thumbnail caching ----
+
+  /** Unique camera identity (serial/model/manufacturer based). */
+  @Trace cameraIdentity: string = '';
+  /** Whether thumbnail disk caching is enabled for the current camera. */
+  @Trace cachingEnabled: boolean = false;
+  /** True when the UI should show a caching opt-in dialog. */
+  @Trace cachingDialogRequired: boolean = false;
+  /** Camera ID for the pending dialog. */
+  pendingCamIdForDialog: string = '';
+  /** Camera name for the pending dialog. */
+  pendingCamNameForDialog: string = '';
+  // ---- Debug identity info (displayed on CameraPage) ----
+  @Trace deviceManufacturer: string = '';
+  @Trace deviceSerialNumber: string = '';
+  @Trace deviceVersion: string = '';
+  @Trace usbVidPid: string = '';
+  @Trace usbSerialNumber: string = '';
+  /** Thumbnail disk cache manager. */
+  private thumbCache: ThumbnailCache = new ThumbnailCache();
+  /** Camera cache preferences (cross-camera). */
+  private cachePrefs: CameraCachePrefs = CameraCachePrefs.getInstance();
+  /** Application files dir (for cache dir construction). */
+  private filesDir: string = '';
 
   /**
    * Map EXIF Orientation value (1–8) to DecodingOptions rotation + pixelMap flip.
@@ -145,9 +174,12 @@ export class CameraService {
     // Locate TIFF header: either at start (RAW/TIFF) or after JPEG APP1 Exif marker.
     let off = 0;
     const isTiff = (bytes[0] === 0x49 && bytes[1] === 0x49) || (bytes[0] === 0x4D && bytes[1] === 0x4D);
+    hilog.info(DOMAIN, TAG, '[EXIF_PARSE] format=%{public}s totalBytes=%{public}d',
+      isTiff ? 'TIFF/RAW' : 'JPEG', bytes.length);
     if (!isTiff) {
       // Must be JPEG — find APP1/Exif marker
       if (bytes[0] !== 0xFF || bytes[1] !== 0xD8) {
+        hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] not JPEG SOI, b0=0x%{public}x b1=0x%{public}x', bytes[0], bytes[1]);
         return null; // not a recognized format
       }
       const foundApp1 = false;
@@ -159,6 +191,7 @@ export class CameraService {
               bytes[off + 4] === 0x45 && bytes[off + 5] === 0x78 &&
               bytes[off + 6] === 0x69 && bytes[off + 7] === 0x66 &&
               bytes[off + 8] === 0x00 && bytes[off + 9] === 0x00) {
+            hilog.info(DOMAIN, TAG, '[EXIF_PARSE] found APP1 Exif at offset=%{public}d size=%{public}d', off, app1Size);
             off += 10; // skip to TIFF header
             break;
           }
@@ -172,7 +205,10 @@ export class CameraService {
           off++;
         }
       }
-      if (off >= bytes.length - 14) return null;
+      if (off >= bytes.length - 14) {
+        hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] APP1 not found within %{public}d bytes', bytes.length);
+        return null;
+      }
     }
     // Now `off` points to TIFF header (II\0x2A\0 or MM\0x00\x2A)
 
@@ -197,7 +233,10 @@ export class CameraService {
     };
 
     // Validate TIFF magic 0x002A
-    if (r16(off + 2) !== 0x002A) return null;
+    if (r16(off + 2) !== 0x002A) {
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] invalid TIFF magic 0x%{public}x', r16(off + 2));
+      return null;
+    }
 
     // IFD0 offset is relative to start of TIFF header
     const ifd0Off = off + r32(off + 4);
@@ -275,14 +314,14 @@ export class CameraService {
         }
       }
     } else {
-      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] no ExifIFD pointer (tag 0x8769) in IFD0');
+      hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] no ExifIFD pointer (tag 0x8769) in IFD0: exifIfdOff=%{public}d', exifIfdOff);
     }
 
     if (imgW > 0 && imgH > 0) {
       hilog.info(DOMAIN, TAG, '[EXIF_PARSE] ExifIFD found %{public}dx%{public}d', imgW, imgH);
       return new OrientedSize(imgW, imgH);
     }
-    hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] failed IFD0 W=%{public}d H=%{public}d exifOff=%{public}d', imgW, imgH, exifIfdOff);
+    hilog.warn(DOMAIN, TAG, '[EXIF_PARSE] FAILED ifd0W=%{public}d ifd0H=%{public}d exifIfdOff=%{public}d entryCount=%{public}d', imgW, imgH, exifIfdOff, entryCount);
     return null;
   }
 
@@ -349,7 +388,9 @@ export class CameraService {
   }
 
   initDownloadDir(dir: string): void {
+    this.filesDir = dir;
     this.downloadDir = dir;
+    this.cachePrefs.init(dir);
     this.loadRegistry();
   }
 
@@ -768,6 +809,18 @@ export class CameraService {
         this.clearFullCache();
         this.statusText = '已连接';
 
+        // Refresh camera identity from PTP if not already set
+        if (!this.cameraIdentity) {
+          const deviceInfo = await this.session.getDeviceInfo();
+          if (deviceInfo) {
+            this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
+            this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
+            this.log.add(`相机身份(刷新): ${this.cameraIdentity}`);
+          }
+        }
+        // Re-check caching state (user may have changed prefs in settings)
+        this.checkCachingState();
+
       } else {
         // Different camera or first connect
         if (this.connected) {
@@ -791,6 +844,34 @@ export class CameraService {
         this.statusText = '已连接';
         this.connected = true;
 
+        // Fetch PTP device identity for unique camera identification
+        const deviceInfo = await this.session.getDeviceInfo();
+        this.deviceManufacturer = deviceInfo?.manufacturer || cameras[0].manufacturerName || '';
+        this.deviceSerialNumber = deviceInfo?.serialNumber || cameras[0].serial || '';
+        this.deviceVersion = deviceInfo?.deviceVersion || '';
+        this.usbVidPid = `VID_${cameras[0].vendorId.toString(16).padStart(4,'0')}_PID_${cameras[0].productId.toString(16).padStart(4,'0')}`;
+        this.usbSerialNumber = cameras[0].serial || '';
+        if (deviceInfo) {
+          this.log.add(`PTP DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" serial="${deviceInfo.serialNumber}" ver="${deviceInfo.deviceVersion}"`);
+          this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
+          this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
+        } else {
+          // Fallback: use USB-level info
+          this.cameraIdentity = `vid_${cameras[0].vendorId.toString(16).padStart(4,'0')}_pid_${cameras[0].productId.toString(16).padStart(4,'0')}`;
+          this.log.add(`USB fallback identity: ${this.cameraIdentity}`);
+        }
+        this.log.add(`相机身份: ${this.cameraIdentity}`);
+
+        // Check caching preference for this camera
+        this.checkCachingState();
+      }
+
+      // If camera is new and caching dialog is required, wait for user
+      // choice before scanning. setCachingPreference will trigger scan.
+      if (this.cachingDialogRequired) {
+        this.statusText = `请选择缓存设置...`;
+        this.scanning = false;
+        return;
       }
 
       await this.loadPhotosAndThumbnails();
@@ -910,10 +991,11 @@ export class CameraService {
           this.photoCount += count;
       
         });
-      // TEST: only load first 150 photos
-      const handles = allHandles.slice(0, 150);
+      const handles = allHandles;
+      // TEST: only load first 300 photos
+      // const handles = allHandles.slice(0, 300);
 
-      hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}, limited to: ${handles.length}`);
+      hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}`);
 
       // ---- Phase 2: getObjectInfo + getThumb in a single pass ----
       this.log.add(`开始加载 ${handles.length} 张照片...`);
@@ -924,142 +1006,225 @@ export class CameraService {
 
       const decodeJobs: Promise<void>[] = [];
       const photoList: PhotoEntry[] = [];
+      const validCacheKeys: Set<string> = new Set();
+      let statsCacheHits = 0;
+      let statsPartialSkips = 0;
+      let statsSaveCallCount = 0;
+      let statsInfoOk = 0;
+      let statsThumbOk = 0;
+
+      // Initialize thumbnail cache if enabled
+      // Always init cache dir + load manifest before the loop (even if
+      // cachingEnabled is false — may be toggled mid-scan by user dialog).
+      // This prevents setCachingPreference from re-initing mid-scan and
+      // clearing the manifest while saves are in progress.
+      if (this.cameraIdentity) {
+        this.thumbCache.init(this.filesDir, this.cameraIdentity);
+        if (this.cachingEnabled) {
+          await this.thumbCache.loadManifest();
+          this.log.add('缩略图缓存已加载');
+        }
+        hilog.info(DOMAIN, TAG, '[CACHE] init done en=%{public}s id=%{public}s', this.cachingEnabled.toString(), this.cameraIdentity);
+      }
 
       for (let i = 0; i < handles.length; i++) {
         const h = handles[i];
 
         const info = await this.session.getObjectInfo(h);
         if (info) {
+          statsInfoOk++;
+          const modDate = info.modificationDate || '';
           photoList.push({
             handle: h,
             filename: info.filename,
             size: info.objectCompressedSize,
             objectFormat: info.objectFormat,
             captureDate: info.captureDate || '',
+            modificationDate: modDate,
             imagePixWidth: info.imagePixWidth || 0,
             imagePixHeight: info.imagePixHeight || 0,
             storageId: info.storageId || 0
           });
         }
 
-        // Fetch thumbnail raw data first
-        let thumbData: Uint8Array | null = null;
-        if (!this.thumbnailLoadedSet.has(h)) {
-          thumbData = await this.session.getThumb(h);
-        }
+        // Check disk cache first
+        const cacheKey = info ? `${info.filename}::${info.objectCompressedSize}` : '';
+        const modDate = info?.modificationDate || '';
+        if (cacheKey) validCacheKeys.add(cacheKey);
 
-        // Pre-read first 16KB via GetPartialObject to extract EXIF Orientation
-        // and original image dimensions (ImageWidth/ImageLength).
-        // If the camera doesn't support GetPartialObject, this gracefully fails
-        // and the thumbnail will decode without orientation correction.
-        const partial = await this.session.getPartialObject(h, 0, 16384);
-        if (partial && partial.length > 0) {
-          try {
-            const orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
-            if (orient.rotate !== 0 || orient.flipH || orient.flipV) {
-              this.preloadedOrientations.set(h, orient);
-              hilog.info(DOMAIN, TAG, `[PARTIAL_ORIENT] handle=0x%{public}s rotate=%{public}d flipH=%{public}s flipV=%{public}s`,
-                h.toString(16), orient.rotate, orient.flipH.toString(), orient.flipV.toString());
+        let thumbData: Uint8Array | null = null;
+        let cacheHit = false;
+        let cachedEntry: CacheEntry | null = null;
+        let skipPartial = false;
+
+        if (this.cachingEnabled && cacheKey && !this.thumbnailLoadedSet.has(h)) {
+          cachedEntry = this.thumbCache.findCached(cacheKey, modDate);
+          // Cache hit: skip GetPartialObject (thumbnails are finalized in cache)
+          cacheHit = cachedEntry !== null;
+          skipPartial = cacheHit;
+          cachedEntry = this.thumbCache.findCached(cacheKey, modDate);
+          if (cachedEntry) {
+            // Cache hit — load from file, no transforms needed
+            cacheHit = true;
+            statsCacheHits++;
+            decodeJobs.push(this.loadCachedThumbnail(h, cachedEntry.cacheFileName));
+          } else {
+            // Cache miss — log details for diagnosis
+            const savedMod = this.thumbCache.debugLookup(cacheKey);
+            if (savedMod !== null) {
+              this.log.add(`[CACHE_MISS] ${info?.filename}: saved="${savedMod}" cur="${modDate}" match=${savedMod === modDate}`);
+            } else {
+              this.log.add(`[CACHE_MISS] ${info?.filename}: key not in manifest`);
             }
-            // Use manual EXIF parsing (faster than getImageInfo, works on 16KB)
-            const parsed = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
-            if (parsed) {
-              this.exifOrigDims.set(h, parsed);
-              this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} parsed=${parsed.w}x${parsed.h}`);
-            }
-            // Dump IFD0 + NextIFD chain to persistent log for diagnosis (RAW/tiff only)
-            if (partial && partial.length > 12) {
-              const raw = new Uint8Array(partial.buffer as ArrayBuffer);
-              if ((raw[0] === 0x49 && raw[1] === 0x49) || (raw[0] === 0x4D && raw[1] === 0x4D)) {
-                const le = (raw[0] === 0x49);
-                const r16 = (p: number) => (p + 2 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8)) : ((raw[p] << 8) | raw[p+1]);
-                const r32 = (p: number) => (p + 4 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8) | (raw[p+2] << 16) | (raw[p+3] << 24)) : ((raw[p] << 24) | (raw[p+1] << 16) | (raw[p+2] << 8) | raw[p+3]);
-                if (r16(2) === 0x002A) {
-                  const tiffBase = r32(4); // IFD0 offset is absolute from TIFF header start
-                  let nextOff = tiffBase;
-                  let ifdIdx = 0;
-                  while (nextOff > 0 && nextOff + 2 < raw.length && ifdIdx < 5) {
-                    const eCnt = r16(nextOff);
-                    const nxt = r32(nextOff + 2 + eCnt * 12); // NextIFD offset (absolute)
-                    let ifdDump = '';
-                    for (let di = 0; di < eCnt && nextOff + 2 + di * 12 + 10 < raw.length; di++) {
-                      const b = nextOff + 2 + di * 12;
-                      const tag = r16(b);
-                      if (di > 0) ifdDump += ';';
-                      ifdDump += `t0x${tag.toString(16)}:T${r16(b+2)}:C${r32(b+4)}:V${r32(b+8)}`;
-                    }
-                    this.log.add(`[IFD_CHAIN] handle=0x${h.toString(16)} IFD#${ifdIdx} off=${nextOff} entries=${eCnt} next=${nxt} ${ifdDump}`);
-                    nextOff = nxt;
-                    ifdIdx++;
-                  }
-                  // SubIFD fallback: scan IFD0 for 0x014A, parse offset array,
-                  // fetch SubIFD via second GetPartialObject to read 0x0100/0x0101
-                  if (!this.exifOrigDims.has(h)) {
-                    const ifd0Off = tiffBase;
-                    const eCnt = r16(ifd0Off);
-                    for (let i = 0; i < eCnt && ifd0Off + 2 + (i+1) * 12 <= raw.length; i++) {
-                      const b = ifd0Off + 2 + i * 12;
-                      if (r16(b) === 0x014A && r16(b+2) === 4) {
-                        const cnt = r32(b+4);
-                        const arrOff = r32(b+8);
-                        if (cnt > 0 && arrOff > 0 && arrOff + cnt * 4 <= raw.length) {
-                          for (let si = 0; si < cnt; si++) {
-                            const subOff = r32(arrOff + si * 4);
-                            if (subOff < 100) continue;
-                            try {
-                              const sub = await this.session.getPartialObject(h, subOff, 8192);
-                              if (sub && sub.length > 20) {
-                                const sr = new Uint8Array(sub.buffer as ArrayBuffer);
-                                const scnt = le ? (sr[0] | (sr[1] << 8)) : ((sr[0] << 8) | sr[1]);
-                                let sw = 0, sh = 0;
-                                for (let j = 0; j < scnt && 2 + (j+1) * 12 <= sr.length; j++) {
-                                  const sb = 2 + j * 12;
-                                  const stag = le ? (sr[sb] | (sr[sb+1] << 8)) : ((sr[sb] << 8) | sr[sb+1]);
-                                  const sv = le ? (sr[sb+8] | (sr[sb+9] << 8) | (sr[sb+10] << 16) | (sr[sb+11] << 24))
-                                              : ((sr[sb+8] << 24) | (sr[sb+9] << 16) | (sr[sb+10] << 8) | sr[sb+11]);
-                                  if (stag === 0x0100) sw = sv;
-                                  if (stag === 0x0101) sh = sv;
-                                }
-                                if (sw > 100 && sh > 100) {
-                                  this.exifOrigDims.set(h, new OrientedSize(sw, sh));
-                                  this.log.add(`[SUBIFD_DIMS] handle=0x${h.toString(16)} idx=${si} off=${subOff} ${sw}x${sh}`);
-                                  break; // found dimensions, stop iterating SubIFDs
-                                }
-                              }
-                            } catch (_eSub) { /* try next SubIFD */ }
-                          }
-                        }
-                        break; // found 0x014A, stop iterating IFD0
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          } catch (_e) {
-            // Not supported / data incomplete — skip orientation
           }
         }
 
-        // Decode thumbnail AFTER preloadedOrientations is populated
+        if (!cacheHit && !this.thumbnailLoadedSet.has(h)) {
+          thumbData = await this.session.getThumb(h);
+          if (thumbData && thumbData.length > 0) {
+            statsThumbOk++;
+          } else {
+            this.log.add(`[NO_THUMB] handle=0x${h.toString(16)} ${info?.filename || '?'} cacheHit=${cacheHit} loaded=${this.thumbnailLoadedSet.has(h)}`);
+          }
+        }
+
+        // Orientation extraction: skip if cache already provides it
+        let partialOrientation: OrientationTransform | null = null;
+        if (!skipPartial) {
+          // Pre-read first 16KB via GetPartialObject for EXIF Orientation + dims
+          const partial = await this.session.getPartialObject(h, 0, 16384);
+          if (partial && partial.length > 0) {
+            try {
+              const orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
+              // Always store in preloadedOrientations, even for default (0,0,0),
+              // so that scheduleCacheSave passes orientation to the cache entry.
+              // Otherwise next scan can't skip GetPartialObject for these photos.
+              this.preloadedOrientations.set(h, orient);
+              partialOrientation = orient;
+              const parsed = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
+              if (parsed) {
+                this.exifOrigDims.set(h, parsed);
+                this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} ok ${parsed.w}x${parsed.h}`);
+              } else {
+                this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} FAILED`);
+                // SubIFD fallback for RAW files (NEF, CR2, etc.):
+                // Try reading SubIFD entries (0x014A) via second GetPartialObject.
+                const raw = new Uint8Array(partial.buffer as ArrayBuffer);
+                if (raw.length > 12 && (raw[0] === 0x49 || raw[0] === 0x4D)) {
+                  try {
+                    const le = raw[0] === 0x49;
+                    const r16 = (p: number) => (p + 2 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8)) : ((raw[p] << 8) | raw[p+1]);
+                    const r32 = (p: number) => (p + 4 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8) | (raw[p+2] << 16) | (raw[p+3] << 24)) : ((raw[p] << 24) | (raw[p+1] << 16) | (raw[p+2] << 8) | raw[p+3]);
+                    const off = 0; // TIFF header starts at 0 for RAW
+                    if (r16(off + 2) === 0x002A) {
+                      const ifd0Off = off + r32(off + 4);
+                      if (ifd0Off + 2 <= raw.length) {
+                        const eCnt = r16(ifd0Off);
+                        for (let ei = 0; ei < eCnt && ifd0Off + 2 + (ei+1) * 12 <= raw.length; ei++) {
+                          const eb = ifd0Off + 2 + ei * 12;
+                          if (r16(eb) === 0x014A && r16(eb + 2) === 4) { // SubIFD tag
+                            const cnt = r32(eb + 4);
+                            const arrOff = r32(eb + 8);
+                            if (cnt > 0 && arrOff > 0 && arrOff + cnt * 4 <= raw.length) {
+                              for (let si = 0; si < cnt; si++) {
+                                const subOff = r32(arrOff + si * 4);
+                                if (subOff < 100) continue;
+                                try {
+                                  const sub = await this.session.getPartialObject(h, subOff, 8192);
+                                  if (sub && sub.length > 20) {
+                                    const sr = new Uint8Array(sub.buffer as ArrayBuffer);
+                                    const scnt = le ? (sr[0] | (sr[1] << 8)) : ((sr[0] << 8) | sr[1]);
+                                    let sw = 0, sh = 0;
+                                    for (let j = 0; j < scnt && 2 + (j+1) * 12 <= sr.length; j++) {
+                                      const sb = 2 + j * 12;
+                                      const stag = le ? (sr[sb] | (sr[sb+1] << 8)) : ((sr[sb] << 8) | sr[sb+1]);
+                                      const sv = le ? (sr[sb+8] | (sr[sb+9] << 8) | (sr[sb+10] << 16) | (sr[sb+11] << 24)) : ((sr[sb+8] << 24) | (sr[sb+9] << 16) | (sr[sb+10] << 8) | sr[sb+11]);
+                                      if (stag === 0x0100) sw = sv;
+                                      if (stag === 0x0101) sh = sv;
+                                    }
+                                    if (sw > 100 && sh > 100) {
+                                      this.exifOrigDims.set(h, new OrientedSize(sw, sh));
+                                      this.log.add(`[SUBIFD_DIMS] handle=0x${h.toString(16)} subIfd#${si} off=${subOff} ${sw}x${sh}`);
+                                      break;
+                                    }
+                                  }
+                                } catch (_eSub) { /* try next SubIFD */ }
+                              }
+                            }
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  } catch (_eSub) { /* SubIFD fallback failed */ }
+                }
+              }
+            } catch (_e) {
+              this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} EXCEPTION`);
+            }
+          }
+        }
+
+        // Decode thumbnail (after preloadedOrientations is populated)
         if (thumbData && thumbData.length > 0) {
-          decodeJobs.push(this.decodeThumbnail(h, thumbData));
+          decodeJobs.push(this.decodeThumbnail(h, thumbData, cacheKey, modDate));
+        }
+
+        // Save raw thumbnail bytes to cache (uncorrected JPEG).
+        // Orientation/dims saved but NOT exifRotate — that flag is set
+        // only by saveEncodedThumbnail when the corrected JPEG is written.
+        if (thumbData && thumbData.length > 0 && this.cachingEnabled && cacheKey) {
+          statsSaveCallCount++;
+          const dims = this.exifOrigDims.get(h);
+          this.scheduleCacheSave(cacheKey, modDate, thumbData, dims?.w, dims?.h);
         }
 
         this.scanProgress = i + 1;
       }
 
       this.photos = photoList;
+      this.photoCount = photoList.length;
       this.photosVersion++;
 
       await Promise.all(decodeJobs);
       this.thumbnailVersion++;
+
+      // Wait for all pending cache writes, then purge stale entries
+      if (this.cachingEnabled) {
+        await this.thumbCache.flush();
+        if (validCacheKeys.size > 0) {
+          const purged = await this.thumbCache.purgeStale(validCacheKeys);
+          if (purged > 0) {
+            this.log.add(`缓存清理: 移除了 ${purged} 个过期条目`);
+          }
+        }
+        this.thumbCache.close();
+      }
+
+      // Compute scan stats for UI display
+      {
+        const total = this.photoCount;
+        const missCount = total - statsCacheHits;
+        const getThumbCount = missCount;
+        const partialCount = total - statsPartialSkips;
+        const totalUsb = total /*getObjectInfo*/ + getThumbCount + partialCount;
+        const hitRate = total > 0 ? (statsCacheHits / total * 100).toFixed(0) : '0';
+        const manifestCount = this.cachingEnabled ? this.thumbCache.getEntryCount() : 0;
+        this.scanStatsText = `照片${total} | USB${totalUsb} | 缓存${statsCacheHits}/${total}(${hitRate}%) | 省PartialOb${statsPartialSkips}`;
+        this.log.add(this.scanStatsText);
+        if (this.cachingEnabled) {
+          this.log.add(`[MANIFEST] info=${statsInfoOk} thumb=${statsThumbOk} saved=${statsSaveCallCount} entries=${manifestCount} total=${total}`);
+          hilog.info(DOMAIN, TAG, '[MANIFEST] info=%{public}d thumb=%{public}d saved=%{public}d entries=%{public}d total=%{public}d', statsInfoOk, statsThumbOk, statsSaveCallCount, manifestCount, total);
+        }
+      }
+
       this.log.add('缩略图加载完成');
 
       this.statusText = `已连接 - ${this.photoCount} 张照片`;
     } catch (err) {
       hilog.error(DOMAIN, TAG, `loadPhotos error: ${JSON.stringify(err)}`);
       this.statusText = '加载照片失败';
+      this.scanStatsText = '';
     } finally {
       this.scanProgress = 0;
       this.scanTotal = 0;
@@ -1080,7 +1245,12 @@ export class CameraService {
     }
   }
 
-  private async decodeThumbnail(handle: number, data: Uint8Array): Promise<void> {
+  private async decodeThumbnail(
+    handle: number,
+    data: Uint8Array,
+    cacheKey?: string,
+    modDate?: string
+  ): Promise<void> {
     try {
       const orient = this.preloadedOrientations.get(handle);
       const exifDim = this.exifOrigDims.get(handle);
@@ -1107,6 +1277,18 @@ export class CameraService {
         const msg = `[TASKPOOL_THUMB] handle=0x${handle.toString(16)} done ${info.size.width}x${info.size.height}`;
         hilog.info(DOMAIN, TAG, '%{public}s', msg);
         this.log.add(msg);
+
+        // Re-encode the cropped PixelMap and overwrite the raw cache entry,
+        // so future cache hits load a black-bar-free thumbnail directly.
+        if (this.cachingEnabled && cacheKey && modDate) {
+          const orient = this.preloadedOrientations.get(handle);
+          const dims = this.exifOrigDims.get(handle);
+          this.thumbCache.saveEncodedThumbnail(
+            cacheKey, modDate, pixelMap,
+            orient?.rotate, orient?.flipH, orient?.flipV,
+            dims?.w, dims?.h
+          ).catch((_e: Error) => { /* best effort */ });
+        }
       } catch (err) {
         hilog.error(DOMAIN, TAG, `[TASKPOOL_THUMB] FAIL handle=0x%{public}s err=%{public}s`,
           handle.toString(16), JSON.stringify(err));
@@ -1355,6 +1537,14 @@ export class CameraService {
     await this.session.closeSessionAndPipe();
     this.connected = false;
     this.cameraName = '';
+    this.cameraIdentity = '';
+    this.deviceManufacturer = '';
+    this.deviceSerialNumber = '';
+    this.deviceVersion = '';
+    this.usbVidPid = '';
+    this.usbSerialNumber = '';
+    this.cachingEnabled = false;
+    this.cachingDialogRequired = false;
     this.photoCount = 0;
     this.photos = [];
     this.thumbnailPixelMapMap.clear();
@@ -1364,8 +1554,136 @@ export class CameraService {
     this.orientationMap.clear();
     this.orientedDisplaySizes.clear();
     this.clearFullCache();
+    if (this.cachingEnabled) {
+      this.thumbCache.flush().catch((_e: Error) => {});
+    }
+    this.thumbCache.close();
     this.statusText = '已断开连接';
     this.log.add('已断开连接');
+  }
+
+  /**
+   * Build a unique, filesystem-safe camera identity string from PTP DeviceInfo.
+   * Priority: serialNumber > model+manufacturer > USB vid/pid fallback.
+   */
+  private buildCameraIdentity(info: DeviceInfo, usbDevice: usbManager.USBDevice): string {
+    const sanitize = (s: string): string => s.replace(/[^a-zA-Z0-9_.-]/g, '_').substring(0, 64);
+    const manu = (info.manufacturer || '').trim();
+    const model = (info.model || '').trim();
+    const version = (info.deviceVersion || '').trim();
+
+    // Priority 1: PTP serialNumber — unique per camera body
+    const serial = (info.serialNumber || '').trim();
+    if (serial) {
+      return sanitize(`${manu}_${model}_${serial}`);
+    }
+
+    // Priority 2: USB serial number (from USB device descriptor)
+    if (usbDevice.serial) {
+      const usbSerial = usbDevice.serial.trim();
+      if (usbSerial) {
+        return sanitize(`${manu}_${model}_usb_${usbSerial}`);
+      }
+    }
+
+    // Priority 3: model + version + vid + pid — identifies model/firmware
+    const vid = usbDevice.vendorId.toString(16).padStart(4, '0');
+    const pid = usbDevice.productId.toString(16).padStart(4, '0');
+    if (manu || model) {
+      return sanitize(`${manu}_${model}_${version}_${vid}_${pid}`);
+    }
+
+    // Last resort
+    return `vid_${vid}_pid_${pid}`;
+  }
+
+  /**
+   * Check caching preference for the current camera.
+   * If the camera has never been seen, sets cachingDialogRequired=true.
+   * If previously rejected (cachingEnabled=false), keeps it false.
+   * If previously accepted, initializes the thumbnail cache.
+   */
+  private checkCachingState(): void {
+    if (!this.cameraIdentity) {
+      this.cachingEnabled = false;
+      this.cachingDialogRequired = false;
+      return;
+    }
+    const pref = this.cachePrefs.get(this.cameraIdentity);
+    if (!pref) {
+      // New camera: cache FIRST during scan, prompt AFTER scan completes.
+      // This ensures ALL photos are cached regardless of when user taps dialog.
+      this.pendingCamIdForDialog = this.cameraIdentity;
+      this.pendingCamNameForDialog = this.cameraName;
+      this.cachingEnabled = true;
+      this.cachingDialogRequired = true;
+      this.thumbCache.init(this.filesDir, this.cameraIdentity);
+      this.log.add(`新相机 ${this.cameraName}，先缓存后询问`);
+      return;
+    }
+    if (pref.cachingEnabled) {
+      this.cachingEnabled = true;
+      this.cachingDialogRequired = false;
+      this.thumbCache.init(this.filesDir, this.cameraIdentity);
+      this.log.add(`缓存已启用: ${this.cameraName}`);
+    } else {
+      this.cachingEnabled = false;
+      this.cachingDialogRequired = false;
+      this.log.add(`缓存已禁用(用户设置): ${this.cameraName}`);
+    }
+  }
+
+  /**
+   * Called from MainScreen after the user responds to the caching dialog.
+   */
+  setCachingPreference(cameraId: string, enabled: boolean): void {
+    this.cachePrefs.set(cameraId, this.pendingCamNameForDialog, enabled);
+    this.cachingDialogRequired = false;
+    this.cachingEnabled = enabled;
+    this.log.add(enabled ? `用户已启用缓存: ${this.cameraName}` : `用户拒绝缓存: ${this.cameraName}`);
+    // Start the delayed scan now that user has decided
+    if (this.cameraIdentity === cameraId) {
+      this.scanForCamera();
+    }
+  }
+
+  /**
+   * Load a thumbnail from the disk-based ThumbnailCache.
+   * Used instead of USB GetThumb when a valid cache entry exists.
+   */
+  private async loadCachedThumbnail(handle: number, cacheFileName: string): Promise<void> {
+    try {
+      const filePath = this.thumbCache.getCacheDir() + '/' + cacheFileName;
+      const fileBuf: ArrayBuffer | null = await this.thumbCache.readFileToBuffer(filePath);
+      if (!fileBuf) return;
+
+      // Cache thumbnails are already rotate+flip+crop corrected.
+      // Just decode in TaskPool (no transforms) to keep UI responsive.
+      const decodeBuf = fileBuf.slice(0);
+      const task = new taskpool.Task(decodeThumbnailTask, decodeBuf, 0, false, false, 0, 0);
+      const pixelMap = await taskpool.execute(task) as image.PixelMap;
+      const info = await pixelMap.getImageInfo();
+      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
+      this.thumbnailPixelMapMap.set(handle, pixelMap);
+      this.thumbnailLoadedSet.add(handle);
+      this.log.add(`[CACHE_HIT] handle=0x${handle.toString(16)} ${info.size.width}x${info.size.height}`);
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, '[CACHE_HIT] FAIL handle=0x%{public}s err=%{public}s',
+        handle.toString(16), JSON.stringify(err));
+      this.log.add(`缓存加载失败: handle=0x${handle.toString(16)}`);
+    }
+  }
+
+  /**
+   * Asynchronously save raw thumbnail data to the disk cache.
+   * Fire-and-forget: does not block the scan loop.
+   */
+  private scheduleCacheSave(key: string, modDate: string, thumbData: Uint8Array,
+    origWidth?: number, origHeight?: number): void {
+    this.thumbCache.saveRawThumbnail(key, modDate, thumbData, origWidth, origHeight)
+      .catch((_e: Error) => {
+        this.log.add(`缓存写入失败: ${key}`);
+      });
   }
 
   formatSize(bytes: number): string {

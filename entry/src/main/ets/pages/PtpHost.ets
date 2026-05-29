@@ -27,7 +27,7 @@ interface ProcessResult {
   responseCode?: number;
   data?: Uint8Array;
 }
-interface DeviceInfo {
+export interface DeviceInfo {
   manufacturer: string;
   model: string;
   deviceVersion: string;
@@ -39,6 +39,7 @@ export interface ObjectInfo {
   objectCompressedSize: number;
   objectFormat: number;
   captureDate: string;
+  modificationDate: string;
   imagePixWidth: number;
   imagePixHeight: number;
   storageId: number;
@@ -244,11 +245,13 @@ export class PtpSession {
     }
     if (this.usbBusy) return null;
     this.usbBusy = true;
-    log(`Getting thumb for handle 0x${handle.toString(16)}`);
-    const cmd = ptpNative.buildGetThumb(handle);
-    const result = await this.ptpCommandGetLargeData(cmd);
-    this.usbBusy = false;
-    return result;
+    try {
+      log(`Getting thumb for handle 0x${handle.toString(16)}`);
+      const cmd = ptpNative.buildGetThumb(handle);
+      return await this.ptpCommandGetLargeData(cmd);
+    } finally {
+      this.usbBusy = false;
+    }
   }
 
   async getObject(handle: number): Promise<Uint8Array | null> {
@@ -263,11 +266,13 @@ export class PtpSession {
       return null;
     }
     this.usbBusy = true;
-    log(`Getting object for handle 0x${handle.toString(16)}`);
-    const cmd = ptpNative.buildGetObject(handle);
-    const result = await this.ptpCommandGetLargeData(cmd);
-    this.usbBusy = false;
-    return result;
+    try {
+      log(`Getting object for handle 0x${handle.toString(16)}`);
+      const cmd = ptpNative.buildGetObject(handle);
+      return await this.ptpCommandGetLargeData(cmd);
+    } finally {
+      this.usbBusy = false;
+    }
   }
 
   /**
@@ -291,16 +296,19 @@ export class PtpSession {
       return null;
     }
     this.usbBusy = true;
-    log(`Getting partial object for handle 0x${handle.toString(16)} offset=${offset} maxBytes=${maxBytes}`);
-    const cmd = ptpNative.buildGetPartialObject(handle, offset, maxBytes);
-    const result = await this.ptpCommandGetLargeData(cmd);
-    this.usbBusy = false;
-    if (result && result.length > 0) {
-      log(`Got partial data: ${result.length} bytes`);
-    } else {
-      log('GetPartialObject returned no data (camera may not support it)');
+    try {
+      log(`Getting partial object for handle 0x${handle.toString(16)} offset=${offset} maxBytes=${maxBytes}`);
+      const cmd = ptpNative.buildGetPartialObject(handle, offset, maxBytes);
+      const result = await this.ptpCommandGetLargeData(cmd);
+      if (result && result.length > 0) {
+        log(`Got partial data: ${result.length} bytes`);
+      } else {
+        log('GetPartialObject returned no data (camera may not support it)');
+      }
+      return result;
+    } finally {
+      this.usbBusy = false;
     }
-    return result;
   }
 
   // ---- PTP transaction helpers ----
