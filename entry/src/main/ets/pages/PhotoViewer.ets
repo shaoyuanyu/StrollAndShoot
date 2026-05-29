@@ -424,7 +424,7 @@ struct ThumbCellView {
     .justifyContent(FlexAlign.Center)
     .offset({ x: this.ox })
     .scale({ x: this.s, y: this.s })
-    .animation({ duration: 200, curve: Curve.Linear })
+    .animation({ duration: 150, curve: Curve.Linear })
     .onClick(() => {
       if (this.realIdx >= 0) { this.onCellClick(); }
     })
@@ -598,7 +598,11 @@ export struct PhotoViewerScreen {
     const dt = this._displayTotal;
     const centerFrac = realFrac + half;
     const centerIdx = Math.round(centerFrac);
-    for (let i = 0; i < dt; i++) {
+    // 性能优化：仅遍历可见窗口内的 item，避免 O(n) 全量遍历
+    const window = this._displayCount + 2; // 可见区域 + 余量
+    const start = Math.max(0, centerIdx - window);
+    const end = Math.min(dt - 1, centerIdx + window);
+    for (let i = start; i <= end; i++) {
       if (this.isPlaceholder(i)) {
         this.scaleArr[i] = 0;
         this.offsetArr[i] = 0;
@@ -1139,21 +1143,21 @@ export struct PhotoViewerScreen {
                     this.buildMainImage(ri);
                   }
                   .width('100%').height('100%')
-                  .onAreaChange((_o: Area, n: Area) => {
-                    const w = n.width as number;
-                    if (w > 0) { this._swiperWidth = w; }
-                  })
                 })
                 .key((_photo: PhotoEntry, idx: number) => idx.toString())
                 .virtualScroll({ totalCount: this.mainPhotos.length })
             }
             .index(this.mainIdx)
+            .onAreaChange((_o: Area, n: Area) => {
+              const w = n.width as number;
+              if (w > 0) { this._swiperWidth = w; }
+            })
             .disableSwipe(this.isZoomed)
             .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
             .onContentDidScroll((s: number, i: number, p: number) => { this.onMainContentDidScroll(s, i, p); })
             .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
             .onChange((i: number) => { this.onMainChange(i); })
-            .cachedCount(2).loop(false).indicator(false)
+            .cachedCount(6).loop(false).indicator(false)
             .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
             .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
             .width('100%').height('100%')
