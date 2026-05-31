@@ -297,6 +297,10 @@ struct MainImageView {
   @Param pageKey: number = 0;
   @Param isLoading: boolean = false;
   @Param hasThumb: boolean = false;
+  @Param hasFullRes: boolean = false;
+  @Param scanning: boolean = false;
+  @Param scanRefreshKey: number = 0;
+  @Param scanProgressText: string = '';
   @Param filename: string = '';
   @Event onZoomChange: (zoomed: boolean) => void = () => {};
   @Event onGestureStart: () => void = () => {};
@@ -337,6 +341,19 @@ struct MainImageView {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('rgba(0,0,0,0.3)')
         .hitTestBehavior(HitTestMode.None)
+      }
+
+      // Scanning banner — shown when scanning and no full-res loaded yet
+      if (this.scanning && !this.hasFullRes && this.scanProgressText) {
+        Text(this.scanProgressText)
+          .fontSize(12)
+          .fontColor('rgba(255,255,255,0.8)')
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .padding({ top: 4, bottom: 4 })
+          .backgroundColor('rgba(0,0,0,0.4)')
+          .position({ bottom: 0 })
+          .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%').height('100%')
@@ -495,9 +512,33 @@ export struct PhotoViewerScreen {
   @Local photoList: PhotoEntry[] = [];
   // Stable cached copy of photos for Repeat data source (avoids reference changes)
   @Local mainPhotos: PhotoEntry[] = [];
+  /** Counter bumped when currently-displayed photo's thumbnail finishes loading during scan. */
+  @Local onScreenThumbReady: number = 0;
 
   private getPhotos(): PhotoEntry[] {
     return this.mainPhotos;
+  }
+
+  // ---- Scanning guards and auto-recovery ----
+
+  @Monitor('svc.scanning')
+  onScanningChange(mon: IMonitor): void {
+    const before = mon.value()?.before as boolean;
+    const now = mon.value()?.now as boolean;
+    if (before === true && now === false) {
+      this.svc.getLog().add('[PhotoViewer] 扫描完成，自动恢复加载');
+      setTimeout(() => { this.scheduleFullResLoad(); }, 100);
+    }
+  }
+
+  /** On-screen thumbnail refresh: when the current photo's thumb finishes loading during scan. */
+  @Monitor('svc.lastDecodedHandle')
+  onThumbnailDecoded(): void {
+    if (!this.svc.scanning) return;
+    const handle = this.svc.lastDecodedHandle;
+    if (handle >= 0 && handle === this.currentHandle()) {
+      this.onScreenThumbReady++;
+    }
   }
 
   aboutToAppear(): void {
@@ -730,6 +771,11 @@ export struct PhotoViewerScreen {
    * When the timer fires, begin downloading the full-resolution photo.
    */
   private scheduleFullResLoad(): void {
+    // Scanning guard: no full-res loading until scan completes
+    if (this.svc.scanning) {
+      return;
+    }
+
     // Cancel any pending timer
     this.cancelStableTimer();
 
@@ -772,6 +818,9 @@ export struct PhotoViewerScreen {
   }
 
   private async loadFullRes(handle: number): Promise<void> {
+    // Scanning guard: no full-res loading until scan completes
+    if (this.svc.scanning) return;
+
     // Guard: already loaded or another load in progress
     if (this.fullResMap.has(handle) || this.loadingHandle >= 0) return;
 
@@ -808,6 +857,9 @@ export struct PhotoViewerScreen {
    * Does NOT fire concurrent loads — processPreloadQueue() drains one at a time.
    */
   private preloadNeighbors(): void {
+    // Scanning guard
+    if (this.svc.scanning) return;
+
     // Don't rebuild preload queue during inertial scrolling
     if (this._inertiaAnim) {
       return;
@@ -860,6 +912,9 @@ export struct PhotoViewerScreen {
    * Pauses automatically when loadingPaused is set (during user gestures).
    */
   private async processPreloadQueue(): Promise<void> {
+    // Scanning guard
+    if (this.svc.scanning) return;
+
     if (this.preloadActive) return;
     this.preloadActive = true;
 
@@ -1088,7 +1143,13 @@ export struct PhotoViewerScreen {
       pageKey: ri.index,
       isLoading: this.loadingHandle === ri.item.handle,
       hasThumb: this.svc.thumbnailPixelMapMap.has(ri.item.handle),
+      hasFullRes: this.fullResMap.has(ri.item.handle),
       filename: ri.item.filename,
+      scanning: this.svc.scanning,
+      scanRefreshKey: this.onScreenThumbReady,
+      scanProgressText: this.svc.scanTotal > 0
+        ? `📷 更新中 ${this.svc.scanProgress}/${this.svc.scanTotal}`
+        : '',
       onZoomChange: (zoomed: boolean) => { this.isZoomed = zoomed; },
       onGestureStart: () => { this.pausePreloading(); },
       onGestureEnd: () => { this.scheduleResumePreloading(); },

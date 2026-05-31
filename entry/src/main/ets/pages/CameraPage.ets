@@ -4,7 +4,7 @@ import { CameraService } from '../services/CameraService';
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
-  @Event onScan: () => void = () => {};
+  @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
 
   build() {
@@ -13,23 +13,44 @@ export struct CameraPage {
         connected: this.svc.connected, cameraName: this.svc.cameraName,
         photoCount: this.svc.photoCount, statusText: this.svc.statusText,
         compact: false, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal,
-        scanStatsText: this.svc.scanStatsText
+        scanStatsText: this.svc.scanStatsText,
+        scanPhaseText: this.svc.scanPhaseText
       }).margin({ top: 12, bottom: 12 })
 
-      Row() {
-        Button(this.svc.scanning ? '扫描中...' : (this.svc.connected ? '重新扫描' : '搜索相机'))
-          .onClick(() => { this.onScan(); })
-          .enabled(!this.svc.scanning).fontSize(14).width('45%')
+      if (!this.svc.connected) {
+        Button('搜索相机')
+          .onClick(() => { this.onScan(true); })
+          .fontSize(14).width('80%')
+          .enabled(!this.svc.scanning)
+      } else {
+        Row() {
+          Button('快速扫描')
+            .onClick(() => { this.onScan(true); })
+            .enabled(!this.svc.scanning).fontSize(14).width('45%')
 
-        if (this.svc.connected) {
+          if (this.svc.scanning) {
+            Button('扫描中...')
+              .fontSize(14).width('45%')
+              .backgroundColor('#888')
+          } else {
+            Button('全量扫描')
+              .onClick(() => { this.onScan(false); })
+              .fontSize(14).width('45%')
+              .backgroundColor('#E65100')
+          }
+        }
+        .width('100%')
+        .margin({ bottom: 8 })
+
+        Row() {
           Button('断开连接')
             .onClick(() => { this.onDisconnect(); })
-            .fontSize(14).width('45%')
+            .fontSize(14).width('80%')
             .backgroundColor($r('app.color.button_danger'))
-            .margin({ left: '5%' })
         }
+        .width('100%')
+        .margin({ bottom: 12 })
       }
-      .width('100%').margin({ bottom: 12 })
 
       if (this.svc.connected) {
         Text('设备信息')

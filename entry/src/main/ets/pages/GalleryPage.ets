@@ -15,6 +15,8 @@ class FlatItem {
   kind: 'header' | 'row' = 'row';
   dateLabel: string = '';
   rowPhotos: (DisplayGroup | null)[] = [];
+  /** true when all photos in this row have decoded thumbnails. */
+  rowComplete: boolean = true;
 
   static header(label: string): FlatItem {
     const item = new FlatItem();
@@ -23,10 +25,11 @@ class FlatItem {
     return item;
   }
 
-  static row(photos: (DisplayGroup | null)[]): FlatItem {
+  static row(photos: (DisplayGroup | null)[], complete: boolean): FlatItem {
     const item = new FlatItem();
     item.kind = 'row';
     item.rowPhotos = photos;
+    item.rowComplete = complete;
     return item;
   }
 }
@@ -214,11 +217,18 @@ export struct GalleryPage {
       const photos = map.get(k)!;
       for (let i = 0; i < photos.length; i += cols) {
         const row: (DisplayGroup | null)[] = [];
+        let allComplete = true;
         for (let j = 0; j < cols; j++) {
-          if (i + j < photos.length) row.push(photos[i + j]);
-          else row.push(null);
+          if (i + j < photos.length) {
+            row.push(photos[i + j]);
+            if (!this.hasThumb(photos[i + j].displayPhoto.handle)) {
+              allComplete = false;
+            }
+          } else {
+            row.push(null);
+          }
         }
-        items.push(FlatItem.row(row));
+        items.push(FlatItem.row(row, allComplete));
       }
     }
     this._flatItemsCache = items;
@@ -316,10 +326,10 @@ export struct GalleryPage {
   }
 
   @Builder
-  PhotoCell(cellRi: RepeatItem<DisplayGroup | null>) {
+  PhotoCell(cellRi: RepeatItem<DisplayGroup | null>, rowComplete: boolean) {
     if (cellRi.item !== null) {
       Stack() {
-        if (this.hasThumb(cellRi.item!.displayPhoto.handle)) {
+        if (rowComplete && this.hasThumb(cellRi.item!.displayPhoto.handle)) {
           Image(this.svc.thumbnailPixelMapMap.get(cellRi.item!.displayPhoto.handle)!)
             .width('100%').height('100%')
             .objectFit(ImageFit.Cover)
@@ -426,7 +436,8 @@ export struct GalleryPage {
       ConnectionStatusBar({
         connected: this.svc.connected, cameraName: this.svc.cameraName,
         photoCount: this.svc.photoCount, statusText: this.svc.statusText,
-        compact: true, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal
+        compact: true, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal,
+        scanPhaseText: this.svc.scanPhaseText
       }).margin({ top: 12, bottom: 4 })
 
       if (this.displayMode === 'file_first') {
@@ -459,8 +470,14 @@ export struct GalleryPage {
       if (this.svc.photos.length === 0) {
         Column() {
           Text('📷').fontSize(48).margin({ bottom: 12 })
-          Text('连接相机以浏览照片')
-            .fontSize(14).fontColor($r('app.color.text_secondary'))
+          if (this.svc.scanning) {
+            LoadingProgress().width(32).height(32).margin({ bottom: 8 })
+            Text('正在扫描相机...')
+              .fontSize(14).fontColor($r('app.color.text_secondary'))
+          } else {
+            Text('连接相机以浏览照片')
+              .fontSize(14).fontColor($r('app.color.text_secondary'))
+          }
         }
         .width('100%').layoutWeight(1)
         .justifyContent(FlexAlign.Center)
@@ -492,7 +509,7 @@ export struct GalleryPage {
                     Row({ space: this.itemGapPx() }) {
                       Repeat<DisplayGroup | null>(ri.item.rowPhotos)
                         .each((cellRi: RepeatItem<DisplayGroup | null>) => {
-                          this.PhotoCell(cellRi)
+                          this.PhotoCell(cellRi, ri.item.rowComplete)
                         })
                         .key((dg: DisplayGroup | null, idx: number) => {
                           if (dg !== null) return dg.displayPhoto.handle.toString();

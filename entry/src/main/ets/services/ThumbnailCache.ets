@@ -32,6 +32,8 @@ export interface CacheEntry {
   modificationDate: string;
   cacheFileName: string;
   cachedAt: number;   // epoch ms
+  // PTP object handle (for Phase 0 thumbnail mapping without metadata_cache.json)
+  handle?: number;
   // EXIF orientation (saves a GetPartialObject USB call on hit)
   exifRotate?: number;
   exifFlipH?: boolean;
@@ -169,10 +171,11 @@ export class ThumbnailCache {
     key: string,
     modDate: string,
     jpegData: Uint8Array,
+    handle?: number,
     origWidth?: number,
     origHeight?: number
   ): Promise<void> {
-    const promise = this.doSaveRawThumbnail(key, modDate, jpegData, origWidth, origHeight);
+    const promise = this.doSaveRawThumbnail(key, modDate, jpegData, handle, origWidth, origHeight);
     this.pendingSaves.push(promise);
     await promise;
     const idx = this.pendingSaves.indexOf(promise);
@@ -183,6 +186,7 @@ export class ThumbnailCache {
     key: string,
     modDate: string,
     jpegData: Uint8Array,
+    handle?: number,
     origWidth?: number,
     origHeight?: number
   ): Promise<void> {
@@ -204,6 +208,7 @@ export class ThumbnailCache {
         cacheFileName: cacheFileName,
         cachedAt: Date.now()
       };
+      if (handle !== undefined) entry.handle = handle;
       // Save origWidth/Height for future crop calculation, but NOT
       // exifRotate — that flag is set only by saveEncodedThumbnail when
       // the JPEG on disk is actually rotate+flip+crop corrected.
@@ -227,6 +232,7 @@ export class ThumbnailCache {
     key: string,
     modDate: string,
     pixelMap: image.PixelMap,
+    handle?: number,
     exifRotate?: number,
     exifFlipH?: boolean,
     exifFlipV?: boolean,
@@ -262,6 +268,7 @@ export class ThumbnailCache {
         cacheFileName: cacheFileName,
         cachedAt: Date.now()
       };
+      if (handle !== undefined) entry.handle = handle;
       if (exifRotate !== undefined) { entry.exifRotate = exifRotate; }
       if (exifFlipH !== undefined) { entry.exifFlipH = exifFlipH; }
       if (exifFlipV !== undefined) { entry.exifFlipV = exifFlipV; }
@@ -354,6 +361,17 @@ export class ThumbnailCache {
    */
   getEntryCount(): number {
     return this.manifest.size;
+  }
+
+  /**
+   * Get all cache entries (used by Phase 0 fallback to reconstruct PhotoEntry).
+   */
+  getAllEntries(): CacheEntry[] {
+    const result: CacheEntry[] = [];
+    this.manifest.forEach((entry: CacheEntry) => {
+      result.push(entry);
+    });
+    return result;
   }
 
   /**

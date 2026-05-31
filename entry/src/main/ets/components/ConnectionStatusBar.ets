@@ -8,6 +8,7 @@ export struct ConnectionStatusBar {
   @Param scanProgress: number = 0;
   @Param scanTotal: number = 0;
   @Param scanStatsText: string = '';
+  @Param scanPhaseText: string = '';
 
   build() {
     if (this.compact) {
@@ -74,10 +75,19 @@ export struct ConnectionStatusBar {
               .height(4)
               .color($r('app.color.primary'))
               .backgroundColor($r('app.color.thumbnail_placeholder'))
-            Text(`${this.scanProgress}/${this.scanTotal}`)
-              .fontSize(11)
-              .fontColor($r('app.color.text_secondary'))
-              .margin({ top: 4 })
+            Row() {
+              Text(`${this.scanProgress}/${this.scanTotal}`)
+                .fontSize(11)
+                .fontColor($r('app.color.text_secondary'))
+              if (this.scanPhaseText) {
+                Text(this.scanPhaseText)
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_secondary'))
+                  .margin({ left: 8 })
+              }
+            }
+            .width('100%')
+            .margin({ top: 4 })
           }
           .width('100%')
           .margin({ top: 8 })

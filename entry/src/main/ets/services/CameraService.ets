@@ -86,6 +86,10 @@ export class CameraService {
   @Trace scanProgress: number = 0;
   @Trace scanTotal: number = 0;
   @Trace scanStatsText: string = '';
+  /** Quick-scan phase description ("获取元数据" / "加载缩略图") */
+  @Trace scanPhaseText: string = '';
+  /** Last decoded thumbnail handle — consumed by PhotoViewer for on-screen refresh */
+  @Trace lastDecodedHandle: number = -1;
 
   // Format filter support detection (cached across directory levels)
   private formatFilterWorks: boolean | null = null;
@@ -774,7 +778,7 @@ export class CameraService {
     }
   }
 
-  async scanForCamera(): Promise<void> {
+  async scanForCamera(quickMode: boolean = true): Promise<void> {
     this.scanning = true;
     this.log.clear();
     this.log.add('=== 开始扫描 ===');
@@ -874,7 +878,21 @@ export class CameraService {
         return;
       }
 
-      await this.loadPhotosAndThumbnails();
+      // Phase 0: deploy cached snapshot (quick mode only, caching enabled, known camera)
+      if (quickMode && this.cachingEnabled && this.cameraIdentity &&
+          this.cachePrefs.hasCamera(this.cameraIdentity)) {
+        this.log.add('[快速扫描] 部署缓存快照...');
+        this.statusText = '正在加载缓存...';
+        await this.deployCacheSnapshot();
+        this.log.add(`[快速扫描] 缓存快照就绪: ${this.photoCount} 张`);
+      }
+
+      // scanning stays true for the entire scan (Phase 1 → 2a → 2b)
+      this.scanning = true;
+      this.statusText = '正在扫描...';
+
+      // Phase 1 + 2a + 2b (replaces old loadPhotosAndThumbnails)
+      await this.loadPhotosAndThumbnails(quickMode);
 
       // Defer registry validation so UI becomes responsive immediately
       this.validateRegistry().catch((_e: Error) => { /* best effort */ });
@@ -962,7 +980,7 @@ export class CameraService {
    * Traverse directories (instant with format filtering), then load photo
    * metadata and thumbnails in a single pass with a progress bar.
    */
-  private async loadPhotosAndThumbnails(): Promise<void> {
+  private async loadPhotosAndThumbnails(_quickMode: boolean): Promise<void> {
     this.statusText = '正在获取照片列表...';
     this.photoCount = 0;
     this.scanProgress = 0;
@@ -997,27 +1015,19 @@ export class CameraService {
 
       hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}`);
 
-      // ---- Phase 2: getObjectInfo + getThumb in a single pass ----
-      this.log.add(`开始加载 ${handles.length} 张照片...`);
+      // ---- Phase 2a: getObjectInfo + sort (metadata only) ----
+      this.log.add(`开始加载 ${handles.length} 张照片元数据...`);
       this.scanProgress = 0;
       this.scanTotal = handles.length;
-      this.statusText = '正在加载照片...';
+      this.scanPhaseText = '获取元数据';
+      this.statusText = '正在获取元数据...';
   
 
-      const decodeJobs: Promise<void>[] = [];
       const photoList: PhotoEntry[] = [];
       const validCacheKeys: Set<string> = new Set();
-      let statsCacheHits = 0;
-      let statsPartialSkips = 0;
-      let statsSaveCallCount = 0;
       let statsInfoOk = 0;
-      let statsThumbOk = 0;
 
       // Initialize thumbnail cache if enabled
-      // Always init cache dir + load manifest before the loop (even if
-      // cachingEnabled is false — may be toggled mid-scan by user dialog).
-      // This prevents setCachingPreference from re-initing mid-scan and
-      // clearing the manifest while saves are in progress.
       if (this.cameraIdentity) {
         this.thumbCache.init(this.filesDir, this.cameraIdentity);
         if (this.cachingEnabled) {
@@ -1033,190 +1043,67 @@ export class CameraService {
         const info = await this.session.getObjectInfo(h);
         if (info) {
           statsInfoOk++;
-          const modDate = info.modificationDate || '';
           photoList.push({
             handle: h,
             filename: info.filename,
             size: info.objectCompressedSize,
             objectFormat: info.objectFormat,
             captureDate: info.captureDate || '',
-            modificationDate: modDate,
+            modificationDate: info.modificationDate || '',
             imagePixWidth: info.imagePixWidth || 0,
             imagePixHeight: info.imagePixHeight || 0,
             storageId: info.storageId || 0
           });
         }
 
-        // Check disk cache first
         const cacheKey = info ? `${info.filename}::${info.objectCompressedSize}` : '';
-        const modDate = info?.modificationDate || '';
         if (cacheKey) validCacheKeys.add(cacheKey);
-
-        let thumbData: Uint8Array | null = null;
-        let cacheHit = false;
-        let cachedEntry: CacheEntry | null = null;
-        let skipPartial = false;
-
-        if (this.cachingEnabled && cacheKey && !this.thumbnailLoadedSet.has(h)) {
-          cachedEntry = this.thumbCache.findCached(cacheKey, modDate);
-          // Cache hit: skip GetPartialObject (thumbnails are finalized in cache)
-          cacheHit = cachedEntry !== null;
-          skipPartial = cacheHit;
-          cachedEntry = this.thumbCache.findCached(cacheKey, modDate);
-          if (cachedEntry) {
-            // Cache hit — load from file, no transforms needed
-            cacheHit = true;
-            statsCacheHits++;
-            statsPartialSkips++;
-            decodeJobs.push(this.loadCachedThumbnail(h, cachedEntry.cacheFileName));
-          } else {
-            // Cache miss — log details for diagnosis
-            const savedMod = this.thumbCache.debugLookup(cacheKey);
-            if (savedMod !== null) {
-              this.log.add(`[CACHE_MISS] ${info?.filename}: saved="${savedMod}" cur="${modDate}" match=${savedMod === modDate}`);
-            } else {
-              this.log.add(`[CACHE_MISS] ${info?.filename}: key not in manifest`);
-            }
-          }
-        }
-
-        if (!cacheHit && !this.thumbnailLoadedSet.has(h)) {
-          thumbData = await this.session.getThumb(h);
-          if (thumbData && thumbData.length > 0) {
-            statsThumbOk++;
-          } else {
-            this.log.add(`[NO_THUMB] handle=0x${h.toString(16)} ${info?.filename || '?'} cacheHit=${cacheHit} loaded=${this.thumbnailLoadedSet.has(h)}`);
-          }
-        }
-
-        // Orientation extraction: skip if cache already provides it
-        let partialOrientation: OrientationTransform | null = null;
-        if (!skipPartial) {
-          // Pre-read first 16KB via GetPartialObject for EXIF Orientation + dims
-          const partial = await this.session.getPartialObject(h, 0, 16384);
-          if (partial && partial.length > 0) {
-            try {
-              const orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
-              // Always store in preloadedOrientations, even for default (0,0,0),
-              // so that scheduleCacheSave passes orientation to the cache entry.
-              // Otherwise next scan can't skip GetPartialObject for these photos.
-              this.preloadedOrientations.set(h, orient);
-              partialOrientation = orient;
-              const parsed = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
-              if (parsed) {
-                this.exifOrigDims.set(h, parsed);
-                this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} ok ${parsed.w}x${parsed.h}`);
-              } else {
-                this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} FAILED`);
-                // SubIFD fallback for RAW files (NEF, CR2, etc.):
-                // Try reading SubIFD entries (0x014A) via second GetPartialObject.
-                const raw = new Uint8Array(partial.buffer as ArrayBuffer);
-                if (raw.length > 12 && (raw[0] === 0x49 || raw[0] === 0x4D)) {
-                  try {
-                    const le = raw[0] === 0x49;
-                    const r16 = (p: number) => (p + 2 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8)) : ((raw[p] << 8) | raw[p+1]);
-                    const r32 = (p: number) => (p + 4 > raw.length) ? 0 : le ? (raw[p] | (raw[p+1] << 8) | (raw[p+2] << 16) | (raw[p+3] << 24)) : ((raw[p] << 24) | (raw[p+1] << 16) | (raw[p+2] << 8) | raw[p+3]);
-                    const off = 0; // TIFF header starts at 0 for RAW
-                    if (r16(off + 2) === 0x002A) {
-                      const ifd0Off = off + r32(off + 4);
-                      if (ifd0Off + 2 <= raw.length) {
-                        const eCnt = r16(ifd0Off);
-                        for (let ei = 0; ei < eCnt && ifd0Off + 2 + (ei+1) * 12 <= raw.length; ei++) {
-                          const eb = ifd0Off + 2 + ei * 12;
-                          if (r16(eb) === 0x014A && r16(eb + 2) === 4) { // SubIFD tag
-                            const cnt = r32(eb + 4);
-                            const arrOff = r32(eb + 8);
-                            if (cnt > 0 && arrOff > 0 && arrOff + cnt * 4 <= raw.length) {
-                              for (let si = 0; si < cnt; si++) {
-                                const subOff = r32(arrOff + si * 4);
-                                if (subOff < 100) continue;
-                                try {
-                                  const sub = await this.session.getPartialObject(h, subOff, 8192);
-                                  if (sub && sub.length > 20) {
-                                    const sr = new Uint8Array(sub.buffer as ArrayBuffer);
-                                    const scnt = le ? (sr[0] | (sr[1] << 8)) : ((sr[0] << 8) | sr[1]);
-                                    let sw = 0, sh = 0;
-                                    for (let j = 0; j < scnt && 2 + (j+1) * 12 <= sr.length; j++) {
-                                      const sb = 2 + j * 12;
-                                      const stag = le ? (sr[sb] | (sr[sb+1] << 8)) : ((sr[sb] << 8) | sr[sb+1]);
-                                      const sv = le ? (sr[sb+8] | (sr[sb+9] << 8) | (sr[sb+10] << 16) | (sr[sb+11] << 24)) : ((sr[sb+8] << 24) | (sr[sb+9] << 16) | (sr[sb+10] << 8) | sr[sb+11]);
-                                      if (stag === 0x0100) sw = sv;
-                                      if (stag === 0x0101) sh = sv;
-                                    }
-                                    if (sw > 100 && sh > 100) {
-                                      this.exifOrigDims.set(h, new OrientedSize(sw, sh));
-                                      this.log.add(`[SUBIFD_DIMS] handle=0x${h.toString(16)} subIfd#${si} off=${subOff} ${sw}x${sh}`);
-                                      break;
-                                    }
-                                  }
-                                } catch (_eSub) { /* try next SubIFD */ }
-                              }
-                            }
-                            break;
-                          }
-                        }
-                      }
-                    }
-                  } catch (_eSub) { /* SubIFD fallback failed */ }
-                }
-              }
-            } catch (_e) {
-              this.log.add(`[EXIF_DIMS] handle=0x${h.toString(16)} EXCEPTION`);
-            }
-          }
-        }
-
-        // Decode thumbnail (after preloadedOrientations is populated)
-        if (thumbData && thumbData.length > 0) {
-          decodeJobs.push(this.decodeThumbnail(h, thumbData, cacheKey, modDate));
-        }
-
-        // Save raw thumbnail bytes to cache (uncorrected JPEG).
-        // Orientation/dims saved but NOT exifRotate — that flag is set
-        // only by saveEncodedThumbnail when the corrected JPEG is written.
-        if (thumbData && thumbData.length > 0 && this.cachingEnabled && cacheKey) {
-          statsSaveCallCount++;
-          const dims = this.exifOrigDims.get(h);
-          this.scheduleCacheSave(cacheKey, modDate, thumbData, dims?.w, dims?.h);
-        }
 
         this.scanProgress = i + 1;
       }
 
+      // Sort: captureDate DESC → modificationDate DESC → handle DESC
+      photoList.sort((a: PhotoEntry, b: PhotoEntry): number => {
+        const da = a.captureDate || '';
+        const db = b.captureDate || '';
+        if (da !== db) return db.localeCompare(da);
+        const ma = a.modificationDate || '';
+        const mb = b.modificationDate || '';
+        if (ma !== mb) return mb.localeCompare(ma);
+        return b.handle - a.handle;
+      });
+
+      // cleanupStaleMemoryCache: remove entries for deleted photos
+      {
+        const validHandles = new Set<number>();
+        for (const p of photoList) {
+          validHandles.add(p.handle);
+        }
+        this.cleanupStaleMemoryCache(validHandles);
+      }
+
+      // Replace photos (triggers gallery refresh via photosVersion++)
       this.photos = photoList;
       this.photoCount = photoList.length;
       this.photosVersion++;
 
-      await Promise.all(decodeJobs);
-      this.thumbnailVersion++;
-
-      // Wait for all pending cache writes, then purge stale entries
-      if (this.cachingEnabled) {
-        await this.thumbCache.flush();
-        if (validCacheKeys.size > 0) {
-          const purged = await this.thumbCache.purgeStale(validCacheKeys);
-          if (purged > 0) {
-            this.log.add(`缓存清理: 移除了 ${purged} 个过期条目`);
-          }
-        }
-        this.thumbCache.close();
+      // Persist metadata cache for next quick scan
+      if (this.cameraIdentity && this.cachingEnabled) {
+        this.saveMetadataCache(photoList);
       }
+
+      this.log.add(`元数据获取完成: ${photoList.length} 张`);
+
+      // ---- Phase 2b: load thumbnails, row by row ----
+      this.scanPhaseText = '加载缩略图';
+      this.statusText = '正在加载缩略图...';
+      await this.loadThumbnailsRowByRow(validCacheKeys);
 
       // Compute scan stats for UI display
       {
         const total = this.photoCount;
-        const missCount = total - statsCacheHits;
-        const getThumbCount = missCount;
-        const partialCount = total - statsPartialSkips;
-        const totalUsb = total /*getObjectInfo*/ + getThumbCount + partialCount;
-        const hitRate = total > 0 ? (statsCacheHits / total * 100).toFixed(0) : '0';
-        const manifestCount = this.cachingEnabled ? this.thumbCache.getEntryCount() : 0;
-        this.scanStatsText = `照片${total} | USB${totalUsb} | 缓存${statsCacheHits}/${total}(${hitRate}%) | 省PartialOb${statsPartialSkips}`;
+        this.scanStatsText = `照片${total} | 扫描完成`;
         this.log.add(this.scanStatsText);
-        if (this.cachingEnabled) {
-          this.log.add(`[MANIFEST] info=${statsInfoOk} thumb=${statsThumbOk} saved=${statsSaveCallCount} entries=${manifestCount} total=${total}`);
-          hilog.info(DOMAIN, TAG, '[MANIFEST] info=%{public}d thumb=%{public}d saved=%{public}d entries=%{public}d total=%{public}d', statsInfoOk, statsThumbOk, statsSaveCallCount, manifestCount, total);
-        }
       }
 
       this.log.add('缩略图加载完成');
@@ -1233,6 +1120,137 @@ export class CameraService {
     }
   }
 
+  /**
+   * Phase 2b: load thumbnails row by row (row width ≈ column count).
+   * After each row is fully loaded, bump thumbnailVersion so GalleryPage
+   * re-evaluates row completeness and shows the row all at once.
+   */
+  private async loadThumbnailsRowByRow(
+    validCacheKeys: Set<string>
+  ): Promise<void> {
+    const photos = this.photos;
+    if (photos.length === 0) return;
+
+    // Determine row width: use gallery column count (default 4)
+    // The caller passes a reasonable default since we can't access display here.
+    const rowWidth = 4;
+
+    let totalLoaded = 0;
+    const totalToLoad = photos.length;
+    this.scanProgress = 0;
+    this.scanTotal = totalToLoad;
+    this.lastDecodedHandle = -1;
+
+    for (let batchStart = 0; batchStart < totalToLoad; batchStart += rowWidth) {
+      const batchEnd = Math.min(batchStart + rowWidth, totalToLoad);
+      const rowPromises: Promise<void>[] = [];
+      let hasNewLoads = false;
+
+      for (let i = batchStart; i < batchEnd; i++) {
+        const photo = photos[i];
+
+        // Already loaded (from Phase 0 deployCacheSnapshot or prior scan)
+        if (this.thumbnailLoadedSet.has(photo.handle)) {
+          totalLoaded++;
+          continue;
+        }
+
+        // Check disk cache first
+        const key = `${photo.filename}::${photo.size}`;
+        const modDate = photo.modificationDate || '';
+
+        if (this.cachingEnabled && key) {
+          const cachedEntry = this.thumbCache.findCached(key, modDate);
+          if (cachedEntry) {
+            rowPromises.push(this.loadCachedThumbnail(photo.handle, cachedEntry.cacheFileName));
+            totalLoaded++;
+            continue;
+          }
+        }
+
+        // Need USB: getThumb + EXIF + decode
+        hasNewLoads = true;
+        rowPromises.push(this.loadSingleThumbnail(photo, key, modDate));
+      }
+
+      if (rowPromises.length > 0) {
+        await Promise.all(rowPromises);
+      }
+
+      // Row complete: bump thumbnailVersion so GalleryPage re-evaluates rowComplete
+      if (hasNewLoads) {
+        this.thumbnailVersion++;
+      }
+
+      // Update lastDecodedHandle for PhotoViewer on-screen refresh
+      for (let i = batchStart; i < batchEnd; i++) {
+        if (i < totalToLoad && this.thumbnailLoadedSet.has(photos[i].handle)) {
+          this.lastDecodedHandle = photos[i].handle;
+          break; // Only need one
+        }
+      }
+
+      this.scanProgress = batchEnd;
+
+      if (!this.connected) break;
+    }
+
+    // Phase 2b complete: final cleanup
+    if (this.cachingEnabled) {
+      await this.thumbCache.flush();
+      if (validCacheKeys.size > 0) {
+        const purged = await this.thumbCache.purgeStale(validCacheKeys);
+        if (purged > 0) {
+          this.log.add(`缓存清理: 移除了 ${purged} 个过期条目`);
+        }
+      }
+      this.thumbCache.close();
+    }
+  }
+
+  /**
+   * Load a single photo's thumbnail via USB: getThumb + EXIF + decode + cache save.
+   */
+  private async loadSingleThumbnail(
+    photo: PhotoEntry,
+    cacheKey: string,
+    modDate: string
+  ): Promise<void> {
+    try {
+      const h = photo.handle;
+      // Skip GetPartialObject — orientation extraction is done inline here
+      const thumbData = await this.session.getThumb(h);
+      if (!thumbData || thumbData.length === 0) {
+        this.log.add(`[NO_THUMB] handle=0x${h.toString(16)} ${photo.filename}`);
+        return;
+      }
+
+      // Read EXIF orientation from 16KB header
+      const partial = await this.session.getPartialObject(h, 0, 16384);
+      if (partial && partial.length > 0) {
+        try {
+          const orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
+          this.preloadedOrientations.set(h, orient);
+          const parsed = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
+          if (parsed) {
+            this.exifOrigDims.set(h, parsed);
+          }
+        } catch (_e) { /* best effort */ }
+      }
+
+      // Decode and save to cache
+      await this.decodeThumbnail(h, thumbData, cacheKey, modDate);
+
+      // Save raw thumb to disk cache
+      if (this.cachingEnabled && cacheKey) {
+        const dims = this.exifOrigDims.get(h);
+        this.scheduleCacheSave(cacheKey, modDate, thumbData, dims?.w, dims?.h);
+      }
+    } catch (err) {
+      this.log.add(`缩略图加载失败: ${photo.filename} ${JSON.stringify(err)}`);
+    }
+  }
+
   async loadThumbnail(handle: number): Promise<void> {
     if (this.thumbnailLoadedSet.has(handle)) return;
     try {
@@ -1243,6 +1261,114 @@ export class CameraService {
       }
     } catch (err) {
       this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
+    }
+  }
+
+  /** Deploy cached metadata + thumbnails for instant gallery rendering (Phase 0). */
+  async deployCacheSnapshot(): Promise<void> {
+    const entries = this.loadMetadataCache();
+    if (!entries || entries.length === 0) return;
+
+    // Sort cached entries newest-first (same as Phase 2a sorting)
+    entries.sort((a: PhotoEntry, b: PhotoEntry): number => {
+      const da = a.captureDate || '';
+      const db = b.captureDate || '';
+      if (da !== db) return db.localeCompare(da);
+      const ma = a.modificationDate || '';
+      const mb = b.modificationDate || '';
+      if (ma !== mb) return mb.localeCompare(ma);
+      return b.handle - a.handle;
+    });
+
+    // Populate photos (triggers gallery to show dates + placeholders)
+    this.photos = entries;
+    this.photoCount = entries.length;
+    this.photosVersion++;
+
+    // Load all cached thumbnails from disk
+    const cacheLoads: Promise<void>[] = [];
+    for (const entry of entries) {
+      const key = `${entry.filename}::${entry.size}`;
+      const modDate = entry.modificationDate || '';
+      const cached = this.thumbCache.findCached(key, modDate);
+      if (cached) {
+        cacheLoads.push(this.loadCachedThumbnail(entry.handle, cached.cacheFileName));
+      }
+    }
+
+    if (cacheLoads.length > 0) {
+      await Promise.all(cacheLoads);
+    }
+    this.thumbnailVersion++;
+    this.log.add(`缓存快照: ${entries.length} 张照片, ${cacheLoads.length} 个缩略图`);
+  }
+
+  /** Load cached PhotoEntry[] from metadata_cache.json */
+  private loadMetadataCache(): PhotoEntry[] | null {
+    if (!this.cameraIdentity) return null;
+    const path = this.thumbCache.getCacheDir() + '/metadata_cache.json';
+    try {
+      const f = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+      const stat = fileIo.statSync(path);
+      if (stat.size <= 0) {
+        fileIo.closeSync(f);
+        return null;
+      }
+      const buf = new ArrayBuffer(stat.size);
+      fileIo.readSync(f.fd, buf);
+      fileIo.closeSync(f);
+      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
+      const raw: Record<string, Object> = JSON.parse(text);
+      const rawEntries = raw['entries'] as PhotoEntry[] | undefined;
+      if (rawEntries && rawEntries.length > 0) {
+        this.log.add(`元数据缓存加载: ${rawEntries.length} 条`);
+        return rawEntries;
+      }
+    } catch (_e) {
+      // File doesn't exist yet
+    }
+    return null;
+  }
+
+  /** Persist PhotoEntry[] to metadata_cache.json */
+  private saveMetadataCache(entries: PhotoEntry[]): void {
+    if (!this.cameraIdentity) return;
+    const path = this.thumbCache.getCacheDir() + '/metadata_cache.json';
+    try {
+      fileIo.mkdirSync(this.thumbCache.getCacheDir(), true);
+    } catch (_e) { /* best effort */ }
+    try {
+      const text = JSON.stringify({ entries: entries });
+      const f = fileIo.openSync(path,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      fileIo.writeSync(f.fd, text);
+      fileIo.closeSync(f);
+      this.log.add(`元数据缓存已保存: ${entries.length} 条`);
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'saveMetadataCache failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  /** Clean up stale in-memory caches for handles no longer in the photo list. */
+  private cleanupStaleMemoryCache(validHandles: Set<number>): void {
+    const stale: number[] = [];
+    this.thumbnailPixelMapMap.forEach((_pm: image.PixelMap, h: number) => {
+      if (!validHandles.has(h)) {
+        stale.push(h);
+      }
+    });
+    for (const h of stale) {
+      const pm = this.thumbnailPixelMapMap.get(h);
+      if (pm) { try { pm.release(); } catch (_e) { /* best effort */ } }
+      this.thumbnailPixelMapMap.delete(h);
+      this.thumbnailLoadedSet.delete(h);
+      this.preloadedOrientations.delete(h);
+      this.exifOrigDims.delete(h);
+      this.orientationMap.delete(h);
+      this.orientedDisplaySizes.delete(h);
+    }
+    if (stale.length > 0) {
+      this.log.add(`内存缓存清理: 移除了 ${stale.length} 个失效条目`);
     }
   }
 
@@ -1275,6 +1401,8 @@ export class CameraService {
         this.thumbnailPixelMapMap.set(handle, pixelMap);
         this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
         this.thumbnailLoadedSet.add(handle);
+        // Notify PhotoViewer of fresh thumbnail
+        this.lastDecodedHandle = handle;
         const msg = `[TASKPOOL_THUMB] handle=0x${handle.toString(16)} done ${info.size.width}x${info.size.height}`;
         hilog.info(DOMAIN, TAG, '%{public}s', msg);
         this.log.add(msg);
@@ -1285,7 +1413,7 @@ export class CameraService {
           const orient = this.preloadedOrientations.get(handle);
           const dims = this.exifOrigDims.get(handle);
           this.thumbCache.saveEncodedThumbnail(
-            cacheKey, modDate, pixelMap,
+            cacheKey, modDate, pixelMap, handle,
             orient?.rotate, orient?.flipH, orient?.flipV,
             dims?.w, dims?.h
           ).catch((_e: Error) => { /* best effort */ });
@@ -1554,6 +1682,8 @@ export class CameraService {
     this.exifOrigDims.clear();
     this.orientationMap.clear();
     this.orientedDisplaySizes.clear();
+    this.scanPhaseText = '';
+    this.lastDecodedHandle = -1;
     this.clearFullCache();
     if (this.cachingEnabled) {
       this.thumbCache.flush().catch((_e: Error) => {});

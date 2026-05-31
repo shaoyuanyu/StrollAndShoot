@@ -213,6 +213,10 @@ export struct MainScreen {
             },
             onDownloadSelected: async (handles: number[]) => {
               if (handles.length === 0) return;
+              if (this.svc.scanning) {
+                this.svc.getLog().add('扫描中，跳过下载');
+                return;
+              }
               this.svc.cancelPreload();
               this.svc.getLog().add(`选中 ${handles.length} 张照片，开始下载`);
               this.syncDownloadedKeys();
@@ -260,7 +264,7 @@ export struct MainScreen {
 
         TabContent() {
           CameraPage({
-            onScan: () => { this.svc.scanForCamera(); },
+            onScan: (quick: boolean) => { this.svc.scanForCamera(quick); },
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
           })
         }
