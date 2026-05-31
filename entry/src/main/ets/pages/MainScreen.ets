@@ -138,6 +138,7 @@ export struct MainScreen {
             downloadedKeys: this.downloadedKeys,
             galleryColumnCount: this.settings.galleryColumnCount,
             displayMode: this.settings.displayMode,
+            onScan: (quick: boolean) => { this.svc.scanForCamera(quick); },
             onSelectModeChange: (v: boolean) => { this.gallerySelectMode = v; },
             exitSelectModeVersion: this.exitSelectModeVersion,
             onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {

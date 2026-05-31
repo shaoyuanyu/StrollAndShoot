@@ -47,6 +47,7 @@ export struct GalleryPage {
   @Local selectMode: boolean = false;
   @Local selectedHandles: Set<number> = new Set();
   @Local galleryScale: number = 1.0;
+  @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onThumbClick: (displayGroups: DisplayGroup[], index: number) => void = (_g: DisplayGroup[], _i: number) => {};
   @Event onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
   @Event onCancelDownload: () => void = () => {};
@@ -439,6 +440,33 @@ export struct GalleryPage {
         compact: true, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal,
         scanPhaseText: this.svc.scanPhaseText
       }).margin({ top: 12, bottom: 4 })
+
+      // Scan buttons — visible when connected
+      if (this.svc.connected && !this.svc.scanning) {
+        Row() {
+          Button('🚀 快速扫描')
+            .fontSize(12).width('48%')
+            .height(32)
+            .onClick(() => { this.onScan(true); })
+          Button('📋 全量扫描')
+            .fontSize(12).width('48%')
+            .height(32)
+            .backgroundColor('#E65100')
+            .onClick(() => { this.onScan(false); })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.SpaceEvenly)
+        .padding({ left: 8, right: 8, bottom: 4 })
+      } else if (this.svc.connected && this.svc.scanning) {
+        Row() {
+          Text('⏳ 扫描中')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ bottom: 4 })
+      }
 
       if (this.displayMode === 'file_first') {
         Scroll() {
