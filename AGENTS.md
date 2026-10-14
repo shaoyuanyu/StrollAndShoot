@@ -58,6 +58,9 @@ bash deploy.sh run
 # Build only
 hvigorw assembleHap --no-daemon
 
+# Build with DevEco CLI（推荐，输出更简洁，已验证）
+devecocli build
+
 # Clean build (required after reverting code to avoid stale cache bugs)
 hvigorw clean --no-daemon
 
@@ -87,10 +90,11 @@ This project uses **ArkUI V2 state management exclusively**. V1 decorators (`@St
 | `@Provider()` / `@Consumer()` | Cross-level data sharing (replaces `@Provide`/`@Consume`) |
 | `@ObservedV2` | Marks a class as observable (replaces `@Observed`) |
 | `@Trace` | Property-level precise tracking (replaces `@Track`) |
-| `@Monitor` | Async change listener with before/after values (replaces `@Watch`) |
+| `@Monitor` | Async change listener with before/after values (replaces `@Watch`；回调参数 `IMonitor`，通过 `monitor.value(path)?.before` / `?.now` 获取旧/新值) |
+| `@SyncMonitor` | API 23+ 同步版 `@Monitor`（回调立即执行） |
 | `@Computed` | Memoized computed property (no V1 equivalent) |
 | `@Builder` | Retained from V1, compatible with V2 |
-| `Repeat` | List rendering (replaces `ForEach`/`LazyForEach`) |
+| `Repeat` | List rendering (replaces `ForEach`；`LazyForEach` 的 V2 对应物是 `RepeatForEach`，见官方迁移指南) |
 | `AppStorageV2.connect()` | App-wide reactive state sharing (replaces `AppStorage` / `@StorageLink`) |
 | `PersistenceV2.globalConnect()` | Persistent app-wide state (replaces `PersistentStorage.persistProp` + `@StorageLink`) |
 | `!!` | Two-way binding syntax (replaces `$$`) |
@@ -106,7 +110,7 @@ Native C++ functions exposed to ArkTS via `libentry.so`. Type declarations in [t
 
 ### Resource System
 
-`$r('app.type.name')` references resolve from `src/main/resources/`. Color mode defaults to following system (`COLOR_MODE_NOT_SET`).
+`$r('app.type.name')` references resolve from `src/main/resources/`. 颜色模式遵循系统（`COLOR_MODE_NOT_SET`，官方定义：值 -1，"未设置"，跟随系统渲染；`COLOR_MODE_LIGHT`/`COLOR_MODE_DARK` 为显式指定）。
 
 ## Pages
 
@@ -253,15 +257,67 @@ The fix: recursively enter **all** directories (format `0x3001`), collect all no
 ### HarmonyOS USB bulk transfer ≤ 200KB
 Single `bulkTransfer` call total data must be under 200KB. Exceeding returns -1. Using 192KB (196608 bytes) as buffer size leaves safe headroom for USB container overhead. See memory file `hmos-usb-transfer-limit.md`.
 
+> 注意：此限制为项目实测经验，官方 `usbManager` 文档未记载具体数值。修改传输缓冲区大小时务必在真机上验证。
+
 ### Phone USB connection is unstable during development
 The phone frequently disconnects from `hdc` during development. Before any deploy or log check, verify with `hdc list targets`. If `[Empty]`, ask the user to reconnect the phone.
 
-### Consult HarmonyOS developer docs via Playwright
-When you need API reference, guides, or system interfaces, use Playwright to browse https://developer.huawei.com/consumer/cn/doc/. Search using `#developer_search_input_pc` input field. The doc site is client-side rendered (use `browser_evaluate` to extract content, not plain HTML). Prefer this over guessing API signatures.
+### 查询 HarmonyOS 官方文档 — 本地知识库 MCP（首选）+ DevEco CLI docs（备用）
+需要 API 参考、开发指南、系统接口，或验证技术经验时，**优先使用本地 `developercomm` 知识库 MCP**，无需浏览器：
+
+- `mcp_developercomm_searchDocuments` — 全文检索华为官方知识库（API 参考、开发指南、最佳实践、FAQ、版本说明等），传入自然语言 query
+- `mcp_developercomm_getDocumentsById` — 用搜索结果的 `parent` 字段（文档 ID）拉取完整文档内容，一次最多 10 篇
+- 注意：返回内容过长时会截断（标记 `[truncated]`），可换用更精确的关键词多次搜索
+- 备用渠道：`devecocli docs` 提供同样的离线本地文档（开发指南/API参考/最佳实践/FAQ/版本说明/变更预告），输出为完整 markdown，无截断。用 MCP 结果不够时可交叉验证
+- 已废弃 Playwright 浏览华为开发者文档站点的方式（此前需用 `#developer_search_input_pc` 搜索且页面为客户端渲染）
 
 ### Test workflow for camera-required features
 
 After any code change that involves camera/USB interaction: build → deploy → tell user what changed → user disconnects phone from PC, connects to camera, tests → user reports results → user reconnects phone to PC → check hilog for debug info. Do NOT assume gestures or camera features work until confirmed on actual camera hardware.
+
+## DevEco CLI (`devecocli`)
+
+华为官方推出的 agent coding 工具包（npm 包 `@deveco/deveco-cli`），包装 hvigor/ohpm/hdc/模拟器工具链并内置本地离线文档与官方 skills。**本机已安装 `1.3.0`，可执行命令为 `devecocli`（不是 `deveco`）**。包内自带 `SKILL.md`（完整用法）与 `docs.zip`（离线文档）。
+
+### 必需的环境变量（Linux 实测）
+
+```bash
+export DEVECO_CLI_CLT_PATH=/home/ysy/.hmos/command-line-tools   # CLT 不会被自动发现，必须显式指定
+export DEVECO_CLI_SKIP_VERSION_CHECK=1                          # 本机 CLT 6.1.0.830 < CLI 要求的最低 26.0.0，必须跳过版本检查
+```
+
+> 注：`DEVECO_CLI_SKIP_VERSION_CHECK` 是 CLI 官方 postinstall 脚本自己使用的环境变量。跳过检查后所有核心功能在本机实测正常；若未来升级 CLT 到 26.0.0+ 可移除。CLT 位于 `~/.hmos/command-line-tools/`（内含 hvigor 6.23.5、codelinter 6.0.240、ohpm、HarmonyOS SDK API 23）。
+
+### 已在本项目实测可用的命令
+
+| 命令 | 用途 | 实测结果 |
+|---|---|---|
+| `devecocli build` | 构建项目（等同 `hvigorw assembleHap`） | ✅ 9.5s 构建成功，输出比 hvigorw 简洁；`build clean` 可清理 |
+| `devecocli check lint [path]` | 运行 code-linter 检查（TS/ArkTS） | ✅ 本项目检出 5 个性能 warning（高频日志、Date 复用），支持 `--fix`/`--format json`/`--output-path` |
+| `devecocli docs catalog` | 列出离线文档目录（6 类：开发指南/API参考/最佳实践/FAQ/版本说明/变更预告） | ✅ |
+| `devecocli docs search <关键词...>` | 本地全文搜索，支持 `--catalog`/`--format json`/`--limit` | ✅ 搜 `usbManager` 可命中官方 FAQ |
+| `devecocli docs read <documentId>` | 读取完整文档（输出 markdown，无截断） | ✅ documentId 为搜索结果的完整路径 |
+| `devecocli device list` | 列出真机/模拟器 | ✅ 当前无设备时正常提示 |
+| `devecocli skills list` | 列出官方 HarmonyOS skills（35 个：arkts 语法检查、状态管理迁移、崩溃分析等） | ✅ |
+| `devecocli skills add --skill <name> --path <dir>` | 直装官方 skill 到指定目录（标准 `<name>/SKILL.md` 格式）| ✅ 全部 35 个官方 skills 已装入实体仓库 `/home/ysy/Projects/hmos/.skills/`，本项目经 `.agents/skills` 符号链接接入；`skills add --all --path <dir>` 可一键全装 |
+| `devecocli init --skill` / `--mcp` | 将 skill 安装到 AI agents / 配置 deveco-mcp（.ets/C++ 语法检查） | 支持 `--agent`（opencode/cursor 等，**不含 VS Code Copilot**）、`--path` 直装、`--project` 项目级 |
+
+### 需设备/登录或未验证的命令
+
+- `devecocli run` / `--apply <file>` / `--hotreload` — 构建+安装+启动；`--apply` 为快速增量部署（改动文件列表写入 `.hvigor/` 下，需先完整 run 一次；要求 DevEco Studio ≥ 6.1.1）；`--hotreload` 需后台进程保活 watch session
+- `devecocli log` — hilog/崩溃日志（`--crash`/`--level`/`--bundle-name`/`--follow`），需设备
+- `devecocli ui` — UI 检视（`layout`/`screenshot`/`click`/`swipe`/`text` 等），需设备
+- `devecocli emulator` — 模拟器管理（本机 Linux 无 DevEco Studio，未验证；要求 DevEco Studio ≥ 6.1.0）
+- `devecocli signature generate` — 自动生成签名材料并写入 `build-profile.json5`，需先 `devecocli auth login` 且连接设备（可替代 deploy.sh 的手动签名流程）
+- `devecocli check compat` — 两个 SDK 版本间的破坏性 API 变更扫描（`--source-version`/`--target-version`）
+- `devecocli update` — 更新 CLI 自身
+
+### 与现有流程的关系
+
+- 构建：`devecocli build` 可直接替代 `hvigorw assembleHap --no-daemon`；但 `deploy.sh` 的完整签名部署流程仍保持不动
+- 文档查询：`devecocli docs` 与 `developercomm` MCP 数据同源，可作为交叉验证渠道（MCP 输出截断时尤其有用）
+- 代码检查：`devecocli check lint` 与 `hvigorw` 的 codelinter 同一引擎
+- Skills：实体仓库在 `/home/ysy/Projects/hmos/.skills/`，本项目通过 `.agents/skills` 符号链接接入（VS Code 官方支持的项目级 skills 位置）。链接丢失时重建：`mkdir -p .agents && ln -s /home/ysy/Projects/hmos/.skills .agents/skills`
 
 ## 版本管理
 

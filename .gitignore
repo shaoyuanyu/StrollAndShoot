@@ -11,7 +11,7 @@
 **/.test
 /.appanalyzer
 
-/.claude
+/.agents
 /deploy.sh
 /.docs
 /libgphoto*
