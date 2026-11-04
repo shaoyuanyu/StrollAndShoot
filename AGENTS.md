@@ -17,6 +17,55 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
 | 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.3.1 / 1003001 |
+| 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署）。见“macOS 开发环境” |
+
+## macOS 开发环境
+
+日常开发在 macOS 上，用 DevEco Studio 自带的工具链，**不需要** command-line-tools，**不要**设 `DEVECO_CLI_CLT_PATH`。
+
+| 项 | 位置 / 值 |
+|---|---|
+| DevEco Studio | `/Applications/DevEco-Studio.app`，26.0.0 |
+| SDK | `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/`，apiVersion 26 |
+| ArkTS 类型声明 | `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/api/`，接口名、参数类型与起始版本以那里的 `.d.ts` 为准 |
+| hdc | `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc`，**不在 PATH**，要写绝对路径 |
+| hvigor | `/Applications/DevEco-Studio.app/Contents/tools/hvigor`，由 `devecocli` 自动发现 |
+| devecocli | `~/.nvm/versions/node/v26.13.0/bin/devecocli`，1.3.0-stable |
+| 模拟器镜像 | `~/Library/Huawei/Sdk/system-image/HarmonyOS-7.0.0`（`devecocli emulator` 未验证） |
+
+`devecocli` 由 nvm 装的 node v26.13.0 提供。新开的 shell 若没加载 nvm，会出现 `command not found`，先 `source ~/.nvm/nvm.sh`。
+
+### 与 Linux 开发机的差异
+
+| 项 | macOS | Linux |
+|---|---|---|
+| `DEVECO_CLI_CLT_PATH` | 不设；设成 `Contents/tools` 会报 `Invalid DEVECO_CLI_CLT_PATH` | 必须设为 `~/.hmos/command-line-tools` |
+| `DEVECO_CLI_SKIP_VERSION_CHECK` | 不需要 | 需要 |
+| `hvigorw` 脚本 | 项目根目录**没有**，只能用 `devecocli` | 有（本地文件，未纳入版本控制） |
+| `deploy.sh` | **不存在**（被 `.gitignore` 忽略，只在 Linux 上） | 有，内含签名材料路径与口令 |
+| 签名材料 | **没有**：`build-profile.json5` 的 `signingConfigs` 为空，也没有 `~/.ohos` | `deploy.sh` 负责 |
+| 安装到手机 | 未打通，见下 | `bash deploy.sh full` |
+
+### macOS 上的流程
+
+```bash
+# 1. 改代码后构建
+devecocli build
+
+# 2. 静态检查
+devecocli check lint entry/src/main/ets
+
+# 3. 回退改动后清理，避免命中旧产物
+devecocli build clean
+
+# 4. 查设备 / 查日志（hdc 不在 PATH）
+/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc list targets
+```
+
+- `devecocli build` 只产出 `entry/build/default/outputs/default/entry-default-unsigned.hap`，**未签名**，`hdc install` 装不上。
+- macOS 上目前没有签名材料。要上真机只能在 DevEco Studio 里配自动签名（登录华为账号 → Project Structure → Signing Configs）再点运行；或者把 HAP 拷到 Linux 机器用 `deploy.sh` 处理，后一条未验证。
+- 项目声明 `compatibleSdkVersion: 6.1.0(23)`，本机 SDK 是 API 26，构建能通过。不要因为本机 SDK 版本高就去改 `build-profile.json5` 里的版本。
+- 涉及相机与 USB 的验证仍然只能在真机上做，macOS 这边没有安装通道时，代码改动要交给用户在 Linux 链路上部署确认。
 
 ## 目录结构
 
@@ -25,7 +74,7 @@ StrollAndShoot/
 ├── AppScope/app.json5              # bundleName、版本号、图标
 ├── build-profile.json5             # SDK 6.1.0、products
 ├── code-linter.json5               # lint 规则
-├── deploy.sh                       # 构建→签名→安装→启动（本地文件，未纳入版本控制）
+├── deploy.sh                       # 构建→签名→安装→启动（Linux 本地文件，未纳入版本控制）
 ├── entry/
 │   ├── build-profile.json5         # 模块构建；CMake 配置在 externalNativeOptions
 │   ├── src/main/
@@ -48,6 +97,21 @@ StrollAndShoot/
 ```
 
 ## 构建与部署
+
+### macOS
+
+```bash
+# 不需要环境变量，devecocli 自己找得到 DevEco Studio 里的 hvigor
+devecocli build
+
+# 清理。改动回退之后必须清理，否则可能命中旧产物
+devecocli build clean
+
+# 静态检查
+devecocli check lint entry/src/main/ets
+```
+
+### Linux
 
 ```bash
 # 环境变量（devecocli 必需）
@@ -73,9 +137,11 @@ bash deploy.sh run
 devecocli check lint entry/src/main/ets
 ```
 
+### 通用
+
 - 产物是 `entry/build/default/outputs/default/entry-default-unsigned.hap`，约 3.9 MB。
-- `hvigorw` 会提示 `No signingConfig found for product default`，签名由 `deploy.sh` 单独完成。
-- `deploy.sh` 被 `.gitignore` 忽略，只存在于开发机，里面写着签名材料的路径与口令。
+- 构建会提示 `No signingConfig found for product default`，签名由 `deploy.sh`（Linux）单独完成；macOS 上没有 `deploy.sh`。
+- `deploy.sh` 被 `.gitignore` 忽略，只存在于 Linux 开发机，里面写着签名材料的路径与口令。
 - `entry/src/test`、`entry/src/ohosTest` 只有新建工程自带的模板用例，`hvigorw test` 不会检查项目逻辑。
 
 ## 架构
@@ -345,7 +411,7 @@ interface PhotoEntry {
 `bash deploy.sh run` 只做签名、安装、启动。代码有改动时用 `bash deploy.sh full`，否则安装的还是旧 HAP。这个坑已经造成过多次“bug 没有修复”的误判。
 
 ### 构建缓存会造成假象
-改动回退之后直接重新构建，hvigorw 可能复用旧的构建产物，看起来像是回退没有生效。回退代码之后先执行 `hvigorw clean --no-daemon`。
+改动回退之后直接重新构建，hvigor 可能复用旧的构建产物，看起来像是回退没有生效。回退代码之后先清理：Linux 用 `hvigorw clean --no-daemon`，macOS 用 `devecocli build clean`。
 
 ### 留意写定的上限
 旧的 `loadPhotoList` 里有 `const limit = Math.min(handles.length, 50)`，照片数量被悄悄限制在 50 张。遇到“功能大体正常但数字对不上”时，检索 `limit`、`min(`、`max(`、`slice` 以及写定的小数字。
@@ -354,7 +420,14 @@ interface PhotoEntry {
 旧逻辑用 `validCount <= 2` 作为是否继续进入子目录的条件，遇到同一层有多个子目录（如 DCIM/100NCD90 与 DCIM/101NCD90）、一个目录下超过 2 个直接子项、或者同一层文件与目录混排的相机就会漏照片。现在的写法是进入全部目录，把所有非目录 handle 当作照片。
 
 ### 手机 USB 连接不稳定
-开发过程中手机经常与 `hdc` 断开。部署或查日志之前先用 `hdc list targets` 确认，返回 `[Empty]` 就让用户重新插线。
+开发过程中手机经常与 `hdc` 断开。部署或查日志之前先确认设备，返回 `[Empty]` 就让用户重新插线。
+
+```bash
+# Linux
+hdc list targets
+# macOS（hdc 不在 PATH）
+/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc list targets
+```
 
 ### 统计计数器要与条件分支同步
 `statsPartialSkips` 曾经声明了、也用在统计公式里，但没有任何地方递增，导致 USB 调用次数统计翻倍。新增计数变量后，检查每个对应的条件分支是否都做了递增。
@@ -369,7 +442,7 @@ interface PhotoEntry {
 - `mcp_developercomm_getDocumentsById` — 用搜索结果的 `parent` 字段（文档 ID）取完整内容，一次最多 10 篇
 - 返回内容过长会被截断（标记 `[truncated]`），改用更精确的关键词分多次检索
 - 备用渠道：`devecocli docs`（`catalog` / `search` / `read`）提供同一份离线文档，输出完整 markdown 且不截断
-- 本机 SDK 的类型声明在 `~/.hmos/command-line-tools/sdk/default/openharmony/ets/api/`，接口名、参数类型与起始版本以那里的 `.d.ts` 为准
+- 本机 SDK 的类型声明：Linux 在 `~/.hmos/command-line-tools/sdk/default/openharmony/ets/api/`，macOS 在 `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/api/`。接口名、参数类型与起始版本以那里的 `.d.ts` 为准
 
 ### 已经对照官方资料核对过的结论
 
@@ -384,26 +457,30 @@ interface PhotoEntry {
 
 华为官方的 agent coding 工具包（npm 包 `@deveco/deveco-cli`），包装 hvigor、ohpm、hdc、模拟器工具链，内置离线文档与官方 skills。本机装的是 1.3.0，命令名是 `devecocli`。包内自带 `SKILL.md` 与 `docs.zip`。
 
-### 环境变量（Linux 实测必需）
+### 环境变量（分平台）
+
+macOS 上**什么都不用设**，`devecocli` 会自动发现 `/Applications/DevEco-Studio.app/Contents/tools/hvigor`。把 `DEVECO_CLI_CLT_PATH` 指向 `Contents/tools` 反而报 `Invalid DEVECO_CLI_CLT_PATH`。
+
+Linux 上两个都必需：
 
 ```bash
 export DEVECO_CLI_CLT_PATH=~/.hmos/command-line-tools   # CLT 不会被自动发现
 export DEVECO_CLI_SKIP_VERSION_CHECK=1                  # 本机 CLT 6.1.0.830 低于 CLI 要求的最低版本
 ```
 
-CLT 位于 `~/.hmos/command-line-tools/`，内含 hvigor 6.23.5、codelinter 6.0.240、ohpm 与 HarmonyOS SDK API 23。升级 CLT 之后可以去掉第二个变量。
+Linux 的 CLT 位于 `~/.hmos/command-line-tools/`，内含 hvigor 6.23.5、codelinter 6.0.240、ohpm 与 HarmonyOS SDK API 23。升级 CLT 之后可以去掉第二个变量。
 
 ### 本项目实测可用
 
-| 命令 | 用途 |
-|---|---|
-| `devecocli build` | 构建，等同 `hvigorw assembleHap`，输出更简洁；`build clean` 可清理 |
-| `devecocli check lint [path]` | 运行 code-linter，支持 `--fix`、`--format json`、`--output-path` |
-| `devecocli docs catalog` / `search` / `read` | 离线文档目录、全文检索、读取完整文档 |
-| `devecocli device list` | 列出真机与模拟器 |
-| `devecocli skills list` / `skills add --skill <name> --path <dir>` | 官方 skills（35 个）的列出与安装，`--all` 可全装 |
+| 命令 | 用途 | 实测平台 |
+|---|---|---|
+| `devecocli build` | 构建，等同 `hvigorw assembleHap`，输出更简洁；`devecocli build clean` 可清理 | macOS、Linux |
+| `devecocli check lint [path]` | 运行 code-linter，支持 `--fix`、`--format json`、`--output-path` | macOS、Linux |
+| `devecocli docs catalog` / `search` / `read` | 离线文档目录、全文检索、读取完整文档 | macOS、Linux |
+| `devecocli device list` | 列出真机与模拟器 | macOS、Linux |
+| `devecocli skills list` / `skills add --skill <name> --path <dir>` | 官方 skills（35 个）的列出与安装，`--all` 可全装 | Linux |
 
-官方 skills 的实体仓库在 `/home/ysy/Projects/hmos/.skills/`，本项目通过 `.agents/skills` 符号链接接入。链接丢失时重建：
+官方 skills 的实体仓库在 `/home/ysy/Projects/hmos/.skills/`，Linux 开发机上本项目通过 `.agents/skills` 符号链接接入。链接丢失时重建（路径只在 Linux 上存在，macOS 上没有这个目录）：
 
 ```bash
 mkdir -p .agents && ln -s /home/ysy/Projects/hmos/.skills .agents/skills
@@ -413,11 +490,11 @@ mkdir -p .agents && ln -s /home/ysy/Projects/hmos/.skills .agents/skills
 
 - `run` / `--apply <file>`（快速增量部署，要求 DevEco Studio ≥ 6.1.1）/ `--hotreload`（需要后台进程保活）
 - `log`（hilog 与崩溃日志）、`ui`（界面检视与操作），两者都需要设备
-- `emulator`（模拟器管理，本机 Linux 没有 DevEco Studio，未验证）
+- `emulator`（模拟器管理）。macOS 已下载镜像 `HarmonyOS-7.0.0`，但未验证；Linux 开发机没有 DevEco Studio
 - `signature generate`（生成签名材料，需先 `devecocli auth login` 且连接设备）
 - `check compat`（两个 SDK 版本之间的破坏性变更扫描）、`update`（更新 CLI 自身）
 
-`deploy.sh` 的签名与安装流程保持不变，`devecocli` 只用来构建、静态检查与查文档。
+签名与安装仍走 `deploy.sh`（仅 Linux），`devecocli` 只用来构建、静态检查与查文档。macOS 上构建产物是 unsigned HAP，装不进手机。
 
 ## 版本管理
 
