@@ -238,25 +238,6 @@ export class PtpSession implements PtpTransport {
     log('Session closed');
   }
 
-  close(): void {
-    // Best-effort synchronous close. For proper cleanup use closeSessionAndPipe().
-    if (this.sessionOpen && this.pipe && this.bulkOut) {
-      try {
-        const closeCmd = ptpNative.buildCloseSession();
-        usbManager.bulkTransfer(this.pipe, this.bulkOut, closeCmd, 1000);
-      } catch (_e) { /* best effort */ }
-      this.sessionOpen = false;
-    }
-    if (this.pipe) {
-      try { usbManager.closePipe(this.pipe); } catch (_e) { /* best effort */ }
-      this.pipe = null;
-    }
-    this.device = null;
-    this.bulkIn = null;
-    this.bulkOut = null;
-    log('Session closed');
-  }
-
   async getThumb(handle: number): Promise<Uint8Array | null> {
     if (!this.sessionOpen) return null;
     for (let wait = 0; wait < 150; wait++) {

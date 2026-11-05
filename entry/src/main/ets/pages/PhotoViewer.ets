@@ -20,7 +20,6 @@ struct ZoomableImage {
   @Param photoH: number = 1;
   @Param pageKey: number = 0;
   @Event onZoomChange: (zoomed: boolean) => void = () => {};
-  @Event onEdgeChange: (atEdge: boolean) => void = () => {};
   @Event onGestureStart: () => void = () => {};
   @Event onGestureEnd: () => void = () => {};
   @Local scaleVal: number = 1.0;
@@ -163,7 +162,6 @@ struct ZoomableImage {
     this.pinching = false;
     if (this.scaleVal < 1.05) {
       this.onZoomChange(false);
-      this.onEdgeChange(false);
       this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
       this.onGestureEnd();
       return;
@@ -212,14 +210,6 @@ struct ZoomableImage {
     this.lastOffX = this.offX;
     this.lastOffY = this.offY;
     this.panEndAt = Date.now();
-    if (this.scaleVal > 1.0) {
-      const iw = this.imgW * this.scaleVal;
-      if (iw > this.compW) {
-        const mx = (iw - this.compW) / 2;
-        const atEdge = this.offX >= mx - 1 || this.offX <= -mx + 1;
-        this.onEdgeChange(atEdge);
-      }
-    }
     this.onGestureEnd();
   }
 
@@ -230,7 +220,6 @@ struct ZoomableImage {
     }
     if (this.scaleVal > 1.0) {
       this.onZoomChange(false);
-      this.onEdgeChange(false);
       this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
       return;
     }
@@ -323,6 +312,13 @@ struct MainImageView {
           Text(this.filename)
             .fontSize(14).fontColor('#aaa')
             .maxLines(2).textAlign(TextAlign.Center)
+          // Reading scanRefreshKey keeps this component subscribed to the
+          // decode counter: the PixelMap map itself is not observable, so
+          // without it a thumbnail decoded mid-scan never replaces this placeholder.
+          if (this.scanning) {
+            Text(this.scanRefreshKey > 0 ? '正在解码缩略图…' : '等待扫描…')
+              .fontSize(12).fontColor('#888').margin({ top: 8 })
+          }
         }
         .width('100%').height('100%')
         .justifyContent(FlexAlign.Center)
@@ -551,6 +547,7 @@ export struct PhotoViewerScreen {
 
   aboutToDisappear(): void {
     this.cancelStableTimer();
+    this.svc.cancelPreload();
     // Restore system bars to match the app theme.
     WindowUtils.applyThemeSystemBars(
       WindowUtils.isDarkMode(this.getUIContext().getHostContext()));
@@ -705,6 +702,7 @@ export struct PhotoViewerScreen {
     this.thumbIdx = index;
     this.thumbCtrl.changeIndex(index, false);
     this.updateScales(index);
+    this.svc.setDetailIndex(index, this.getPhotos());
     this.scheduleFullResLoad();
   }
 
@@ -723,6 +721,7 @@ export struct PhotoViewerScreen {
     }
     // Skip full-res download during inertial scrolling — only show what's already cached
     if (!this._inertiaAnim) {
+      this.svc.setDetailIndex(idx, this.getPhotos());
       this.scheduleFullResLoad();
     }
   }
@@ -1149,15 +1148,6 @@ export struct PhotoViewerScreen {
   }
 
   // ========== Builders ==========
-
-  private getDisplayPixelMap(entry: PhotoEntry): image.PixelMap | null {
-    // Prefer full-resolution if loaded
-    if (this.fullResMap.has(entry.handle)) {
-      return this.fullResMap.get(entry.handle)!;
-    }
-    // Fall back to thumbnail
-    return this.getThumbPixelMap(this.mainIdx);
-  }
 
   private getThumbPixelMap(realIdx: number): image.PixelMap | null {
     const photos = this.getPhotos();

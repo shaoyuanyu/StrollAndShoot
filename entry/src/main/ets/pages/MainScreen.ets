@@ -166,12 +166,15 @@ export struct MainScreen {
                 }
               }
 
-              // 3. Cache positions for all handles in the current viewport
-              //    (so PhotoViewerScreen can look them up at pop time without
-              //     relying on getRectInfoById on a possibly-stale layout).
+              // 3. Cache positions around the tapped item so the pop animation can
+              //    restore the shared element from a known rect. Only a window is
+              //    cached — any handle outside it falls back to a live query below,
+              //    so correctness is kept without an O(n) scan on every tap.
               const posCache: Record<string, string> = {};
-              for (const g of _displayGroups) {
-                const h = g.displayPhoto.handle;
+              const winStart = Math.max(0, index - 40);
+              const winEnd = Math.min(_displayGroups.length, index + 41);
+              for (let i = winStart; i < winEnd; i++) {
+                const h = _displayGroups[i].displayPhoto.handle;
                 const r = ComponentAttrUtils.getRectInfoById(
                   this.getUIContext(), `thumb_${h}`);
                 if (r) {

@@ -73,10 +73,6 @@ export class AppLog {
       `[${e.timestamp}] ${e.message}`).join('\n');
   }
 
-  getEntries(): LogEntry[] {
-    return this.entries;
-  }
-
   clear(): void {
     this.entries = [];
     if (this.filePath) {

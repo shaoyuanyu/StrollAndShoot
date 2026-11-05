@@ -16,7 +16,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.3.1 / 1003001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.4.1 / 1004001 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署）。见“macOS 开发环境” |
 
 ## macOS 开发环境
@@ -368,9 +368,13 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 
 ```text
 {filesDir}/thumb_cache/{cameraIdentity}/
-  manifest.json    // {"filename::size": CacheEntry}
+  manifest.json    // { "version": 2, "entries": { "filename::size": CacheEntry } }
   {hash}.jpg       // 缩略图 JPEG，quality 85
 ```
+
+- manifest 带 `version`，旧版本会被整体丢弃重建（v1 无法区分原始与已纠正的 JPEG）
+- 条目里的 `corrected` 表示磁盘上的 JPEG 是否已烘焙旋转/翻转/裁剪；为 false 时按 `exifRotate`/`exifFlipH`/`exifFlipV` 在解码时补上变换
+- 首次扫描先写原始 JPEG（`corrected: false`），解码成功后再用纠正版覆盖（`corrected: true`），两次写入严格串行
 
 - 键为 `filename::size`，与下载注册表一致
 - 命中条件：键存在且 `modificationDate` 相同，否则视为过期
@@ -477,19 +481,19 @@ interface PhotoEntry {
 
 ## 已知问题
 
-2026-10-14 审视代码时定位到的问题，2026-11-05 复核。修掉一处就删一条。
+2026-10-14 审视代码时定位的问题，2026-11-05 已全部修复，当前无已知缺陷。
 
-| 位置 | 问题 |
-|---|---|
-| `CameraService.ets` `disconnect()` | 先把 `cachingEnabled` 置 false，之后的 `if (this.cachingEnabled) { thumbCache.flush() }` 永远不会执行，断开连接时挂起的缩略图缓存不会落盘 |
-| `CameraService.ets:1823` → `ThumbnailCache.saveRawThumbnail` | 参数错位：第 4 个形参是 `handle`，实际传进去的是原始宽度，于是缓存条目里 `handle` 变成原始宽度、`origWidth` 变成原始高度、`origHeight` 缺失 |
-| `CameraService.ets:1600` | `setDetailIndex()` 没有调用点，`detailIndex` 恒为 -1，导致 `evictFurthest()` 退化成“淘汰 handle 最大的一张”，`preloadAdjacent()` 从不运行 |
-| `CameraService.ets:1013` | 遗留调试代码 `// TEST: only load first 300 photos` 与注释掉的 slice |
-| `PhotoViewer.ets:301` | `scanRefreshKey` 参数传入后从未被 `build()` 读取，V2 下不会触发刷新 |
-| `services/ThumbnailCache.ets` | `CacheEntry` 的 `handle`、`exifRotate`、`exifFlipH`、`exifFlipV`、`origWidth`、`origHeight` 只写不读；`CameraService.loadCachedThumbnail()` 一律按“已经旋转裁剪过”解码，而 `saveRawThumbnail()` 写入的是原始 JPEG，两次写入之间进程退出，下次启动就会把未纠正的缩略图当成已纠正的版本显示 |
-| `pages/SettingsPage.ets` | 亮色下卡片用 `bg_surface`（#FFFFFF）而页面背景也是白色，没有阴影或描边，分组边界几乎不可见 |
+已修复（2026-11-05 第二批）：
 
-没有调用点的代码，可以直接删除：`PhotoViewer.getDisplayPixelMap`、`CameraService.getLogText` / `isPhotoDownloaded` / `loadThumbnail` / `cacheOrientedSize`、`ThumbnailCache.loadThumbnail` / `getCacheSizeBytes` / `getEntryCount` / `getAllEntries` / `debugLookup` / `getCameraCacheSize`、`PtpSession.close`、`AppLog.getEntries`、`ZoomableImage.onEdgeChange`。
+- `disconnect()` 先把 `cachingEnabled` 置 false 再判断，缓存 flush 永不执行 → 改为 flush 后再清标志
+- `saveRawThumbnail` 第 4 个形参是 `handle`，实际传入原始宽度 → 调用改为 `saveRawThumbnail(key, modDate, data, handle, exifRotate, flipH, flipV, w, h)`
+- 缓存清单里的方向字段只写不读 → manifest 升级到 v2（`{version, entries}`），条目新增 `corrected`；`loadCachedThumbnail` 按标记决定是否应用 EXIF 变换；**旧版 manifest 会被整体丢弃**
+- `setDetailIndex()` 无调用点 → 在 `PhotoViewer` 的主图索引变化时调用；`evictFurthest()` 改为按照片列表索引计算距离，不再拿 handle 当索引
+- 遗留的 `// TEST: only load first 300 photos` → 删除
+- `scanRefreshKey` 传入但无人读取 → 占位视图读取它显示解码状态，同时建立 V2 依赖
+- 亮色下设置页卡片与页面同为白色 → 卡片统一加 `divider` 描边、圆角 12
+- `MainScreen` 点击缩略图时对全部照片调用 `getRectInfoById()` → 只缓存点击位置前后各 40 个，超出范围回退到实时查询
+- 无调用点代码全部删除（`getLogText` / `isPhotoDownloaded` / `loadThumbnail` / `cacheOrientedSize` / `getDisplayPixelMap` / `onEdgeChange` / `ThumbnailCache` 的 5 个查询方法 / `PtpSession.close` / `AppLog.getEntries` / `float.json`）
 
 ### 2026-11-05 已修复
 

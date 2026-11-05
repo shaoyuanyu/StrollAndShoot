@@ -34,13 +34,39 @@ export interface CacheEntry {
   cachedAt: number;   // epoch ms
   // PTP object handle (for Phase 0 thumbnail mapping without metadata_cache.json)
   handle?: number;
-  // EXIF orientation (saves a GetPartialObject USB call on hit)
+  // EXIF orientation of the source photo.
+  //   corrected === true  → the JPEG on disk is already rotate/flip/crop corrected,
+  //                         these fields are informational only.
+  //   corrected !== true  → the JPEG on disk is the raw camera thumbnail and these
+  //                         fields MUST be applied when decoding.
   exifRotate?: number;
   exifFlipH?: boolean;
   exifFlipV?: boolean;
-  // Original photo dimensions (for crop calculation)
+  // Original photo dimensions (used to crop black bars from raw thumbnails)
   origWidth?: number;
   origHeight?: number;
+  // True only after a decode+re-encode pass has baked the transform into the JPEG.
+  corrected?: boolean;
+}
+
+/** On-disk manifest envelope. Bumped whenever the meaning of CacheEntry changes. */
+interface ManifestFile {
+  version: number;
+  entries: Record<string, CacheEntry>;
+}
+
+/** v2 added `corrected`; v1 entries cannot be trusted for orientation. */
+const MANIFEST_VERSION = 2;
+
+/** Parse a manifest, returning an empty set for unknown/legacy schemas. */
+function readManifestEntries(text: string): Record<string, CacheEntry> {
+  try {
+    const parsed = JSON.parse(text) as ManifestFile;
+    if (parsed && parsed.version === MANIFEST_VERSION && parsed.entries) {
+      return parsed.entries;
+    }
+  } catch (_e) { /* corrupt manifest — treat as empty */ }
+  return {};
 }
 
 interface CacheKeyParts {
@@ -115,9 +141,15 @@ export class ThumbnailCache {
         const buf = new ArrayBuffer(stat.size);
         fileIo.readSync(f.fd, buf);
         const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-        const obj = JSON.parse(text) as Record<string, CacheEntry>;
-        for (const k of Object.keys(obj)) {
-          this.manifest.set(k, obj[k]);
+        const entries = readManifestEntries(text);
+        for (const k of Object.keys(entries)) {
+          this.manifest.set(k, entries[k]);
+        }
+        if (Object.keys(entries).length === 0) {
+          hilog.info(DOMAIN, TAG, 'legacy or empty manifest, cache discarded');
+          fileIo.closeSync(f);
+          this.persistManifestSync();
+          return;
         }
       }
       fileIo.closeSync(f);
@@ -146,28 +178,6 @@ export class ThumbnailCache {
   }
 
   /**
-   * Load a cached thumbnail pixelMap from disk.
-   */
-  async loadThumbnail(cacheFileName: string): Promise<image.PixelMap | null> {
-    try {
-      const filePath = this.cacheDir + '/' + cacheFileName;
-      const f = fileIo.openSync(filePath, fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(filePath);
-      const buf = new ArrayBuffer(stat.size);
-      fileIo.readSync(f.fd, buf);
-      fileIo.closeSync(f);
-
-      const imgSrc = image.createImageSource(buf);
-      const pixelMap = await imgSrc.createPixelMap();
-      imgSrc.release();
-      return pixelMap;
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'loadThumbnail failed: %{public}s', JSON.stringify(e));
-      return null;
-    }
-  }
-
-  /**
    * Save raw thumbnail bytes to cache (avoids re-encoding).
    * Includes EXIF orientation/dims to skip GetPartialObject on future hits.
    * Tracks the promise so caller can await all pending saves via flush().
@@ -177,10 +187,14 @@ export class ThumbnailCache {
     modDate: string,
     jpegData: Uint8Array,
     handle?: number,
+    exifRotate?: number,
+    exifFlipH?: boolean,
+    exifFlipV?: boolean,
     origWidth?: number,
     origHeight?: number
   ): Promise<void> {
-    const promise = this.doSaveRawThumbnail(key, modDate, jpegData, handle, origWidth, origHeight);
+    const promise = this.doSaveRawThumbnail(key, modDate, jpegData, handle,
+      exifRotate, exifFlipH, exifFlipV, origWidth, origHeight);
     this.pendingSaves.push(promise);
     await promise;
     const idx = this.pendingSaves.indexOf(promise);
@@ -192,6 +206,9 @@ export class ThumbnailCache {
     modDate: string,
     jpegData: Uint8Array,
     handle?: number,
+    exifRotate?: number,
+    exifFlipH?: boolean,
+    exifFlipV?: boolean,
     origWidth?: number,
     origHeight?: number
   ): Promise<void> {
@@ -214,9 +231,12 @@ export class ThumbnailCache {
         cachedAt: Date.now()
       };
       if (handle !== undefined) entry.handle = handle;
-      // Save origWidth/Height for future crop calculation, but NOT
-      // exifRotate — that flag is set only by saveEncodedThumbnail when
-      // the JPEG on disk is actually rotate+flip+crop corrected.
+      // Raw JPEG: transform has NOT been applied yet, record what is needed
+      // to reproduce it on a later cache hit.
+      entry.corrected = false;
+      if (exifRotate !== undefined) { entry.exifRotate = exifRotate; }
+      if (exifFlipH !== undefined) { entry.exifFlipH = exifFlipH; }
+      if (exifFlipV !== undefined) { entry.exifFlipV = exifFlipV; }
       if (origWidth !== undefined && origHeight !== undefined) {
         entry.origWidth = origWidth;
         entry.origHeight = origHeight;
@@ -300,7 +320,9 @@ export class ThumbnailCache {
         entry.origWidth = origWidth;
         entry.origHeight = origHeight;
       }
-      // Signal that this entry is cropped by setting origWidth/origHeight
+      // The JPEG on disk now has rotate/flip/crop baked in — a later cache hit
+      // must decode it as-is instead of applying the transform twice.
+      entry.corrected = true;
       this.manifest.set(key, entry);
       hilog.info(DOMAIN, TAG, 'encoded %{public}s -> %{public}s (%{public}d bytes)',
         key, cacheFileName, encoded.byteLength);
@@ -353,9 +375,10 @@ export class ThumbnailCache {
   persistManifestSync(): void {
     if (!this.manifestPath) return;
     try {
-      const obj: Record<string, CacheEntry> = {};
-      this.manifest.forEach((v, k) => { obj[k] = v; });
-      const text = JSON.stringify(obj, null, 2);
+      const entries: Record<string, CacheEntry> = {};
+      this.manifest.forEach((v, k) => { entries[k] = v; });
+      const envelope: ManifestFile = { version: MANIFEST_VERSION, entries: entries };
+      const text = JSON.stringify(envelope, null, 2);
       const f = fileIo.openSync(this.manifestPath,
         fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
       fileIo.writeSync(f.fd, text);
@@ -363,39 +386,6 @@ export class ThumbnailCache {
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'persist manifest failed: %{public}s', JSON.stringify(e));
     }
-  }
-
-  /**
-   * Get the total size of cached thumbnail files in bytes.
-   */
-  async getCacheSizeBytes(): Promise<number> {
-    let total = 0;
-    this.manifest.forEach((entry) => {
-      try {
-        const fp = this.cacheDir + '/' + entry.cacheFileName;
-        const stat = fileIo.statSync(fp);
-        total += stat.size;
-      } catch (_e) {}
-    });
-    return total;
-  }
-
-  /**
-   * Get the count of cached thumbnails.
-   */
-  getEntryCount(): number {
-    return this.manifest.size;
-  }
-
-  /**
-   * Get all cache entries (used by Phase 0 fallback to reconstruct PhotoEntry).
-   */
-  getAllEntries(): CacheEntry[] {
-    const result: CacheEntry[] = [];
-    this.manifest.forEach((entry: CacheEntry) => {
-      result.push(entry);
-    });
-    return result;
   }
 
   /**
@@ -423,12 +413,6 @@ export class ThumbnailCache {
     } catch (_e) { return null; }
   }
 
-  /** Debug: check whether a key exists in manifest and return saved modDate. */
-  debugLookup(key: string): string | null {
-    const e = this.manifest.get(key);
-    return e ? e.modificationDate : null;
-  }
-
   /** Close cache: persist manifest. */
   close(): void {
     this.persistManifestSync();
@@ -448,9 +432,9 @@ export class ThumbnailCache {
         const buf = new ArrayBuffer(stat.size);
         fileIo.readSync(f.fd, buf);
         const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-        const obj = JSON.parse(text) as Record<string, CacheEntry>;
-        for (const k of Object.keys(obj)) {
-          try { fileIo.unlinkSync(cacheDir + '/' + obj[k].cacheFileName); } catch (_e) {}
+        const entries = readManifestEntries(text);
+        for (const k of Object.keys(entries)) {
+          try { fileIo.unlinkSync(cacheDir + '/' + entries[k].cacheFileName); } catch (_e) {}
         }
       }
       fileIo.closeSync(f);
@@ -477,11 +461,11 @@ export class ThumbnailCache {
         const buf = new ArrayBuffer(stat.size);
         fileIo.readSync(f.fd, buf);
         const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-        const obj = JSON.parse(text) as Record<string, CacheEntry>;
-        entryCount = Object.keys(obj).length;
-        for (const k of Object.keys(obj)) {
+        const entries = readManifestEntries(text);
+        entryCount = Object.keys(entries).length;
+        for (const k of Object.keys(entries)) {
           try {
-            const fp = cacheDir + '/' + obj[k].cacheFileName;
+            const fp = cacheDir + '/' + entries[k].cacheFileName;
             const s = fileIo.statSync(fp);
             sizeBytes += s.size;
           } catch (_e) { /* file may be missing */ }
@@ -492,33 +476,5 @@ export class ThumbnailCache {
 
     const result: CacheInfo = { sizeBytes: sizeBytes, entryCount: entryCount };
     return result;
-  }
-
-  static async getCameraCacheSize(filesDir: string, cameraId: string): Promise<number> {
-    const safeId = cameraId.replace(/[\\/:*?"<>|]/g, '_');
-    const cacheDir = filesDir + '/thumb_cache/' + safeId;
-    const manifestPath = cacheDir + '/manifest.json';
-    let total = 0;
-
-    try {
-      const f = fileIo.openSync(manifestPath, fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(manifestPath);
-      if (stat.size > 0) {
-        const buf = new ArrayBuffer(stat.size);
-        fileIo.readSync(f.fd, buf);
-        const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-        const obj = JSON.parse(text) as Record<string, CacheEntry>;
-        for (const k of Object.keys(obj)) {
-          try {
-            const fp = cacheDir + '/' + obj[k].cacheFileName;
-            const s = fileIo.statSync(fp);
-            total += s.size;
-          } catch (_e) {}
-        }
-      }
-      fileIo.closeSync(f);
-    } catch (_e) {}
-
-    return total;
   }
 }

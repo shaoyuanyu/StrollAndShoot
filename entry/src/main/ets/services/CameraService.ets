@@ -387,10 +387,6 @@ export class CameraService {
     return this.log;
   }
 
-  getLogText(): string {
-    return this.log.getText();
-  }
-
   initLogPath(dir: string): void {
     this.log.setFilePath(dir + '/app_log.txt');
   }
@@ -404,15 +400,6 @@ export class CameraService {
 
   makeDownloadKey(filename: string, size: number): string {
     return `${filename}::${size}`;
-  }
-
-  isPhotoDownloaded(handle: number): boolean {
-    for (const p of this.photos) {
-      if (p.handle === handle) {
-        return this.downloadRegistry.has(this.makeDownloadKey(p.filename, p.size));
-      }
-    }
-    return false;
   }
 
   @Trace downloadedCount: number = 0;
@@ -1026,8 +1013,6 @@ export class CameraService {
       
         });
       const handles = allHandles;
-      // TEST: only load first 300 photos
-      // const handles = allHandles.slice(0, 300);
 
       hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}`);
 
@@ -1178,7 +1163,7 @@ export class CameraService {
         if (this.cachingEnabled && key) {
           const cachedEntry = this.thumbCache.findCached(key, modDate);
           if (cachedEntry) {
-            rowPromises.push(this.loadCachedThumbnail(photo.handle, cachedEntry.cacheFileName));
+            rowPromises.push(this.loadCachedThumbnail(photo.handle, cachedEntry));
             totalLoaded++;
             continue;
           }
@@ -1254,29 +1239,10 @@ export class CameraService {
         } catch (_e) { /* best effort */ }
       }
 
-      // Decode and save to cache
+      // Decode and save to cache (raw first, corrected version overwrites it)
       await this.decodeThumbnail(h, thumbData, cacheKey, modDate);
-
-      // Save raw thumb to disk cache
-      if (this.cachingEnabled && cacheKey) {
-        const dims = this.exifOrigDims.get(h);
-        this.scheduleCacheSave(cacheKey, modDate, thumbData, dims?.w, dims?.h);
-      }
     } catch (err) {
       this.log.add(`缩略图加载失败: ${photo.filename} ${JSON.stringify(err)}`);
-    }
-  }
-
-  async loadThumbnail(handle: number): Promise<void> {
-    if (this.thumbnailLoadedSet.has(handle)) return;
-    try {
-      const data = await this.session.getThumb(handle);
-      if (data && data.length > 0) {
-        await this.decodeThumbnail(handle, data);
-        this.thumbnailVersion++;
-      }
-    } catch (err) {
-      this.log.add(`缩略图解码失败: handle=0x${handle.toString(16)}`);
     }
   }
 
@@ -1308,7 +1274,7 @@ export class CameraService {
       const modDate = entry.modificationDate || '';
       const cached = this.thumbCache.findCached(key, modDate);
       if (cached) {
-        cacheLoads.push(this.loadCachedThumbnail(entry.handle, cached.cacheFileName));
+        cacheLoads.push(this.loadCachedThumbnail(entry.handle, cached));
       }
     }
 
@@ -1398,6 +1364,14 @@ export class CameraService {
       const orient = this.preloadedOrientations.get(handle);
       const exifDim = this.exifOrigDims.get(handle);
 
+      // 1) Persist the raw JPEG first: if the process dies before decode
+      //    finishes, the manifest still records the EXIF transform to re-apply.
+      if (this.cachingEnabled && cacheKey && modDate) {
+        await this.thumbCache.saveRawThumbnail(cacheKey, modDate, data, handle,
+          orient?.rotate ?? 0, orient?.flipH ?? false, orient?.flipV ?? false,
+          exifDim?.w, exifDim?.h);
+      }
+
       // 为 TaskPool 复制一份 ArrayBuffer（源数据不会被缓存，直接转移所有权）
       const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
 
@@ -1425,14 +1399,14 @@ export class CameraService {
 
         // Re-encode the cropped PixelMap and overwrite the raw cache entry,
         // so future cache hits load a black-bar-free thumbnail directly.
+        // This must run AFTER the raw save above, otherwise the manifest and
+        // the JPEG on disk could disagree about whether the transform is baked in.
         if (this.cachingEnabled && cacheKey && modDate) {
-          const orient = this.preloadedOrientations.get(handle);
-          const dims = this.exifOrigDims.get(handle);
-          this.thumbCache.saveEncodedThumbnail(
+          await this.thumbCache.saveEncodedThumbnail(
             cacheKey, modDate, pixelMap, handle,
             orient?.rotate, orient?.flipH, orient?.flipV,
-            dims?.w, dims?.h
-          ).catch((_e: Error) => { /* best effort */ });
+            exifDim?.w, exifDim?.h
+          );
         }
       } catch (err) {
         hilog.error(DOMAIN, TAG, `[TASKPOOL_THUMB] FAIL handle=0x%{public}s err=%{public}s`,
@@ -1563,19 +1537,6 @@ export class CameraService {
     }
   }
 
-  /**
-   * Read the actual pixelMap dimensions and cache them (post-rotation/flip).
-   * For 90°/270° rotation the display aspect ratio is swapped vs PTP ObjectInfo.
-   */
-  private async cacheOrientedSize(handle: number, pixelMap: image.PixelMap, _orient: OrientationTransform): Promise<void> {
-    try {
-      const info = await pixelMap.getImageInfo();
-      this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
-    } catch (_err) {
-      // Fallback: skip — ZoomableImage will use PTP ObjectInfo dimensions
-    }
-  }
-
   private addToCache(handle: number, data: Uint8Array): void {
     if (this.compressedCache.has(handle)) return;
     // Evict if needed
@@ -1587,13 +1548,20 @@ export class CameraService {
   }
 
   private evictFurthest(): void {
-    let furthestHandle = 0;
+    // Map each cached handle to its position in the viewer's photo list.
+    // (Comparing handles directly against a list index evicted the wrong photo.)
+    const order: Map<number, number> = new Map();
+    for (let i = 0; i < this.preloadPhotos.length; i++) {
+      order.set(this.preloadPhotos[i].handle, i);
+    }
+    let furthestHandle = -1;
     let maxDist = -1;
     this.compressedCache.forEach((_v: Uint8Array, k: number) => {
-      const dist = Math.abs(k - this.detailIndex);
+      const idx = order.get(k);
+      const dist = idx === undefined ? Number.MAX_SAFE_INTEGER : Math.abs(idx - this.detailIndex);
       if (dist > maxDist) { maxDist = dist; furthestHandle = k; }
     });
-    if (furthestHandle !== 0) {
+    if (furthestHandle >= 0) {
       const removed = this.compressedCache.get(furthestHandle);
       if (removed) {
         this.cacheTotalBytes -= removed.length;
@@ -1716,6 +1684,11 @@ export class CameraService {
     this.deviceVersion = '';
     this.usbVidPid = '';
     this.usbSerialNumber = '';
+    // Flush BEFORE clearing the flag — the old order made this branch dead and
+    // silently dropped pending thumbnail writes on disconnect.
+    if (this.cachingEnabled) {
+      await this.thumbCache.flush();
+    }
     this.cachingEnabled = false;
     this.cachingDialogRequired = false;
     this.photoCount = 0;
@@ -1729,9 +1702,6 @@ export class CameraService {
     this.scanPhaseText = '';
     this.lastDecodedHandle = -1;
     this.clearFullCache();
-    if (this.cachingEnabled) {
-      this.thumbCache.flush().catch((_e: Error) => {});
-    }
     this.thumbCache.close();
     this.statusText = '已断开连接';
     this.log.add('已断开连接');
@@ -1826,16 +1796,25 @@ export class CameraService {
    * Load a thumbnail from the disk-based ThumbnailCache.
    * Used instead of USB GetThumb when a valid cache entry exists.
    */
-  private async loadCachedThumbnail(handle: number, cacheFileName: string): Promise<void> {
+  private async loadCachedThumbnail(handle: number, entry: CacheEntry): Promise<void> {
     try {
-      const filePath = this.thumbCache.getCacheDir() + '/' + cacheFileName;
+      const filePath = this.thumbCache.getCacheDir() + '/' + entry.cacheFileName;
       const fileBuf: ArrayBuffer | null = await this.thumbCache.readFileToBuffer(filePath);
       if (!fileBuf) return;
 
-      // Cache thumbnails are already rotate+flip+crop corrected.
-      // Just decode in TaskPool (no transforms) to keep UI responsive.
+      // A `corrected` entry already has rotate/flip/crop baked into the JPEG.
+      // Anything else is the raw camera thumbnail: apply the recorded EXIF
+      // transform now, otherwise rotated photos show sideways after a restart.
+      const corrected = entry.corrected === true;
+      const rotate = corrected ? 0 : (entry.exifRotate ?? 0);
+      const flipH = corrected ? false : (entry.exifFlipH ?? false);
+      const flipV = corrected ? false : (entry.exifFlipV ?? false);
+      const origW = corrected ? 0 : (entry.origWidth ?? 0);
+      const origH = corrected ? 0 : (entry.origHeight ?? 0);
+
       const decodeBuf = fileBuf.slice(0);
-      const task = new taskpool.Task(decodeThumbnailTask, decodeBuf, 0, false, false, 0, 0);
+      const task = new taskpool.Task(decodeThumbnailTask, decodeBuf,
+        rotate, flipH, flipV, origW, origH);
       const pixelMap = await taskpool.execute(task) as image.PixelMap;
       const info = await pixelMap.getImageInfo();
       this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
@@ -1847,18 +1826,6 @@ export class CameraService {
         handle.toString(16), JSON.stringify(err));
       this.log.add(`缓存加载失败: handle=0x${handle.toString(16)}`);
     }
-  }
-
-  /**
-   * Asynchronously save raw thumbnail data to the disk cache.
-   * Fire-and-forget: does not block the scan loop.
-   */
-  private scheduleCacheSave(key: string, modDate: string, thumbData: Uint8Array,
-    origWidth?: number, origHeight?: number): void {
-    this.thumbCache.saveRawThumbnail(key, modDate, thumbData, origWidth, origHeight)
-      .catch((_e: Error) => {
-        this.log.add(`缓存写入失败: ${key}`);
-      });
   }
 
   formatSize(bytes: number): string {

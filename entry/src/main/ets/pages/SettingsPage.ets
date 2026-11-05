@@ -70,7 +70,8 @@ export struct SettingsPage {
           .width('100%')
         }
         .width('100%').padding(14)
-        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+        .border({ width: 1, color: $r('app.color.divider') })
         .margin({ bottom: 16 })
 
         Text('画廊')
@@ -97,7 +98,8 @@ export struct SettingsPage {
           }
         }
         .width('100%').padding(14)
-        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+        .border({ width: 1, color: $r('app.color.divider') })
         .margin({ bottom: 16 })
 
         Column() {
@@ -110,7 +112,8 @@ export struct SettingsPage {
           }
         }
         .width('100%').padding(14)
-        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+        .border({ width: 1, color: $r('app.color.divider') })
         .margin({ bottom: 16 })
 
         Text('GPS定位记录')
@@ -141,7 +144,6 @@ export struct SettingsPage {
           .width('100%').padding(3)
           .backgroundColor($r('app.color.bg_page'))
           .borderRadius(18)
-
           Row() {
             Text(`已记录 ${this.gpsRecordCount} 个位置点`)
               .fontSize(12).fontColor($r('app.color.text_secondary'))
@@ -157,7 +159,8 @@ export struct SettingsPage {
           .width('100%').margin({ top: 10 })
         }
         .width('100%').padding(14)
-        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+        .border({ width: 1, color: $r('app.color.divider') })
         .margin({ bottom: 16 })
 
         Text('关于')
@@ -171,7 +174,8 @@ export struct SettingsPage {
           Text(this.versionName).fontSize(14).fontColor($r('app.color.text_secondary'))
         }
         .width('100%').padding(14)
-        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+        .border({ width: 1, color: $r('app.color.divider') })
         .margin({ bottom: 16 })
 
         Text('缓存')
@@ -185,7 +189,8 @@ export struct SettingsPage {
           Text('管理 >').fontSize(13).fontColor($r('app.color.text_secondary'))
         }
         .width('100%').padding(14)
-        .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+        .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+        .border({ width: 1, color: $r('app.color.divider') })
         .margin({ bottom: 16 })
         .onClick(() => {
           this.onOpenCacheManagement();
@@ -215,7 +220,8 @@ export struct SettingsPage {
               .onChange((isOn: boolean) => { this.onToggleMockCamera(isOn); })
           }
           .width('100%').padding(14)
-          .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+          .backgroundColor($r('app.color.bg_surface')).borderRadius(12)
+          .border({ width: 1, color: $r('app.color.divider') })
           .margin({ bottom: 16 })
         }
 
