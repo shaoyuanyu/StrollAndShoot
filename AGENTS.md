@@ -43,7 +43,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | `DEVECO_CLI_SKIP_VERSION_CHECK` | 不需要 | 需要 |
 | `hvigorw` 脚本 | 项目根目录**没有**，只能用 `devecocli` | 有（本地文件，未纳入版本控制） |
 | `deploy.sh` | **不存在**（被 `.gitignore` 忽略，只在 Linux 上） | 有，内含签名材料路径与口令 |
-| 签名材料 | **没有**：`build-profile.json5` 的 `signingConfigs` 为空，也没有 `~/.ohos` | `deploy.sh` 负责 |
+| 签名材料 | **三套签名配置**：`default` 自动签名（`~/.ohos/config/`，备用）、`AgentDebug`、`AgentRelease`；手动材料在 `../KEYS/hmos_dev_key.p12`、`../CERTIFICATES/` 与 `.profile/` | `deploy.sh` 负责 |
 | 安装到手机 | 未打通，见下 | `bash deploy.sh full` |
 
 ### macOS 上的流程
@@ -62,8 +62,8 @@ devecocli build clean
 /Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc list targets
 ```
 
-- `devecocli build` 只产出 `entry/build/default/outputs/default/entry-default-unsigned.hap`，**未签名**，`hdc install` 装不上。
-- macOS 上目前没有签名材料。要上真机只能在 DevEco Studio 里配自动签名（登录华为账号 → Project Structure → Signing Configs）再点运行；或者把 HAP 拷到 Linux 机器用 `deploy.sh` 处理，后一条未验证。
+- `devecocli build` 会产出 `entry-default-signed.hap`（AgentDebug 签名）和 `entry-default-unsigned.hap`；前者已通过 `hap-sign-tool verify-app` 校验。
+- macOS 上签名材料分散在项目外：`.p12` 在 `../KEYS/hmos_dev_key.p12`，`.cer` 在 `../CERTIFICATES/`（`Agent_Debug.cer`、`Agent_RELEASE.cer`），Profile 在 `.profile/`。`build-profile.json5` 已配置 `AgentDebug` / `AgentRelease` 两套手动签名，`default` product 用 AgentDebug，`dist` product 用 AgentRelease；`devecocli build` 现在会直接产出已签名 HAP。
 - 项目声明 `compatibleSdkVersion: 6.1.0(23)`，本机 SDK 是 API 26，构建能通过。不要因为本机 SDK 版本高就去改 `build-profile.json5` 里的版本。
 - 涉及相机与 USB 的验证仍然只能在真机上做，macOS 这边没有安装通道时，代码改动要交给用户在 Linux 链路上部署确认。
 
@@ -72,7 +72,7 @@ devecocli build clean
 ```text
 StrollAndShoot/
 ├── AppScope/app.json5              # bundleName、版本号、图标
-├── build-profile.json5             # SDK 6.1.0、products
+├── build-profile.json5             # SDK 6.1.0、products（本地，未纳入版本控制）
 ├── code-linter.json5               # lint 规则
 ├── deploy.sh                       # 构建→签名→安装→启动（Linux 本地文件，未纳入版本控制）
 ├── entry/
@@ -139,10 +139,40 @@ devecocli check lint entry/src/main/ets
 
 ### 通用
 
-- 产物是 `entry/build/default/outputs/default/entry-default-unsigned.hap`，约 3.9 MB。
-- 构建会提示 `No signingConfig found for product default`，签名由 `deploy.sh`（Linux）单独完成；macOS 上没有 `deploy.sh`。
+- 产物在 `entry/build/<product>/outputs/default/`：调试在 `entry/build/default/`，指定设备发布在 `entry/build/dist/`。`*-signed.hap` 已签名，`*-unsigned.hap` 未签名。
+- macOS 上 `devecocli build` 会用 AgentDebug 签名；Linux 上仍由 `deploy.sh` 单独处理签名。
 - `deploy.sh` 被 `.gitignore` 忽略，只存在于 Linux 开发机，里面写着签名材料的路径与口令。
 - `entry/src/test`、`entry/src/ohosTest` 只有新建工程自带的模板用例，`hvigorw test` 不会检查项目逻辑。
+
+### 签名与分发
+
+- 签名材料分散在项目外，均不纳入版本控制：
+  - 密钥库：`../KEYS/hmos_dev_key.p12`
+  - 调试证书：`../CERTIFICATES/Agent_Debug.cer`
+  - 发布证书：`../CERTIFICATES/Agent_RELEASE.cer`
+  - 调试 Profile：`.profile/StrollAndShoot_DebugDebug.p7b`
+  - 指定设备发布 Profile：`.profile/StrollAndShoot_Specific_ReleaseRelease.p7b`
+- `.profile/` 已加入 `.gitignore`。
+- 根目录 `build-profile.json5` 已从版本控制移除并加入 `.gitignore`；它只存在于各开发机本地，Linux 上需要单独维护一份（`deploy.sh` 依赖它）。
+- 工程里有两个 product，签名与用途分开：
+  - `default` → `AgentDebug`，日常调试。
+  - `dist` → `AgentRelease`，指定设备发布。
+- 构建命令：
+
+  ```bash
+  # 日常调试
+  devecocli build
+
+  # 指定设备发布
+  devecocli build --product dist --build-mode release
+  ```
+
+- product 与 buildMode 是两个维度：只写 `--build-mode release` 仍会落到 `default`（AgentDebug），必须同时指定 `--product dist`。
+- 已验证：debug 产物 Profile `type=debug`；dist 产物 `type=release`、`app-distribution-type=internaltesting`、`device-ids` 1 台。
+- 正式上架 AppGallery 之前，个人使用阶段统一用**指定设备发布**方式分发。设备 UDID 必须在该 Profile 的 `device-ids` 列表内；可以 `hdc install` 直装，也可以把 HAP 与描述文件上传到自己的服务器后用 Deeplink 下载安装。
+- 指定设备发布的版本有效期为 90 天，从设备首次安装算起；到期后递增 `versionCode` 重新打包部署。
+- 正式上架 AppGallery 时改用**发布证书 + 发布 Profile**。
+- 注意：`build-profile.json5` 里的签名密文与本机绑定，不要直接把带密文的配置提交给 Linux 使用，否则会报 `Unsupported state or unable to authenticate data`。
 
 ## 架构
 
@@ -494,7 +524,7 @@ mkdir -p .agents && ln -s /home/ysy/Projects/hmos/.skills .agents/skills
 - `signature generate`（生成签名材料，需先 `devecocli auth login` 且连接设备）
 - `check compat`（两个 SDK 版本之间的破坏性变更扫描）、`update`（更新 CLI 自身）
 
-签名与安装仍走 `deploy.sh`（仅 Linux），`devecocli` 只用来构建、静态检查与查文档。macOS 上构建产物是 unsigned HAP，装不进手机。
+macOS 上 `devecocli` 现在能构建出 AgentDebug 签名的 HAP；安装仍走 `deploy.sh`（仅 Linux），或用 `hdc install`（未验证）。`devecocli` 其余用途是静态检查与查文档。
 
 ## 版本管理
 

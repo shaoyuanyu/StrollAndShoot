@@ -17,3 +17,5 @@
 /libgphoto*
 /PicturePreview
 /.playwright*
+/.profile
+/build-profile.json5
