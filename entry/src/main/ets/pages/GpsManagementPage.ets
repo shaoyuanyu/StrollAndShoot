@@ -1,5 +1,6 @@
 import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
+import { PageHeader } from '../components/PageHeader';
 
 @Builder
 export function GpsManagementPageBuilder() {
@@ -34,7 +35,7 @@ export struct GpsManagementPage {
       },
       secondaryButton: {
         value: '删除',
-        fontColor: '#E84026',
+        fontColor: $r('app.color.button_danger'),
         action: () => {
           this.gpsRecorder.deleteDay(day);
           this.refresh();
@@ -47,25 +48,11 @@ export struct GpsManagementPage {
     NavDestination() {
       Column() {
         // Header
-      Row() {
-        Button({ type: ButtonType.Circle }) {
-          Text('←').fontSize(18)
-        }
-        .width(36).height(36)
-        .backgroundColor($r('app.color.bg_surface'))
-        .onClick(() => { this.pageInfos.pop(); })
-
-        Text('GPS记录管理')
-          .fontSize(18).fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .margin({ left: 10 })
-
-        Blank()
-
-        Text(`共 ${this.totalCount} 条`)
-          .fontSize(13).fontColor($r('app.color.text_secondary'))
-      }
-      .width('100%').padding({ left: 12, right: 12, top: 12, bottom: 8 })
+        PageHeader({
+          title: '定位记录',
+          subtitle: `共 ${this.totalCount} 条`,
+          onBack: () => { this.pageInfos.pop(); }
+        })
 
       if (this.dailyGroups.length === 0) {
         Column() {
@@ -94,11 +81,14 @@ export struct GpsManagementPage {
 
                   Button('删除')
                     .fontSize(12).height(30)
-                    .fontColor('#E84026')
-                    .backgroundColor($r('app.color.bg_page'))
+                    .fontColor($r('app.color.button_danger'))
+                    .backgroundColor($r('app.color.primary_soft'))
                     .onClick(() => { this.deleteDay(ri.item.day, ri.item.count); })
                 }
-                .width('100%').padding(14)
+                .width('100%').padding(16)
+                .backgroundColor($r('app.color.bg_surface'))
+                .borderRadius(16)
+                .border({ width: 1, color: $r('app.color.card_border') })
                 .onClick(() => {
                   const param: Record<string, Object> = {};
                   param['day'] = ri.item.day;
@@ -108,10 +98,13 @@ export struct GpsManagementPage {
                   });
                 })
               }
+              .margin({ bottom: 8 })
             })
             .key((group: GpsDailyGroup) => group.day)
         }
         .width('100%').layoutWeight(1)
+        .padding({ left: 16, right: 16, top: 8 })
+        .scrollBar(BarState.Off)
       }
       }
       .width('100%').height('100%')

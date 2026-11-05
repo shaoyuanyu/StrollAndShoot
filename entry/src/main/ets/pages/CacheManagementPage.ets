@@ -6,6 +6,7 @@
  */
 import { CameraCachePrefs, type CameraCachePref } from '../services/CameraCachePrefs';
 import { ThumbnailCache, type CacheInfo } from '../services/ThumbnailCache';
+import { PageHeader } from '../components/PageHeader';
 
 @Builder
 export function CacheManagementPageBuilder() {
@@ -68,7 +69,7 @@ export struct CacheManagementPage {
       },
       secondaryButton: {
         value: '删除',
-        fontColor: '#E84026',
+        fontColor: $r('app.color.button_danger'),
         action: async () => {
           this.cachePrefs.delete(cameraId);
           await ThumbnailCache.deleteCameraCache(this.cachePrefs.filesDir, cameraId);
@@ -91,7 +92,7 @@ export struct CacheManagementPage {
       },
       secondaryButton: {
         value: '全部清除',
-        fontColor: '#E84026',
+        fontColor: $r('app.color.button_danger'),
         action: async () => {
           const all = this.cachePrefs.getAll();
           for (const c of all) {
@@ -124,25 +125,11 @@ export struct CacheManagementPage {
     NavDestination() {
       Column() {
         // Header
-      Row() {
-        Button({ type: ButtonType.Circle }) {
-          Text('←').fontSize(18)
-        }
-        .width(36).height(36)
-        .backgroundColor($r('app.color.bg_surface'))
-        .onClick(() => { this.pageInfos.pop(); })
-
-        Text('缓存管理')
-          .fontSize(18).fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .margin({ left: 10 })
-
-        Blank()
-
-        Text(`共 ${this.formatSize(this.totalCacheSize)}`)
-          .fontSize(13).fontColor($r('app.color.text_secondary'))
-      }
-      .width('100%').padding({ left: 12, right: 12, top: 12, bottom: 8 })
+        PageHeader({
+          title: '缓存管理',
+          subtitle: `共 ${this.formatSize(this.totalCacheSize)}`,
+          onBack: () => { this.pageInfos.pop(); }
+        })
 
       if (this.cameras.length === 0) {
         Column() {
@@ -182,30 +169,40 @@ export struct CacheManagementPage {
 
                     // Delete
                     Button({ type: ButtonType.Circle }) {
-                      Text('🗑').fontSize(16)
+                      SymbolGlyph($r('sys.symbol.trash'))
+                        .fontSize(16)
+                        .fontColor([$r('app.color.button_danger')])
                     }
                     .width(32).height(32)
-                    .backgroundColor($r('app.color.bg_page'))
+                    .backgroundColor($r('app.color.primary_soft'))
+                    .accessibilityText('删除该相机的缓存')
                     .onClick(() => {
                       this.deleteCameraCache(ri.item.cameraId, ri.item.friendlyName);
                     })
                   }
                   .width('100%')
                 }
-                .width('100%').padding(14)
+                .width('100%').padding(16)
+                .backgroundColor($r('app.color.bg_surface'))
+                .borderRadius(16)
+                .border({ width: 1, color: $r('app.color.card_border') })
               }
+              .margin({ bottom: 8 })
             })
             .key((item: CacheDisplayItem) => item.cameraId)
         }
         .width('100%').layoutWeight(1)
+        .padding({ left: 16, right: 16, top: 8 })
+        .scrollBar(BarState.Off)
       }
 
       // Bottom: clear all button
       if (this.cameras.length > 0) {
         Button('清除所有缓存')
-          .width('90%').margin({ bottom: 20, top: 8 })
-          .fontColor('#E84026')
-          .backgroundColor($r('app.color.bg_surface'))
+          .width('90%').height(44).margin({ bottom: 24, top: 8 })
+          .fontSize(15)
+          .fontColor($r('app.color.button_danger'))
+          .backgroundColor($r('app.color.primary_soft'))
           .onClick(() => { this.clearAllCaches(); })
       }
       }

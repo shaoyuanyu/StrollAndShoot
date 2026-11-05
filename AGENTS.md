@@ -16,7 +16,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.4.1 / 1004001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.5.0 / 1005000 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署）。见“macOS 开发环境” |
 
 ## macOS 开发环境
@@ -238,7 +238,7 @@ devecocli check lint entry/src/main/ets
 
 - `pages/Index.ets` 是唯一入口（`@Entry`），内部用 `Navigation` + `NavPathStack`，隐藏系统导航栏（`hideNavBar(true)`），并注册自定义转场 `customNavContentTransition`。
 - `route_map.json` 注册两个 NavDestination：`MainScreen` 与 `PhotoViewerScreen`。
-- `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。底部标签栏是自绘的 `Row`，`Tabs` 用 `barHeight(0)` 关掉了系统标签栏。
+- `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。使用系统 `Tabs` 的原生标签栏（`barPosition: End`、`barHeight(64)`、`barBackgroundBlurStyle(COMPONENT_THICK)`），标签项用 `SymbolGlyph` + 文字，页面隐藏 TitleBar 后自绘大标题。
 - `CacheManagementPage`、`GpsManagementPage`、`GpsDayDetailPage` 是 `@Entry` 页面，用已废弃的 `router.pushUrl` / `router.back` / `router.getParams` 跳转。
 - `SwiperSyncTestPage` 是早期原型页，仍注册在 `main_pages.json`，没有任何入口。
 
@@ -281,7 +281,7 @@ devecocli check lint entry/src/main/ets
 ### 资源
 
 - `$r('app.type.name')` 从 `entry/src/main/resources/` 解析。浅色在 `base/element/`，深色在 `dark/element/`。
-- 颜色资源成体系，共 25 条，命名如 `primary`、`bg_surface`、`text_primary`、`divider`。部分组件里仍有直接写定的颜色值，不随深色模式变化。
+- 颜色资源成体系，共 31 条（`base/element/color.json` 与 `dark/element/color.json` 各一份），命名如 `primary`、`bg_page`、`bg_surface`、`text_primary`、`text_secondary`、`text_tertiary`、`divider`、`card_border`、`primary_soft`、`scrim`、`nav_bg`。设计语言为 HarmonyOS 沉浸光感：冷灰页面底、纯黑/白卡片、品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态、底栏与预览器标题栏使用半透明模糊材质。新增界面一律引用资源，不要写定颜色值。
 - `base/element/string.json` 有 36 条字符串，代码里没有任何引用，界面文案直接写在组件内部。
 - 颜色模式跟随系统：`COLOR_MODE_NOT_SET`（值为 -1）表示不设置，`COLOR_MODE_LIGHT` / `COLOR_MODE_DARK` 为显式指定。
 
@@ -327,7 +327,7 @@ PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
 
 | 组件 | 位置 | 用途 |
 |---|---|---|
-| `ConnectionStatusBar` | `components/ConnectionStatusBar.ets` | 连接状态。`compact` 模式用于画廊顶部，完整模式用于相机页，带扫描进度条 |
+| `PageHeader` | `components/PageHeader.ets` | 二级页统一头部：返回按钮 + 标题 + 副标题 |
 | `SelectionActionBar` | `components/SelectionActionBar.ets` | 多选底部栏：全选、已选数量、取消、下载 |
 | `DownloadProgressBar` | `components/DownloadProgressBar.ets` | 下载进度条：阶段、当前文件、进度百分比、错误数、取消 |
 

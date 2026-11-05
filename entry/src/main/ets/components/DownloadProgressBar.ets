@@ -79,5 +79,6 @@ export struct DownloadProgressBar {
     }
     .width('100%')
     .backgroundColor($r('app.color.action_bar_bg'))
+    .border({ width: { top: 0.5 }, color: $r('app.color.divider') })
   }
 }

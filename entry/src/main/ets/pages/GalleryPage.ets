@@ -1,5 +1,4 @@
 import display from '@ohos.display';
-import { ConnectionStatusBar } from '../components/ConnectionStatusBar';
 import { SelectionActionBar } from '../components/SelectionActionBar';
 import { DownloadProgressBar } from '../components/DownloadProgressBar';
 import { CameraService } from '../services/CameraService';
@@ -97,7 +96,7 @@ export struct GalleryPage {
 
   private columnCount(): number {
     const w = this.getDisplayWidthVp();
-    const avail = w - 12;
+    const avail = w - 20;
     const itemW = this.baseItemW() * this.galleryScale;
     const gap = this.itemGapPx();
     const cols = Math.floor((avail + gap) / (itemW + gap));
@@ -108,7 +107,7 @@ export struct GalleryPage {
 
   private baseItemW(): number {
     const w = this.getDisplayWidthVp();
-    const avail = w - 12;
+    const avail = w - 20;
     if (this.galleryColumnCount > 0) {
       const gap = this.itemGapPx();
       return (avail - (this.galleryColumnCount - 1) * gap) / this.galleryColumnCount;
@@ -349,59 +348,64 @@ export struct GalleryPage {
             .id('thumb_' + cellRi.item!.displayPhoto.handle)
             .draggable(false)
         } else {
-          Column() { Text('📷').fontSize(20) }
+          Column() {
+            SymbolGlyph($r('sys.symbol.camera'))
+              .fontSize(20)
+              .fontColor([$r('app.color.text_tertiary')])
+          }
           .width('100%').height('100%')
           .justifyContent(FlexAlign.Center)
           .backgroundColor($r('app.color.thumbnail_placeholder'))
         }
         if (this.formatTime(cellRi.item!.displayPhoto.captureDate ?? '')) {
           Text(this.formatTime(cellRi.item!.displayPhoto.captureDate ?? ''))
-            .fontSize(8).fontColor($r('app.color.text_on_dark'))
-            .padding({ left: 3, right: 3, top: 1, bottom: 1 })
-            .backgroundColor('rgba(0,0,0,0.5)').borderRadius(3)
-            .position({ bottom: 0, left: 0 })
+            .fontSize(9).fontColor($r('app.color.text_on_dark'))
+            .padding({ left: 3, right: 3, top: 1.5, bottom: 1.5 })
+            .backgroundColor($r('app.color.scrim')).borderRadius(3)
+            .position({ bottom: 3, left: 3 })
         }
         // 边框覆盖层始终在最上层（文本/指示器之后渲染），有边框时自然盖住日期文本底部2px
         Stack()
           .width('100%').height('100%')
           .border({
             width: 2,
-            color: this.isDownloaded(cellRi.item!.displayPhoto) ? '#4CAF50'
-              : this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? '#2196F3'
+            color: this.isDownloaded(cellRi.item!.displayPhoto) ? $r('app.color.status_connected')
+              : this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? $r('app.color.primary')
               : Color.Transparent,
-            radius: 4
+            radius: 8
           })
           .hitTestBehavior(HitTestMode.None)
         if (this.selectMode && !this.isDownloaded(cellRi.item!.displayPhoto)) {
-          // 12x12 选择指示圆，用文本对勾避免 Path/Circle 在新 SDK 上的兼容告警
           Stack() {
             if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
-              Text('✓')
-                .fontSize(9).fontColor(Color.White).fontWeight(FontWeight.Bold)
+              SymbolGlyph($r('sys.symbol.checkmark'))
+                .fontSize(12)
+                .fontColor([$r('app.color.text_on_primary')])
             }
           }
-          .width(12).height(12)
-          .borderRadius(6)
+          .width(20).height(20)
+          .borderRadius(10)
           .backgroundColor(this.selectedHandles.has(cellRi.item!.displayPhoto.handle)
-            ? '#2196F3' : 'rgba(0,0,0,0.3)')
+            ? $r('app.color.primary') : $r('app.color.scrim'))
           .border({
-            width: this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 0 : 2,
-            color: Color.White
+            width: this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 0 : 1.5,
+            color: $r('app.color.text_on_dark')
           })
-          .position({ top: 3, right: 3 })
+          .position({ top: 5, right: 5 })
           .hitTestBehavior(HitTestMode.None)
         }
         if (this.isDownloaded(cellRi.item!.displayPhoto)) {
           Stack()
-            .width(8).height(8).borderRadius(4)
-            .backgroundColor('#4CAF50')
-            .position({ top: 3, right: 3 })
+            .width(10).height(10).borderRadius(5)
+            .backgroundColor($r('app.color.status_connected'))
+            .border({ width: 1.5, color: $r('app.color.text_on_dark') })
+            .position({ top: 5, right: 5 })
             .hitTestBehavior(HitTestMode.None)
         }
       }
       .layoutWeight(1)
       .aspectRatio(1)
-      .borderRadius(4)
+      .borderRadius(8)
       .clip(true)
       .parallelGesture(
         GestureGroup(GestureMode.Exclusive,
@@ -440,14 +444,91 @@ export struct GalleryPage {
     }
   }
 
+  private subtitleText(): string {
+    if (this.svc.connected) {
+      return `${this.svc.photoCount} 张照片 · ${this.svc.cameraName}`;
+    }
+    return this.svc.statusText || '未连接相机';
+  }
+
+  private toggleSelectMode(): void {
+    if (this.selectMode) {
+      this.selectMode = false;
+      this.selectedHandles.clear();
+      this.selectedHandles = new Set(this.selectedHandles);
+      this.onSelectModeChange(false);
+    } else {
+      this.selectMode = true;
+      this.onSelectModeChange(true);
+    }
+  }
+
+  @Builder
+  Header() {
+    Column({ space: 8 }) {
+      Row() {
+        Text('画廊')
+          .fontSize(24)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+
+        if (this.svc.photos.length > 0) {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph(this.selectMode ? $r('sys.symbol.xmark') : $r('sys.symbol.checkmark'))
+              .fontSize(18)
+              .fontColor([$r('app.color.text_primary')])
+          }
+          .width(40).height(40)
+          .backgroundColor($r('app.color.primary_soft'))
+          .accessibilityText(this.selectMode ? '退出选择' : '选择照片')
+          .onClick(() => { this.toggleSelectMode(); })
+        }
+      }
+      .width('100%')
+
+      Row({ space: 6 }) {
+        Row()
+          .width(6).height(6).borderRadius(3)
+          .backgroundColor(this.svc.connected
+            ? $r('app.color.status_connected') : $r('app.color.text_tertiary'))
+        Text(this.subtitleText())
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+
+      if (this.svc.scanning && this.svc.scanTotal > 0) {
+        Column({ space: 4 }) {
+          Progress({
+            value: this.svc.scanProgress,
+            total: this.svc.scanTotal,
+            type: ProgressType.Linear
+          })
+            .width('100%').height(3)
+            .color($r('app.color.primary'))
+            .backgroundColor($r('app.color.divider'))
+          Row() {
+            Text(this.svc.scanPhaseText || '正在扫描')
+              .fontSize(11).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
+              .fontSize(11).fontColor($r('app.color.text_secondary'))
+          }
+          .width('100%')
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 6 })
+  }
+
   build() {
     Column() {
-      ConnectionStatusBar({
-        connected: this.svc.connected, cameraName: this.svc.cameraName,
-        photoCount: this.svc.photoCount, statusText: this.svc.statusText,
-        compact: true, scanProgress: this.svc.scanProgress, scanTotal: this.svc.scanTotal,
-        scanPhaseText: this.svc.scanPhaseText
-      }).margin({ top: 12, bottom: 4 })
+      this.Header()
 
       if (this.displayMode === 'file_first') {
         Scroll() {
@@ -455,15 +536,15 @@ export struct GalleryPage {
             Repeat<FilterOption>(this.buildFilterOptions())
               .each((ri: RepeatItem<FilterOption>) => {
                 Text(ri.item.label)
-                  .fontSize(12)
+                  .fontSize(13)
                   .fontColor(ri.item.value === this.filterValue
                     ? $r('app.color.filter_chip_active_text')
                     : $r('app.color.filter_chip_text'))
                   .backgroundColor(ri.item.value === this.filterValue
                     ? $r('app.color.filter_chip_active_bg')
                     : $r('app.color.filter_chip_bg'))
-                  .borderRadius(14)
-                  .padding({ left: 12, right: 12, top: 5, bottom: 5 })
+                  .borderRadius(16)
+                  .padding({ left: 14, right: 14, top: 7, bottom: 7 })
                   .onClick(() => { this.filterValue = ri.item.value; })
               })
               .key((opt: FilterOption) => opt.value)
@@ -477,15 +558,19 @@ export struct GalleryPage {
       }
 
       if (this.svc.photos.length === 0) {
-        Column() {
-          Text('📷').fontSize(48).margin({ bottom: 12 })
+        Column({ space: 12 }) {
+          SymbolGlyph($r('sys.symbol.camera'))
+            .fontSize(48)
+            .fontColor([$r('app.color.text_tertiary')])
           if (this.svc.scanning) {
-            LoadingProgress().width(32).height(32).margin({ bottom: 8 })
-            Text('正在扫描相机...')
+            LoadingProgress().width(28).height(28).color($r('app.color.primary'))
+            Text('正在扫描相机…')
               .fontSize(14).fontColor($r('app.color.text_secondary'))
           } else {
             Text('连接相机以浏览照片')
               .fontSize(14).fontColor($r('app.color.text_secondary'))
+            Text('在「相机」页搜索并连接 PTP 设备')
+              .fontSize(12).fontColor($r('app.color.text_tertiary'))
           }
         }
         .width('100%').layoutWeight(1)
@@ -499,13 +584,14 @@ export struct GalleryPage {
                   ListItem() {
                     Row({ space: 8 }) {
                       Text(ri.item.dateLabel)
-                        .fontSize(13).fontWeight(FontWeight.Medium)
+                        .fontSize(15).fontWeight(FontWeight.Medium)
                         .fontColor($r('app.color.text_primary'))
                       if (this.selectMode) {
                         Text('全选当天')
-                          .fontSize(11).fontColor($r('app.color.primary'))
-                          .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-                          .border({ width: 1, color: $r('app.color.primary'), radius: 10 })
+                          .fontSize(12).fontColor($r('app.color.primary'))
+                          .padding({ left: 10, right: 10, top: 3, bottom: 3 })
+                          .backgroundColor($r('app.color.primary_soft'))
+                          .borderRadius(12)
                           .onClick(() => { this.toggleSelectDate(ri.item.dateLabel); })
                       }
                     }
@@ -539,7 +625,7 @@ export struct GalleryPage {
           .cachedCount(5)
           .width('100%')
           .layoutWeight(1)
-          .padding({ left: 6, right: 6, bottom: 16 })
+          .padding({ left: 10, right: 10, bottom: 20 })
         }
         .layoutWeight(1)
         .parallelGesture(

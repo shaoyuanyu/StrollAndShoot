@@ -13,14 +13,6 @@ import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
 import { createMyNode, getMyNode } from '../NodeContainer/CustomComponent';
 import type { MyNodeController } from '../NodeContainer/CustomComponent';
 
-const TABS: string[] = ['Gallery', 'Camera', 'Settings'];
-
-function tabLabel(key: string): string {
-  if (key === 'Gallery') return '画廊';
-  if (key === 'Camera') return '相机';
-  return '设置';
-}
-
 @Builder
 export function MainScreenBuilder() {
   MainScreen();
@@ -67,7 +59,7 @@ export struct MainScreen {
       },
       secondaryButton: {
         value: '启用缓存',
-        fontColor: '#0078D7',
+        fontColor: $r('app.color.primary'),
         action: () => {
           this.svc.setCachingPreference(camId, true);
         }
@@ -121,15 +113,26 @@ export struct MainScreen {
     this.syncGpsState();
   }
 
-  switchToTab(idx: number): void {
-    this.currentTab = idx;
-    if (idx === 2) { this.logText = this.svc.getLog().getText(); }
-    this.tabsController.changeIndex(idx);
+  @Builder
+  TabItem(label: string, icon: Resource, index: number) {
+    Column({ space: 2 }) {
+      SymbolGlyph(icon)
+        .fontSize(24)
+        .fontColor([this.currentTab === index
+          ? $r('app.color.primary') : $r('app.color.text_tertiary')])
+      Text(label)
+        .fontSize(10)
+        .fontWeight(this.currentTab === index ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.currentTab === index
+          ? $r('app.color.primary') : $r('app.color.text_tertiary'))
+    }
+    .width('100%').height('100%')
+    .justifyContent(FlexAlign.Center)
   }
 
   build() {
     NavDestination() {
-      Tabs({ index: this.currentTab, controller: this.tabsController }) {
+      Tabs({ index: this.currentTab, controller: this.tabsController, barPosition: BarPosition.End }) {
         TabContent() {
           GalleryPage({
             downloadProgress: this.downloadProgress,
@@ -263,6 +266,7 @@ export struct MainScreen {
             }
           })
         }
+        .tabBar(this.TabItem('画廊', $r('sys.symbol.square_grid_2x2'), 0))
 
         TabContent() {
           CameraPage({
@@ -270,6 +274,7 @@ export struct MainScreen {
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
           })
         }
+        .tabBar(this.TabItem('相机', $r('sys.symbol.camera'), 1))
 
         TabContent() {
           SettingsPage({
@@ -291,29 +296,22 @@ export struct MainScreen {
             onOpenCacheManagement: () => { this.pageInfos.pushPath({ name: 'CacheManagementPage' }); }
           })
         }
+        .tabBar(this.TabItem('设置', $r('sys.symbol.gearshape'), 2))
       }
-      .barHeight(0)
+      .barHeight(64)
+      .barMode(BarMode.Fixed)
+      .barBackgroundColor($r('app.color.tab_bar_bg'))
+      .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      .animationDuration(220)
       .scrollable(false)
-      .onChange((idx: number) => { this.currentTab = idx; })
-      .layoutWeight(1)
-
-      Row() {
-        Repeat<string>(TABS)
-          .each((ri: RepeatItem<string>) => {
-            Text(tabLabel(ri.item))
-              .fontSize(16)
-              .fontWeight(this.currentTab === ri.index ? FontWeight.Bold : FontWeight.Normal)
-              .fontColor(this.currentTab === ri.index ? $r('app.color.primary') : $r('app.color.text_secondary'))
-              .layoutWeight(1)
-              .textAlign(TextAlign.Center)
-              .padding({ top: 12, bottom: 12 })
-              .onClick(() => { this.switchToTab(ri.index); })
-          })
-          .key((item: string) => item)
-      }
-      .width('100%').height(56)
-      .backgroundColor($r('app.color.tab_bar_bg'))
+      .onChange((idx: number) => {
+        this.currentTab = idx;
+        if (idx === 2) { this.logText = this.svc.getLog().getText(); }
+      })
+      .width('100%').height('100%')
     }
+    .hideTitleBar(true)
+    .backgroundColor($r('app.color.bg_page'))
     .onBackPressed(() => {
       if (this.currentTab === 0 && this.gallerySelectMode) {
         this.exitSelectModeVersion++;

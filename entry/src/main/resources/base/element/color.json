@@ -2,27 +2,31 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#FFFFFF"
+      "value": "#F1F3F5"
     },
     {
       "name": "primary",
-      "value": "#1976D2"
+      "value": "#0A59F7"
     },
     {
       "name": "primary_light",
-      "value": "#E3F2FD"
+      "value": "#EAF1FF"
+    },
+    {
+      "name": "primary_soft",
+      "value": "#140A59F7"
     },
     {
       "name": "status_connected",
-      "value": "#4CAF50"
+      "value": "#1FA971"
     },
     {
       "name": "status_disconnected",
-      "value": "#FF9800"
+      "value": "#E8A015"
     },
     {
       "name": "status_error",
-      "value": "#F44336"
+      "value": "#E84026"
     },
     {
       "name": "bg_surface",
@@ -30,19 +34,27 @@
     },
     {
       "name": "bg_page",
-      "value": "#F5F5F5"
+      "value": "#F1F3F5"
+    },
+    {
+      "name": "bg_elevated",
+      "value": "#FFFFFF"
     },
     {
       "name": "bg_debug_log",
-      "value": "#F0F0F0"
+      "value": "#F7F8FA"
     },
     {
       "name": "text_primary",
-      "value": "#212121"
+      "value": "#E6000000"
     },
     {
       "name": "text_secondary",
-      "value": "#757575"
+      "value": "#99000000"
+    },
+    {
+      "name": "text_tertiary",
+      "value": "#66000000"
     },
     {
       "name": "text_on_primary",
@@ -50,35 +62,39 @@
     },
     {
       "name": "tab_bar_bg",
-      "value": "#FAFAFA"
+      "value": "#CCFFFFFF"
     },
     {
       "name": "divider",
-      "value": "#E0E0E0"
+      "value": "#1A000000"
+    },
+    {
+      "name": "card_border",
+      "value": "#14000000"
     },
     {
       "name": "list_bg",
-      "value": "#FAFAFA"
+      "value": "#FFFFFF"
     },
     {
       "name": "log_text",
-      "value": "#333333"
+      "value": "#99000000"
     },
     {
       "name": "button_danger",
-      "value": "#FF5722"
+      "value": "#E84026"
     },
     {
       "name": "filter_chip_bg",
-      "value": "#E8E8E8"
+      "value": "#0D000000"
     },
     {
       "name": "filter_chip_active_bg",
-      "value": "#1976D2"
+      "value": "#0A59F7"
     },
     {
       "name": "filter_chip_text",
-      "value": "#616161"
+      "value": "#99000000"
     },
     {
       "name": "filter_chip_active_text",
@@ -86,11 +102,11 @@
     },
     {
       "name": "thumbnail_placeholder",
-      "value": "#E0E0E0"
+      "value": "#E8EAED"
     },
     {
       "name": "action_bar_bg",
-      "value": "#FFFFFF"
+      "value": "#F2FFFFFF"
     },
     {
       "name": "detail_bg",
@@ -99,6 +115,14 @@
     {
       "name": "text_on_dark",
       "value": "#FFFFFF"
+    },
+    {
+      "name": "scrim",
+      "value": "#66000000"
+    },
+    {
+      "name": "nav_bg",
+      "value": "#E6F1F3F5"
     }
   ]
 }

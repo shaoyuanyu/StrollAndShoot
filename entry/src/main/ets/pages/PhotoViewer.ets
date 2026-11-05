@@ -1103,7 +1103,8 @@ export struct PhotoViewerScreen {
     // The navigation content area already sits below the status bar,
     // so do not add the status-bar inset again here.
     .padding({ left: 12, right: 12, top: 12, bottom: 8 })
-    .backgroundColor('rgba(0,0,0,0.45)')
+    .backgroundColor('rgba(0,0,0,0.35)')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.DARK })
   }
 
   /**
@@ -1185,7 +1186,7 @@ export struct PhotoViewerScreen {
       scanning: this.svc.scanning,
       scanRefreshKey: this.onScreenThumbReady,
       scanProgressText: this.svc.scanTotal > 0
-        ? `📷 更新中 ${this.svc.scanProgress}/${this.svc.scanTotal}`
+        ? `更新中 ${this.svc.scanProgress}/${this.svc.scanTotal}`
         : '',
       onZoomChange: (zoomed: boolean) => { this.isZoomed = zoomed; },
       onGestureStart: () => { this.pausePreloading(); },
@@ -1326,7 +1327,8 @@ export struct PhotoViewerScreen {
               // Reserved area for the gesture bar is already excluded from
               // the page, so the extra inset would be double-counted.
               .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-              .backgroundColor('rgba(0,0,0,0.45)')
+              .backgroundColor('rgba(0,0,0,0.35)')
+              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.DARK })
             }
             .width('100%').height('100%')
             .hitTestBehavior(HitTestMode.Transparent)

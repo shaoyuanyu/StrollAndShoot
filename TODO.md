@@ -32,11 +32,18 @@ C++ 侧：`CMakeLists.txt` 只编译 `napi_init.cpp` 与 `ptp_engine.cpp`。`ptp
 
 ## 界面与设计
 
-- **颜色**：19 处颜色值直接写在组件里（`#4CAF50`、`#2196F3`、`#E84026`、`#0078D7`、`#E65100`、`rgba(...)`），深色模式下不跟随主题。应改用 `base/element/color.json` 与 `dark/element/color.json` 里的资源。
-- **字号与圆角**：字号 15 种取值（8/9/11/12/13/14/15/16/17/18/20/22/36/48/72），圆角 7 种（3/4/8/12/14/16/18）。需要定一套取值表。缩略图角上的时间标签是 8fp，小于可读下限。
-- **图标**：只有 `PhotoViewer.TitleBar` 用了 `SymbolGlyph`，其余是 `Text('←')`、`Text('🗑')`、`Text('📷')`。建议统一改用系统符号。
-- **无障碍**：`accessibility*` 属性 0 处。圆形的返回键、删除键需要补 `accessibilityText`。
-- **底部标签栏**：`Tabs(...).barHeight(0)` 加自绘的 56vp `Row`，三个纯文字项，缺少系统标签栏的图标、点击反馈、选中动效与无障碍角色。
-- **页面头部**：`SettingsPage`、`CacheManagementPage`、`GpsManagementPage`、`GpsDayDetailPage` 各自手写“圆角按钮 + 标题 + 右侧文字”，`PhotoViewer` 另写一套带主副标题的头部。可以抽一个共用组件。
+2026-11-05 按 HarmonyOS 沉浸光感风格重构了一轮 UI，下列条目已处理：
+
+- **颜色**：新增 `bg_elevated`、`text_tertiary`、`card_border`、`primary_soft`、`scrim`、`nav_bg`，全部界面改用资源；仅 `PhotoViewer`（固定深色页）与 `WindowUtils`（系统栏）保留写定色值。
+- **图标**：全项目改用 `SymbolGlyph`（`chevron_left` / `checkmark` / `xmark` / `trash` / `camera` / `square_grid_2x2` / `gearshape` / `chevron_right`），emoji 已清零。
+- **底部标签栏**：改用系统 `Tabs` 原生标签栏（`barHeight(64)` + `barBackgroundBlurStyle(COMPONENT_THICK)`），带图标、选中态与系统无障碍角色。
+- **页面头部**：新增 `components/PageHeader.ets`，三个二级页统一使用；一级页（画廊/相机/设置）自绘大标题 + 副标题。
+- **调试入口**：日志面板收进「调试」分组，仅调试包渲染。
+
+仍待处理：
+
+- **字号与圆角**：字号仍有 9/11/12/13/14/15/17/20/24 多档，圆角有 3/8/12/16/19。可再收敛一档（正文 14、次要 12、标题 24/20）。
+- **无障碍**：仅为返回、选择、删除按钮补了 `accessibilityText`，列表项与缩略图仍缺描述。
 - **文案与多语言**：界面文案全部写在组件内部，`string.json` 的 36 条资源没有任何引用。要支持多语言需要改成 `$r('app.string.*')`。
-- **调试入口**：设置页有一个 300vp 高的日志面板（清除 / 复制）。正式发布前应移到隐藏入口。
+- **沉浸光感系统材质**：当前用 `backgroundBlurStyle` + 半透明色实现材质感。若要使用 API 26 的 `systemMaterial` / HDS 组件，需要把 `targetSdkVersion` 提到 26.0.0，并处理低版本降级。
+

@@ -6,43 +6,55 @@
     },
     {
       "name": "primary",
-      "value": "#90CAF9"
+      "value": "#4C91FF"
     },
     {
       "name": "primary_light",
-      "value": "#1A237E"
+      "value": "#1F3A66"
+    },
+    {
+      "name": "primary_soft",
+      "value": "#264C91FF"
     },
     {
       "name": "status_connected",
-      "value": "#81C784"
+      "value": "#3CCB7F"
     },
     {
       "name": "status_disconnected",
-      "value": "#FFB74D"
+      "value": "#F2B33D"
     },
     {
       "name": "status_error",
-      "value": "#EF9A9A"
+      "value": "#FF6B5E"
     },
     {
       "name": "bg_surface",
-      "value": "#1E1E1E"
+      "value": "#1C1C1E"
     },
     {
       "name": "bg_page",
-      "value": "#121212"
+      "value": "#000000"
+    },
+    {
+      "name": "bg_elevated",
+      "value": "#2C2C2E"
     },
     {
       "name": "bg_debug_log",
-      "value": "#2A2A2A"
+      "value": "#141416"
     },
     {
       "name": "text_primary",
-      "value": "#E0E0E0"
+      "value": "#E6FFFFFF"
     },
     {
       "name": "text_secondary",
-      "value": "#9E9E9E"
+      "value": "#99FFFFFF"
+    },
+    {
+      "name": "text_tertiary",
+      "value": "#66FFFFFF"
     },
     {
       "name": "text_on_primary",
@@ -50,35 +62,39 @@
     },
     {
       "name": "tab_bar_bg",
-      "value": "#1A1A1A"
+      "value": "#CC000000"
     },
     {
       "name": "divider",
-      "value": "#424242"
+      "value": "#1FFFFFFF"
+    },
+    {
+      "name": "card_border",
+      "value": "#1FFFFFFF"
     },
     {
       "name": "list_bg",
-      "value": "#1E1E1E"
+      "value": "#1C1C1E"
     },
     {
       "name": "log_text",
-      "value": "#CCCCCC"
+      "value": "#B3FFFFFF"
     },
     {
       "name": "button_danger",
-      "value": "#FF5722"
+      "value": "#FF6B5E"
     },
     {
       "name": "filter_chip_bg",
-      "value": "#2A2A2A"
+      "value": "#1FFFFFFF"
     },
     {
       "name": "filter_chip_active_bg",
-      "value": "#90CAF9"
+      "value": "#4C91FF"
     },
     {
       "name": "filter_chip_text",
-      "value": "#9E9E9E"
+      "value": "#99FFFFFF"
     },
     {
       "name": "filter_chip_active_text",
@@ -86,11 +102,11 @@
     },
     {
       "name": "thumbnail_placeholder",
-      "value": "#2A2A2A"
+      "value": "#2C2C2E"
     },
     {
       "name": "action_bar_bg",
-      "value": "#1E1E1E"
+      "value": "#CC000000"
     },
     {
       "name": "detail_bg",
@@ -99,6 +115,14 @@
     {
       "name": "text_on_dark",
       "value": "#FFFFFF"
+    },
+    {
+      "name": "scrim",
+      "value": "#99000000"
+    },
+    {
+      "name": "nav_bg",
+      "value": "#CC000000"
     }
   ]
 }

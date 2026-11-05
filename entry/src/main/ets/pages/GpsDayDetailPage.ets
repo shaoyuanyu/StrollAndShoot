@@ -1,6 +1,7 @@
 import geoLocationManager from '@ohos.geoLocationManager';
 import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsRecord } from '../model/PhotoEntry';
+import { PageHeader } from '../components/PageHeader';
 
 @Builder
 export function GpsDayDetailPageBuilder() {
@@ -108,25 +109,11 @@ export struct GpsDayDetailPage {
   build() {
     NavDestination() {
       Column() {
-      Row() {
-        Button({ type: ButtonType.Circle }) {
-          Text('←').fontSize(18)
-        }
-        .width(36).height(36)
-        .backgroundColor($r('app.color.bg_surface'))
-        .onClick(() => { this.pageInfos.pop(); })
-
-        Text(this.day)
-          .fontSize(18).fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .margin({ left: 10 })
-
-        Blank()
-
-        Text(`${this.records.length} 条`)
-          .fontSize(13).fontColor($r('app.color.text_secondary'))
-      }
-      .width('100%').padding({ left: 12, right: 12, top: 12, bottom: 8 })
+        PageHeader({
+          title: this.day,
+          subtitle: `${this.records.length} 条记录`,
+          onBack: () => { this.pageInfos.pop(); }
+        })
 
       if (this.records.length === 0) {
         Column() {
@@ -172,13 +159,19 @@ export struct GpsDayDetailPage {
                       .margin({ top: 4 })
                   }
                 }
-                .width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
+                .width('100%').padding(16)
                 .alignItems(HorizontalAlign.Start)
+                .backgroundColor($r('app.color.bg_surface'))
+                .borderRadius(16)
+                .border({ width: 1, color: $r('app.color.card_border') })
               }
+              .margin({ bottom: 8 })
             })
             .key((_r: GpsRecord, idx: number) => `${idx}`)
         }
         .width('100%').layoutWeight(1)
+        .padding({ left: 16, right: 16, top: 8 })
+        .scrollBar(BarState.Off)
       }
       }
       .width('100%').height('100%')

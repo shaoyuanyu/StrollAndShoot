@@ -38,8 +38,9 @@ export struct SelectionActionBar {
         .enabled(this.selectedCount > 0)
         .onClick(() => { this.onDownload(); })
     }
-    .width('100%').height(52)
+    .width('100%').height(56)
     .padding({ left: 16, right: 16 })
     .backgroundColor($r('app.color.action_bar_bg'))
+    .border({ width: { top: 0.5 }, color: $r('app.color.divider') })
   }
 }
