@@ -31,7 +31,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | hdc | `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc`，**不在 PATH**，要写绝对路径 |
 | hvigor | `/Applications/DevEco-Studio.app/Contents/tools/hvigor`，由 `devecocli` 自动发现 |
 | devecocli | `~/.nvm/versions/node/v26.13.0/bin/devecocli`，1.3.0-stable |
-| 模拟器镜像 | `~/Library/Huawei/Sdk/system-image/HarmonyOS-7.0.0`（`devecocli emulator` 未验证） |
+| 模拟器镜像 | `~/Library/Huawei/Sdk/system-image/HarmonyOS-7.0.0`，实例 `Mate 80` 可用，见「模拟器」 |
 
 `devecocli` 由 nvm 装的 node v26.13.0 提供。新开的 shell 若没加载 nvm，会出现 `command not found`，先 `source ~/.nvm/nvm.sh`。
 
@@ -44,7 +44,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | `hvigorw` 脚本 | 项目根目录**没有**，只能用 `devecocli` | 有（本地文件，未纳入版本控制） |
 | `deploy.sh` | **不存在**（被 `.gitignore` 忽略，只在 Linux 上） | 有，内含签名材料路径与口令 |
 | 签名材料 | **三套签名配置**：`default` 自动签名（`~/.ohos/config/`，备用）、`AgentDebug`、`AgentRelease`；手动材料在 `../KEYS/hmos_dev_key.p12`、`../CERTIFICATES/` 与 `.profile/` | `deploy.sh` 负责 |
-| 安装到手机 | 未打通，见下 | `bash deploy.sh full` |
+| 安装到手机 | 真机装不上，只能装模拟器，见「模拟器」 | `bash deploy.sh full` |
 
 ### macOS 上的流程
 
@@ -62,17 +62,18 @@ devecocli build clean
 /Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc list targets
 ```
 
-- `devecocli build` 会产出 `entry-default-signed.hap`（AgentDebug 签名）和 `entry-default-unsigned.hap`；前者已通过 `hap-sign-tool verify-app` 校验。
-- macOS 上签名材料分散在项目外：`.p12` 在 `../KEYS/hmos_dev_key.p12`，`.cer` 在 `../CERTIFICATES/`（`Agent_Debug.cer`、`Agent_RELEASE.cer`），Profile 在 `.profile/`。`build-profile.json5` 已配置 `AgentDebug` / `AgentRelease` 两套手动签名，`default` product 用 AgentDebug，`dist` product 用 AgentRelease；`devecocli build` 现在会直接产出已签名 HAP。
+- `devecocli build` 产出 `entry/build/<product>/outputs/default/` 下的两个 HAP：`entry-default-signed.hap`（AgentDebug 签名，已过 `hap-sign-tool verify-app`）与 `entry-default-unsigned.hap`。
+- macOS 上签名材料分散在项目外：`.p12` 在 `../KEYS/hmos_dev_key.p12`，`.cer` 在 `../CERTIFICATES/`（`Agent_Debug.cer`、`Agent_RELEASE.cer`），Profile 在 `.profile/`。`build-profile.json5` 里已配好 `AgentDebug` / `AgentRelease` 两套手动签名：`default` product 用 AgentDebug，`dist` product 用 AgentRelease。
+- 签好的 HAP 仍然装不进真机：两套 Profile 的 `debug-info.device-ids` 只登记了真机 UDID，且 `hdc install` 在真机上的可行性未验证。真机部署仍交给 Linux 的 `deploy.sh`。
 - 项目声明 `compatibleSdkVersion: 6.1.0(23)`，本机 SDK 是 API 26，构建能通过。不要因为本机 SDK 版本高就去改 `build-profile.json5` 里的版本。
-- 涉及相机与 USB 的验证仍然只能在真机上做，macOS 这边没有安装通道时，代码改动要交给用户在 Linux 链路上部署确认。
+- 涉及相机与 USB 的验证仍然只能在真机上做。模拟器能跑界面，但 PTP、EXIF、相册保存这些必须真机确认，见「模拟器」。
 
 ## 目录结构
 
 ```text
 StrollAndShoot/
 ├── AppScope/app.json5              # bundleName、版本号、图标
-├── build-profile.json5             # SDK 6.1.0、products（本地，未纳入版本控制）
+├── build-profile.json5             # SDK 6.1.0、products、signingConfigs（本地，未纳入版本控制）
 ├── code-linter.json5               # lint 规则
 ├── deploy.sh                       # 构建→签名→安装→启动（Linux 本地文件，未纳入版本控制）
 ├── entry/
@@ -169,7 +170,8 @@ devecocli check lint entry/src/main/ets
 
 - product 与 buildMode 是两个维度：只写 `--build-mode release` 仍会落到 `default`（AgentDebug），必须同时指定 `--product dist`。
 - 已验证：debug 产物 Profile `type=debug`；dist 产物 `type=release`、`app-distribution-type=internaltesting`、`device-ids` 1 台。
-- 正式上架 AppGallery 之前，个人使用阶段统一用**指定设备发布**方式分发。设备 UDID 必须在该 Profile 的 `device-ids` 列表内；可以 `hdc install` 直装，也可以把 HAP 与描述文件上传到自己的服务器后用 Deeplink 下载安装。
+- 当前开发阶段使用**调试证书 + 调试 Profile**。
+- 正式上架 AppGallery 之前，个人使用阶段统一用**指定设备发布**方式分发：发布证书 + 指定设备发布 Profile。设备 UDID 必须在该 Profile 的 `device-ids` 列表内；可以 `hdc install` 直装，也可以把 HAP 与描述文件上传到自己的服务器后用 Deeplink 下载安装。
 - 指定设备发布的版本有效期为 90 天，从设备首次安装算起；到期后递增 `versionCode` 重新打包部署。
 - 正式上架 AppGallery 时改用**发布证书 + 发布 Profile**。
 - 注意：`build-profile.json5` 里的签名密文与本机绑定，不要直接把带密文的配置提交给 Linux 使用，否则会报 `Unsupported state or unable to authenticate data`。
@@ -508,23 +510,65 @@ Linux 的 CLT 位于 `~/.hmos/command-line-tools/`，内含 hvigor 6.23.5、code
 | `devecocli check lint [path]` | 运行 code-linter，支持 `--fix`、`--format json`、`--output-path` | macOS、Linux |
 | `devecocli docs catalog` / `search` / `read` | 离线文档目录、全文检索、读取完整文档 | macOS、Linux |
 | `devecocli device list` | 列出真机与模拟器 | macOS、Linux |
-| `devecocli skills list` / `skills add --skill <name> --path <dir>` | 官方 skills（35 个）的列出与安装，`--all` 可全装 | Linux |
+| `devecocli emulator list` / `start` / `stop` | 模拟器实例管理，见「模拟器」 | macOS |
+| `devecocli skills list` / `find` / `add --skill <name> --path <dir>` | 官方 skills（53 个）的检索与安装，`--all` 全装 | macOS、Linux |
 
-官方 skills 的实体仓库在 `/home/ysy/Projects/hmos/.skills/`，Linux 开发机上本项目通过 `.agents/skills` 符号链接接入。链接丢失时重建（路径只在 Linux 上存在，macOS 上没有这个目录）：
+官方 skills 的实体仓库在 `/home/ysy/Projects/hmos/.skills/`，Linux 开发机上本项目通过 `.agents/skills` 符号链接接入。链接丢失时重建（路径只在 Linux 上存在）：
 
 ```bash
 mkdir -p .agents && ln -s /home/ysy/Projects/hmos/.skills .agents/skills
 ```
 
+### skills
+
+`.agents/skills/` 是 VS Code 识别的三处技能目录之一（另两处是 `.github/skills/`、`.claude/skills/`）。只有落在这些目录里的技能，其 `name` + `description` 才会进入系统提示的技能索引，模型才可能语义触发；放在别处、或用 `devecocli skills list` 临时查看，都不会自动加载。
+
+- macOS 上是**真实目录**，`devecocli skills add --all --path .agents/skills` 装全量 53 个，约 186 MB。目录必须先存在，否则报 `Directory "..." not found`。
+- `/.agents` 在 `.gitignore` 里，不会入库。
+- 索引开销实测约 **12k tokens**（53 个 `<skill>` 块，平均每个 230，最长的是 `hmos-push-kit` 629）；被触发的技能再按需读 `SKILL.md`，57 个正文合计约 272k tokens，单次通常只读 1~2 个（约 5k）。
+- 只装相关子集可把常驻开销降到 4k 左右：`devecocli skills remove --skill <name> --path .agents/skills`。
+- 技能清单在对话开始时固定，新装的要新开一轮对话才生效。
+
+### 模拟器
+
+macOS 上唯一能跑起来应用的通道。`devecocli emulator` 只是拼参数并 detached 启动 DevEco Studio 自带的模拟器二进制，不需要开 IDE：
+
+```bash
+devecocli emulator list                  # Mate 80 / stopped
+devecocli emulator start "Mate 80"       # 起来后以 127.0.0.1:5555 出现在 device list
+devecocli emulator stop "Mate 80"
+```
+
+实际进程是 `/Applications/DevEco-Studio.app/Contents/tools/emulator/Emulator -start "Mate 80" -bootmode snapshot`，实例数据在 `~/.Huawei/Emulator/deployed/Mate 80`。
+
+**签名 HAP 装不进模拟器**：`.profile/` 里两套 Profile 的 `debug-info.device-ids` 只登记了真机 UDID（`0BA1CACC…`），模拟器 UDID 是另一串（`bm get --udid` 可查），安装报 `error: install sign info inconsistent`。模拟器**接受未签名 HAP**，所以装 `entry-default-unsigned.hap`：
+
+```bash
+HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
+
+$HDC -t 127.0.0.1:5555 install -r entry/build/default/outputs/default/entry-default-unsigned.hap
+$HDC -t 127.0.0.1:5555 shell aa start -a EntryAbility -b io.github.shaoyuanyu.strollandshoot
+```
+
+界面自动化（坐标要用真实像素，先 dump 出 bounds；`snapshot_display` 的图可以直接看）：
+
+```bash
+$HDC -t 127.0.0.1:5555 shell uitest dumpLayout -p /data/local/tmp/layout.json
+$HDC -t 127.0.0.1:5555 shell uitest uiInput click <x> <y>
+$HDC -t 127.0.0.1:5555 shell snapshot_display -f /data/local/tmp/s.jpeg
+$HDC -t 127.0.0.1:5555 file recv /data/local/tmp/s.jpeg /tmp/s.jpeg
+```
+
+能验证：布局、V2 状态管理、导航与转场、设置持久化、深色模式、空态与错误分支、崩溃排查。不能验证：USB PTP（模拟器无 USB 主机，`搜索相机` 必然搜不到）、相机通信、EXIF 方向与 GPS 写入、保存到系统相册、真实性能与手势手感。
+
 ### 需要设备、登录或尚未验证
 
 - `run` / `--apply <file>`（快速增量部署，要求 DevEco Studio ≥ 6.1.1）/ `--hotreload`（需要后台进程保活）
 - `log`（hilog 与崩溃日志）、`ui`（界面检视与操作），两者都需要设备
-- `emulator`（模拟器管理）。macOS 已下载镜像 `HarmonyOS-7.0.0`，但未验证；Linux 开发机没有 DevEco Studio
 - `signature generate`（生成签名材料，需先 `devecocli auth login` 且连接设备）
 - `check compat`（两个 SDK 版本之间的破坏性变更扫描）、`update`（更新 CLI 自身）
 
-macOS 上 `devecocli` 现在能构建出 AgentDebug 签名的 HAP；安装仍走 `deploy.sh`（仅 Linux），或用 `hdc install`（未验证）。`devecocli` 其余用途是静态检查与查文档。
+签名与安装仍走 `deploy.sh`（仅 Linux），`devecocli` 只用来构建、静态检查、模拟器与查文档。macOS 上构建产物是 AgentDebug 签名的 HAP，能装模拟器的只有 unsigned 那个；真机安装未验证。
 
 ## 版本管理
 
