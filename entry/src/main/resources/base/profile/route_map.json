@@ -9,6 +9,21 @@
       "name": "PhotoViewerScreen",
       "pageSourceFile": "src/main/ets/pages/PhotoViewer.ets",
       "buildFunction": "PhotoViewerScreenBuilder"
+    },
+    {
+      "name": "GpsManagementPage",
+      "pageSourceFile": "src/main/ets/pages/GpsManagementPage.ets",
+      "buildFunction": "GpsManagementPageBuilder"
+    },
+    {
+      "name": "GpsDayDetailPage",
+      "pageSourceFile": "src/main/ets/pages/GpsDayDetailPage.ets",
+      "buildFunction": "GpsDayDetailPageBuilder"
+    },
+    {
+      "name": "CacheManagementPage",
+      "pageSourceFile": "src/main/ets/pages/CacheManagementPage.ets",
+      "buildFunction": "CacheManagementPageBuilder"
     }
   ]
 }

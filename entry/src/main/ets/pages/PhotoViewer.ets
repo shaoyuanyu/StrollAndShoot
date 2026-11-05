@@ -6,7 +6,8 @@ import type { PhotoEntry } from '../model/PhotoEntry';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { AnimationProperties } from '../CustomTransition/AnimationProperties';
 import { getMyNode, MyNodeController } from '../NodeContainer/CustomComponent';
-import { ComponentAttrUtils, RectInfoInPx } from '../utils/ComponentAttrUtils';
+import { RectInfoInPx } from '../utils/ComponentAttrUtils';
+import { WindowUtils } from '../utils/WindowUtils';
 
 const TAG = 'PhotoViewer';
 const DOMAIN = 0x0001;
@@ -45,7 +46,7 @@ struct ZoomableImage {
 
   @Monitor('pageKey')
   onPageChange(): void {
-    animateTo({ duration: 120, curve: Curve.EaseOut }, () => { this.reset(); });
+    this.getUIContext().animateTo({ duration: 120, curve: Curve.EaseOut }, () => { this.reset(); });
     this.updateImgCache();
   }
 
@@ -121,8 +122,6 @@ struct ZoomableImage {
     } else {
       this.offY = 0;
     }
-    hilog.info(0x0001, 'ZoomClamp', 'clamp scale=%{public}f iw=%{public}d ih=%{public}d mx=%{public}d my=%{public}d off=%{public}d,%{public}d',
-      this.scaleVal, iw, ih, mx, my, this.offX, this.offY);
   }
 
   private onPinchStart(e: GestureEvent): void {
@@ -165,7 +164,7 @@ struct ZoomableImage {
     if (this.scaleVal < 1.05) {
       this.onZoomChange(false);
       this.onEdgeChange(false);
-      animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
+      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
       this.onGestureEnd();
       return;
     }
@@ -232,7 +231,7 @@ struct ZoomableImage {
     if (this.scaleVal > 1.0) {
       this.onZoomChange(false);
       this.onEdgeChange(false);
-      animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
+      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
       return;
     }
     const fl = e?.fingerList;
@@ -248,7 +247,7 @@ struct ZoomableImage {
     this.lastOffX = 0;
     this.lastOffY = 0;
     this.onZoomChange(true);
-    animateTo({ duration: 250, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseOut }, () => {
       this.applyTransform(2.5, 0, 0);
       this.lastScale = this.scaleVal;
       this.lastOffX = this.offX;
@@ -546,10 +545,15 @@ export struct PhotoViewerScreen {
     this.animationProperties = new AnimationProperties(this.getUIContext());
     // Pick up the BuilderNode shared from MainScreen/GalleryPage
     this.myNodeController = getMyNode();
+    // The viewer is always dark: force light status/navigation bar icons.
+    WindowUtils.applyViewerSystemBars();
   }
 
   aboutToDisappear(): void {
     this.cancelStableTimer();
+    // Restore system bars to match the app theme.
+    WindowUtils.applyThemeSystemBars(
+      WindowUtils.isDarkMode(this.getUIContext().getHostContext()));
   }
 
   /**
@@ -1073,7 +1077,7 @@ export struct PhotoViewerScreen {
       }
       .width(36).height(36)
       .backgroundColor('rgba(255,255,255,0.15)')
-      .onClick(() => { this.pageInfos.pop(); })
+      .onClick(() => { this.handleBack(); })
 
       // Title block
       Column() {
@@ -1082,7 +1086,7 @@ export struct PhotoViewerScreen {
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         Text(this.getSubTitle())
-          .fontSize(11).fontColor('#bbb')
+          .fontSize(11).fontColor('rgba(255,255,255,0.7)')
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
           .margin({ top: 1 })
@@ -1093,12 +1097,55 @@ export struct PhotoViewerScreen {
 
       // Current index indicator
       Text(`${this.mainIdx + 1}/${this._realTotal}`)
-        .fontSize(12).fontColor('#888')
+        .fontSize(12).fontColor('rgba(255,255,255,0.7)')
         .margin({ right: 4 })
     }
     .width('100%')
+    // The navigation content area already sits below the status bar,
+    // so do not add the status-bar inset again here.
     .padding({ left: 12, right: 12, top: 12, bottom: 8 })
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+    .backgroundColor('rgba(0,0,0,0.45)')
+  }
+
+  /**
+   * Shared-element aware back navigation.
+   * Used by both the title-bar button and the hardware/gesture back.
+   */
+  private handleBack(): void {
+    const curHandle = this.currentHandle();
+    if (curHandle >= 0) {
+      // 1. Update the shared element (BuilderNode) with the CURRENT photo's
+      //    thumbnail (not the originally-clicked one).
+      if (this.myNodeController) {
+        const pm = this.svc.thumbnailPixelMapMap.get(curHandle);
+        if (pm) {
+          this.myNodeController.setPixelMap(this.getUIContext(), pm);
+          this.svc.getLog().add('pop: updated BuilderNode pixelMap for handle=' + curHandle);
+        }
+      }
+
+      // 2. Look up the current thumbnail's grid position for the return animation.
+      //    Priority: positionLookup (live) > posCache (cached at push time) > original cardItemInfo
+      let rectStr: string = '';
+      if (this.positionLookup) {
+        try { rectStr = this.positionLookup(curHandle); } catch (_e) { /* ignore */ }
+      }
+      if (!rectStr) {
+        rectStr = this.posCache[String(curHandle)] ?? '';
+        if (rectStr) {
+          this.svc.getLog().add('pop: used posCache for handle=' + curHandle);
+        }
+      }
+      if (rectStr) {
+        try {
+          this.cardItemInfo = JSON.parse(rectStr) as RectInfoInPx;
+          this.svc.getLog().add('pop: updated cardItemInfo for handle=' + curHandle);
+        } catch (_e) { /* ignore */ }
+      } else {
+        this.svc.getLog().add('pop: no position found for handle=' + curHandle + ', using original');
+      }
+    }
+    this.pageInfos.pop();
   }
 
   // ========== Builders ==========
@@ -1286,8 +1333,10 @@ export struct PhotoViewerScreen {
                 )
               }
               .width('100%')
+              // Reserved area for the gesture bar is already excluded from
+              // the page, so the extra inset would be double-counted.
               .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+              .backgroundColor('rgba(0,0,0,0.45)')
             }
             .width('100%').height('100%')
             .hitTestBehavior(HitTestMode.Transparent)
@@ -1366,40 +1415,7 @@ export struct PhotoViewerScreen {
         }, 500);
     })
     .onBackPressed(() => {
-      const curHandle = this.currentHandle();
-      if (curHandle >= 0) {
-        // 1. Update the shared element (BuilderNode) with the CURRENT photo's
-        //    thumbnail (not the originally-clicked one).
-        if (this.myNodeController) {
-          const pm = this.svc.thumbnailPixelMapMap.get(curHandle);
-          if (pm) {
-            this.myNodeController.setPixelMap(this.getUIContext(), pm);
-            this.svc.getLog().add('pop: updated BuilderNode pixelMap for handle=' + curHandle);
-          }
-        }
-
-        // 2. Look up the current thumbnail's grid position for the return animation.
-        //    Priority: positionLookup (live) > posCache (cached at push time) > original cardItemInfo
-        let rectStr: string = '';
-        if (this.positionLookup) {
-          try { rectStr = this.positionLookup(curHandle); } catch (_e) {}
-        }
-        if (!rectStr) {
-          rectStr = this.posCache[String(curHandle)] ?? '';
-          if (rectStr) {
-            this.svc.getLog().add('pop: used posCache for handle=' + curHandle);
-          }
-        }
-        if (rectStr) {
-          try {
-            this.cardItemInfo = JSON.parse(rectStr) as RectInfoInPx;
-            this.svc.getLog().add('pop: updated cardItemInfo for handle=' + curHandle);
-          } catch (_e) {}
-        } else {
-          this.svc.getLog().add('pop: no position found for handle=' + curHandle + ', using original');
-        }
-      }
-      this.pageInfos.pop();
+      this.handleBack();
       return true;
     })
     .onDisAppear(() => {

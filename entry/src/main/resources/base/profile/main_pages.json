@@ -1,9 +1,5 @@
 {
   "src": [
-    "pages/SwiperSyncTestPage",
-    "pages/Index",
-    "pages/CacheManagementPage",
-    "pages/GpsManagementPage",
-    "pages/GpsDayDetailPage"
+    "pages/Index"
   ]
 }

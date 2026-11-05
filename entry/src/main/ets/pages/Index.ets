@@ -4,6 +4,7 @@ import { GpsRecorder } from '../services/GpsRecorder';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { SettingsStore } from '../model/SettingsStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
+import { WindowUtils } from '../utils/WindowUtils';
 
 @Entry
 @ComponentV2
@@ -14,19 +15,26 @@ struct Index {
   @Local settings: SettingsStore = SettingsStore.getInstance();
 
   aboutToAppear(): void {
-    const ctx = getContext(this) as common.UIAbilityContext;
+    const hostCtx = this.getUIContext().getHostContext();
 
     // Initialize dark mode
     if (this.settings.darkMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
       this.applyDarkMode(this.settings.darkMode);
+    } else {
+      // Following the system theme: still make the bars match on cold start,
+      // because leaving them untouched keeps whatever was last painted.
+      WindowUtils.applyThemeSystemBars(WindowUtils.isDarkMode(hostCtx));
     }
 
     // Initialize services
-    this.svc.initLogPath(ctx.filesDir);
-    this.svc.initDownloadDir(ctx.filesDir);
-    this.gpsRecorder.init(ctx.filesDir, this.svc.getLog(), ctx);
-    ExifGeotagger.setLog(this.svc.getLog());
-    this.gpsRecorder.autoStart();
+    if (hostCtx) {
+      const ctx = hostCtx as common.UIAbilityContext;
+      this.svc.initLogPath(ctx.filesDir);
+      this.svc.initDownloadDir(ctx.filesDir);
+      this.gpsRecorder.init(ctx.filesDir, this.svc.getLog(), ctx);
+      ExifGeotagger.setLog(this.svc.getLog());
+      this.gpsRecorder.autoStart();
+    }
 
     // Push the main tab screen as the initial Navigation destination
     this.pageInfos.pushPath({ name: 'MainScreen' });
@@ -41,10 +49,24 @@ struct Index {
   }
 
   applyDarkMode(mode: number): void {
+    const ctx = this.getUIContext().getHostContext();
     try {
-      const ctx = getContext(this) as common.UIAbilityContext;
-      ctx.getApplicationContext().setColorMode(mode);
+      if (ctx) {
+        (ctx as common.UIAbilityContext).getApplicationContext().setColorMode(mode);
+      }
     } catch (_e) { /* ignore */ }
+    // Keep the system bars in step with the theme. Read from the requested
+    // mode where it is explicit, because the configuration change triggered
+    // by setColorMode() may not have been applied yet at this point.
+    let dark: boolean;
+    if (mode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) {
+      dark = true;
+    } else if (mode === ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT) {
+      dark = false;
+    } else {
+      dark = WindowUtils.isDarkMode(ctx);
+    }
+    WindowUtils.applyThemeSystemBars(dark);
   }
 
   build() {

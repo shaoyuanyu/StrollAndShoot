@@ -76,19 +76,27 @@ export struct GalleryPage {
   private _flatCacheMode: string = '';
   private _flatCacheFilter: string = '';
   private _flatCacheScale: number = -1;
+  private _flatCacheColumns: number = -1;
+  private _flatCacheWidth: number = -1;
 
-  private _displayWidth: number = -1;
+  /** Width of the gallery content area in vp (0 before first layout). */
+  @Local _viewWidthVp: number = 0;
+  private _displayWidthVp: number = -1;
 
-  private getDisplayWidth(): number {
-    if (this._displayWidth < 0) {
+  private getDisplayWidthVp(): number {
+    if (this._viewWidthVp > 0) return this._viewWidthVp;
+    if (this._displayWidthVp > 0) return this._displayWidthVp;
+    try {
       const d = display.getDefaultDisplaySync();
-      this._displayWidth = d ? d.width : 360;
+      this._displayWidthVp = d ? this.getUIContext().px2vp(d.width) : 360;
+    } catch (_e) {
+      this._displayWidthVp = 360;
     }
-    return this._displayWidth;
+    return this._displayWidthVp;
   }
 
   private columnCount(): number {
-    const w = this.getDisplayWidth();
+    const w = this.getDisplayWidthVp();
     const avail = w - 12;
     const itemW = this.baseItemW() * this.galleryScale;
     const gap = this.itemGapPx();
@@ -99,10 +107,11 @@ export struct GalleryPage {
   }
 
   private baseItemW(): number {
+    const w = this.getDisplayWidthVp();
+    const avail = w - 12;
     if (this.galleryColumnCount > 0) {
-      const w = this.getDisplayWidth();
-      const avail = w - 12;
-      return (avail - (this.galleryColumnCount - 1) * 2) / this.galleryColumnCount;
+      const gap = this.itemGapPx();
+      return (avail - (this.galleryColumnCount - 1) * gap) / this.galleryColumnCount;
     }
     return 80;
   }
@@ -178,7 +187,9 @@ export struct GalleryPage {
         this._flatCacheThumbVer === this.svc.thumbnailVersion &&
         this._flatCacheMode === this.displayMode &&
         this._flatCacheFilter === this.filterValue &&
-        this._flatCacheScale === this.galleryScale) {
+        this._flatCacheScale === this.galleryScale &&
+        this._flatCacheColumns === this.galleryColumnCount &&
+        this._flatCacheWidth === this.getDisplayWidthVp()) {
       return this._flatItemsCache;
     }
     const t0 = Date.now();
@@ -237,6 +248,8 @@ export struct GalleryPage {
     this._flatCacheMode = this.displayMode;
     this._flatCacheFilter = this.filterValue;
     this._flatCacheScale = this.galleryScale;
+    this._flatCacheColumns = this.galleryColumnCount;
+    this._flatCacheWidth = this.getDisplayWidthVp();
     this.svc.getLog().add(`PERF buildFlatItems done in ${Date.now() - t0}ms (${items.length} items)`);
     return items;
   }
@@ -360,32 +373,28 @@ export struct GalleryPage {
           })
           .hitTestBehavior(HitTestMode.None)
         if (this.selectMode && !this.isDownloaded(cellRi.item!.displayPhoto)) {
-          // 12x12 选择指示圆，Path 绘制对勾
+          // 12x12 选择指示圆，用文本对勾避免 Path/Circle 在新 SDK 上的兼容告警
           Stack() {
-            Circle()
-              .width(12).height(12)
-              .fill(this.selectedHandles.has(cellRi.item!.displayPhoto.handle)
-                ? '#2196F3' : 'rgba(0,0,0,0.3)')
-              .strokeWidth(this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 0 : 2)
-              .stroke(Color.White)
             if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
-              Path()
-                .width(7).height(6)
-                .commands('M1.5 3.5 L3 5 L5.5 1.5')
-                .stroke(Color.White)
-                .strokeWidth(1.5)
-                .fillOpacity(0)
-                .strokeLineCap(LineCapStyle.Round)
-                .strokeLineJoin(LineJoinStyle.Round)
+              Text('✓')
+                .fontSize(9).fontColor(Color.White).fontWeight(FontWeight.Bold)
             }
           }
           .width(12).height(12)
+          .borderRadius(6)
+          .backgroundColor(this.selectedHandles.has(cellRi.item!.displayPhoto.handle)
+            ? '#2196F3' : 'rgba(0,0,0,0.3)')
+          .border({
+            width: this.selectedHandles.has(cellRi.item!.displayPhoto.handle) ? 0 : 2,
+            color: Color.White
+          })
           .position({ top: 3, right: 3 })
           .hitTestBehavior(HitTestMode.None)
         }
         if (this.isDownloaded(cellRi.item!.displayPhoto)) {
-          Circle({ width: 8, height: 8 })
-            .fill('#4CAF50')
+          Stack()
+            .width(8).height(8).borderRadius(4)
+            .backgroundColor('#4CAF50')
             .position({ top: 3, right: 3 })
             .hitTestBehavior(HitTestMode.None)
         }
@@ -570,5 +579,11 @@ export struct GalleryPage {
       }
     }
     .width('100%').height('100%')
+    .onAreaChange((_o: Area, n: Area) => {
+      const w = n.width as number;
+      if (w > 0 && w !== this._viewWidthVp) {
+        this._viewWidthVp = w;
+      }
+    })
   }
 }

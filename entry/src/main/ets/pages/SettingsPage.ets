@@ -1,6 +1,7 @@
 import { ConfigurationConstant, bundleManager } from '@kit.AbilityKit';
-import { router } from '@kit.ArkUI';
 import { SettingsStore } from '../model/SettingsStore';
+import { CameraService } from '../services/CameraService';
+import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 const COLUMN_OPTIONS: number[] = [-1, 3, 4, 5, 6];
@@ -21,8 +22,12 @@ export struct SettingsPage {
   @Event onGpsToggle: () => void = () => {};
   @Event onGpsModeChange: (mode: number) => void = (_m: number) => {};
   @Event onGpsClear: () => void = () => {};
+  @Event onOpenGpsManagement: () => void = () => {};
+  @Event onOpenCacheManagement: () => void = () => {};
   settings: SettingsStore = SettingsStore.getInstance();
   @Local versionName: string = '';
+  @Local debugBuild: boolean = false;
+  @Local svc: CameraService = CameraService.getInstance();
 
   aboutToAppear(): void {
     try {
@@ -31,10 +36,18 @@ export struct SettingsPage {
     } catch (err) {
       this.versionName = `${(err as BusinessError).message}`;
     }
+    this.debugBuild = MockPtpDevice.isDebugBuild();
+  }
+
+  onToggleMockCamera(enabled: boolean): void {
+    // 只切换"虚拟相机是否存在"，不直接灌数据：用户仍需在相机页点「搜索相机」，
+    // 之后走的是与真机完全相同的连接与扫描流程。
+    this.settings.mockCameraEnabled = enabled;
+    this.svc.onMockCameraToggled();
   }
 
   gotoManage(): void {
-    router.pushUrl({ url: 'pages/GpsManagementPage' });
+    this.onOpenGpsManagement();
   }
 
   build() {
@@ -175,8 +188,36 @@ export struct SettingsPage {
         .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
         .margin({ bottom: 16 })
         .onClick(() => {
-          router.pushUrl({ url: 'pages/CacheManagementPage' });
+          this.onOpenCacheManagement();
         })
+
+        if (this.debugBuild) {
+          Text('调试（仅调试包可见）')
+            .fontSize(13).fontColor($r('app.color.text_secondary'))
+            .fontWeight(FontWeight.Medium)
+            .alignSelf(ItemAlign.Start).margin({ bottom: 8 })
+
+          Row() {
+            Column() {
+              Text('模拟相机设备')
+                .fontSize(14).fontColor($r('app.color.text_primary'))
+                .alignSelf(ItemAlign.Start)
+              Text(this.svc.photoCount > 0
+                ? `已连接虚拟相机，共 ${this.svc.photoCount} 张`
+                : '开启后到「相机」页点「搜索相机」，即可连上一台虚拟相机并扫描 38 张合成照片')
+                .fontSize(11).fontColor($r('app.color.text_secondary'))
+                .alignSelf(ItemAlign.Start).margin({ top: 3 })
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.settings.mockCameraEnabled })
+              .onChange((isOn: boolean) => { this.onToggleMockCamera(isOn); })
+          }
+          .width('100%').padding(14)
+          .backgroundColor($r('app.color.bg_surface')).borderRadius(8)
+          .margin({ bottom: 16 })
+        }
 
         Text('调试日志')
           .fontSize(13).fontColor($r('app.color.text_secondary'))

@@ -13,8 +13,9 @@ export struct ConnectionStatusBar {
   build() {
     if (this.compact) {
       Row() {
-        Circle({ width: 8, height: 8 })
-          .fill(this.connected ? $r('app.color.status_connected') : $r('app.color.status_disconnected'))
+        Row()
+          .width(8).height(8).borderRadius(4)
+          .backgroundColor(this.connected ? $r('app.color.status_connected') : $r('app.color.status_disconnected'))
         Text(this.connected ? this.cameraName : this.statusText)
           .fontSize(12)
           .maxLines(1)
@@ -38,8 +39,9 @@ export struct ConnectionStatusBar {
     } else {
       Column() {
         Row() {
-          Circle({ width: 12, height: 12 })
-            .fill(this.connected ? $r('app.color.status_connected') :
+          Row()
+            .width(12).height(12).borderRadius(6)
+            .backgroundColor(this.connected ? $r('app.color.status_connected') :
                   (this.statusText.includes('搜索') || this.statusText.includes('扫描') ?
                    $r('app.color.primary') : $r('app.color.status_disconnected')))
           Text(this.statusText)

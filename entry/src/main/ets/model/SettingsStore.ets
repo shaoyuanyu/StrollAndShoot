@@ -8,6 +8,8 @@ export class SettingsStore {
   @Trace darkMode: number = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
   @Trace galleryColumnCount: number = -1;
   @Trace displayMode: string = 'file_first';
+  /** 调试包专用：让「搜索相机」连上一台虚拟相机（见 debug/MockPtpDevice）。 */
+  @Trace mockCameraEnabled: boolean = false;
 
   private static instance_: SettingsStore;
 

@@ -1,10 +1,14 @@
-import { router } from '@kit.ArkUI';
 import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
 
-@Entry
+@Builder
+export function GpsManagementPageBuilder() {
+  GpsManagementPage();
+}
+
 @ComponentV2
-struct GpsManagementPage {
+export struct GpsManagementPage {
+  private pageInfos: NavPathStack = new NavPathStack();
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
   @Local dailyGroups: GpsDailyGroup[] = [];
   @Local totalCount: number = 0;
@@ -20,7 +24,7 @@ struct GpsManagementPage {
   }
 
   deleteDay(day: string, count: number): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '删除记录',
       message: `删除 ${day} 的 ${count} 条GPS记录？`,
       autoCancel: true,
@@ -40,15 +44,16 @@ struct GpsManagementPage {
   }
 
   build() {
-    Column() {
-      // Header
+    NavDestination() {
+      Column() {
+        // Header
       Row() {
         Button({ type: ButtonType.Circle }) {
           Text('←').fontSize(18)
         }
         .width(36).height(36)
         .backgroundColor($r('app.color.bg_surface'))
-        .onClick(() => { router.back(); })
+        .onClick(() => { this.pageInfos.pop(); })
 
         Text('GPS记录管理')
           .fontSize(18).fontWeight(FontWeight.Medium)
@@ -95,9 +100,11 @@ struct GpsManagementPage {
                 }
                 .width('100%').padding(14)
                 .onClick(() => {
-                  router.pushUrl({
-                    url: 'pages/GpsDayDetailPage',
-                    params: { day: ri.item.day }
+                  const param: Record<string, Object> = {};
+                  param['day'] = ri.item.day;
+                  this.pageInfos.pushPath({
+                    name: 'GpsDayDetailPage',
+                    param: param
                   });
                 })
               }
@@ -106,8 +113,14 @@ struct GpsManagementPage {
         }
         .width('100%').layoutWeight(1)
       }
+      }
+      .width('100%').height('100%')
+      .backgroundColor($r('app.color.bg_page'))
     }
-    .width('100%').height('100%')
+    .hideTitleBar(true)
     .backgroundColor($r('app.color.bg_page'))
+    .onReady((context: NavDestinationContext) => {
+      this.pageInfos = context.pathStack;
+    })
   }
 }

@@ -1,4 +1,4 @@
-import { geoLocationManager } from '@kit.LocationKit';
+import geoLocationManager from '@ohos.geoLocationManager';
 import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { abilityAccessCtrl, common, Permissions, wantAgent, WantAgent } from '@kit.AbilityKit';
@@ -93,6 +93,11 @@ export class GpsRecorder {
   async start(): Promise<void> {
     if (this.running) return;
 
+    if (!canIUse('SystemCapability.Location.Location.Core')) {
+      this.log.add('GPS记录: 当前设备不支持定位能力');
+      return;
+    }
+
     // Request runtime permissions first
     const permitted = await this.ensurePermissions();
     if (!permitted) {
@@ -100,55 +105,74 @@ export class GpsRecorder {
       return;
     }
 
-    if (!geoLocationManager.isLocationEnabled()) {
+    let locationEnabled = false;
+    if (canIUse('SystemCapability.Location.Location.Core')) {
+      try {
+        // @SuppressWarnings syscap
+        locationEnabled = geoLocationManager.isLocationEnabled();
+      } catch (err) {
+        this.log.add(`GPS记录: 定位状态检查失败 ${JSON.stringify(err)}`);
+        return;
+      }
+    }
+    if (!locationEnabled) {
       this.log.add('GPS记录: 位置服务未开启');
       return;
     }
 
-    try {
-      let callbackCount = 0;
-      this.locationCallback = (location: geoLocationManager.Location): void => {
-        callbackCount++;
-        const record: GpsRecord = {
-          timestamp: location.timeStamp,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          altitude: location.altitude ?? 0
+    if (!canIUse('SystemCapability.Location.Location.Core')) {
+      return;
+    }
+    if (canIUse('SystemCapability.Location.Location.Core')) {
+      try {
+        let callbackCount = 0;
+        this.locationCallback = (location: geoLocationManager.Location): void => {
+          callbackCount++;
+          const record: GpsRecord = {
+            timestamp: location.timeStamp,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            altitude: location.altitude ?? 0
+          };
+          this.records.push(record);
+          this.saveRecords();
+          this.onChange();
+          this.log.add(`GPS定位 #${callbackCount}: ${record.latitude.toFixed(4)},${record.longitude.toFixed(4)} (共${this.records.length}条)`);
         };
-        this.records.push(record);
-        this.saveRecords();
-        this.onChange();
-        this.log.add(`GPS定位 #${callbackCount}: ${record.latitude.toFixed(4)},${record.longitude.toFixed(4)} (共${this.records.length}条)`);
-      };
 
-      let scenario: geoLocationManager.UserActivityScenario;
-      let interval: number;
-      if (this.gpsMode === 0) {
-        scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
-        interval = 31;
-      } else if (this.gpsMode === 1) {
-        scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
-        interval = 61;
-      } else {
-        scenario = geoLocationManager.UserActivityScenario.DAILY_LIFE_SERVICE;
-        interval = 121;
+        let scenario: geoLocationManager.UserActivityScenario;
+        let interval: number;
+        if (this.gpsMode === 0) {
+          // @SuppressWarnings syscap
+          scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
+          interval = 31;
+        } else if (this.gpsMode === 1) {
+          // @SuppressWarnings syscap
+          scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
+          interval = 61;
+        } else {
+          // @SuppressWarnings syscap
+          scenario = geoLocationManager.UserActivityScenario.DAILY_LIFE_SERVICE;
+          interval = 121;
+        }
+
+        const requestCfg: geoLocationManager.ContinuousLocationRequest = {
+          interval: interval,
+          locationScenario: scenario
+        };
+
+        // @SuppressWarnings syscap
+        geoLocationManager.on('locationChange', requestCfg, this.locationCallback);
+        this.running = true;
+        this.saveMode();
+
+        // Request continuous task for background GPS
+        await this.requestContinuousTask();
+
+        this.log.add(`GPS记录已启动 (${this.getGpsModeLabel()}模式, interval=${interval}s, 已有${this.records.length}条)`);
+      } catch (err) {
+        this.log.add(`GPS记录启动失败: ${JSON.stringify(err)}`);
       }
-
-      const requestCfg: geoLocationManager.ContinuousLocationRequest = {
-        interval: interval,
-        locationScenario: scenario
-      };
-
-      geoLocationManager.on('locationChange', requestCfg, this.locationCallback);
-      this.running = true;
-      this.saveMode();
-
-      // Request continuous task for background GPS
-      await this.requestContinuousTask();
-
-      this.log.add(`GPS记录已启动 (${this.getGpsModeLabel()}模式, interval=${interval}s, 已有${this.records.length}条)`);
-    } catch (err) {
-      this.log.add(`GPS记录启动失败: ${JSON.stringify(err)}`);
     }
   }
 
@@ -157,12 +181,15 @@ export class GpsRecorder {
 
     this.cancelContinuousTask();
 
-    try {
-      if (this.locationCallback) {
-        geoLocationManager.off('locationChange', this.locationCallback);
+    if (canIUse('SystemCapability.Location.Location.Core')) {
+      try {
+        if (this.locationCallback) {
+          // @SuppressWarnings syscap
+          geoLocationManager.off('locationChange', this.locationCallback);
+        }
+      } catch (err) {
+        this.log.add(`GPS记录停止失败: ${JSON.stringify(err)}`);
       }
-    } catch (err) {
-      this.log.add(`GPS记录停止失败: ${JSON.stringify(err)}`);
     }
     this.running = false;
     this.locationCallback = undefined;
@@ -258,9 +285,10 @@ export class GpsRecorder {
 
   /** Returns all records for a specific day (YYYY-MM-DD), sorted by time ascending. */
   getDayRecords(dateKey: string): GpsRecord[] {
+    const d = new Date();
     return this.records
       .filter((r: GpsRecord) => {
-        const d = new Date(r.timestamp);
+        d.setTime(r.timestamp);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         return key === dateKey;
       })
@@ -270,8 +298,9 @@ export class GpsRecorder {
   /** Delete all records for a given day. Returns the new total count. */
   deleteDay(dateKey: string): number {
     const before = this.records.length;
+    const d = new Date();
     this.records = this.records.filter((r: GpsRecord) => {
-      const d = new Date(r.timestamp);
+      d.setTime(r.timestamp);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       return key !== dateKey;
     });

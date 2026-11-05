@@ -13,35 +13,41 @@ export class ComponentAttrUtils {
   /**
    * Get the screen-space bounding rect of a component by its ID.
    * Accounts for translate, window offset, and scale.
+   * Returns null when the component is not on screen / not found.
    */
-  public static getRectInfoById(context: UIContext, id: string): RectInfoInPx {
+  public static getRectInfoById(context: UIContext, id: string): RectInfoInPx | null {
     if (!context || !id) {
-      throw new Error('object is empty');
+      return null;
     }
-    const componentInfo: componentUtils.ComponentInfo = context.getComponentUtils().getRectangleById(id);
+    try {
+      const componentInfo: componentUtils.ComponentInfo = context.getComponentUtils().getRectangleById(id);
 
-    if (!componentInfo) {
-      throw new Error('object is empty');
-    }
+      if (!componentInfo) {
+        return null;
+      }
 
-    const rstRect: RectInfoInPx = new RectInfoInPx();
-    const widthScaleGap = componentInfo.size.width * (1 - componentInfo.scale.x) / 2;
-    const heightScaleGap = componentInfo.size.height * (1 - componentInfo.scale.y) / 2;
-    rstRect.left = componentInfo.translate.x + componentInfo.windowOffset.x + widthScaleGap;
-    rstRect.top = componentInfo.translate.y + componentInfo.windowOffset.y + heightScaleGap;
-    rstRect.right =
-      componentInfo.translate.x + componentInfo.windowOffset.x + componentInfo.size.width - widthScaleGap;
-    rstRect.bottom =
-      componentInfo.translate.y + componentInfo.windowOffset.y + componentInfo.size.height - heightScaleGap;
-    rstRect.width = rstRect.right - rstRect.left;
-    rstRect.height = rstRect.bottom - rstRect.top;
-    return {
-      left: rstRect.left,
-      right: rstRect.right,
-      top: rstRect.top,
-      bottom: rstRect.bottom,
-      width: rstRect.width,
-      height: rstRect.height
+      const rstRect: RectInfoInPx = new RectInfoInPx();
+      const widthScaleGap = componentInfo.size.width * (1 - componentInfo.scale.x) / 2;
+      const heightScaleGap = componentInfo.size.height * (1 - componentInfo.scale.y) / 2;
+      rstRect.left = componentInfo.translate.x + componentInfo.windowOffset.x + widthScaleGap;
+      rstRect.top = componentInfo.translate.y + componentInfo.windowOffset.y + heightScaleGap;
+      rstRect.right =
+        componentInfo.translate.x + componentInfo.windowOffset.x + componentInfo.size.width - widthScaleGap;
+      rstRect.bottom =
+        componentInfo.translate.y + componentInfo.windowOffset.y + componentInfo.size.height - heightScaleGap;
+      rstRect.width = rstRect.right - rstRect.left;
+      rstRect.height = rstRect.bottom - rstRect.top;
+      return {
+        left: rstRect.left,
+        right: rstRect.right,
+        top: rstRect.top,
+        bottom: rstRect.bottom,
+        width: rstRect.width,
+        height: rstRect.height
+      }
+    } catch (_e) {
+      // Component is off-screen or has not been laid out yet.
+      return null;
     }
   }
 }

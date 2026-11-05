@@ -149,12 +149,16 @@ export class AnimationProperties {
         this.showDetailContent = true;
       });
 
-      // Background fade animation
+      // Background fade animation: transparent → opaque black.
+      // Opaque is required: the page starts below the status bar and the
+      // title-bar strip is only semi-transparent, so a transparent
+      // destination background leaks the window's white background in
+      // light mode (grey title bar, white band above the home indicator).
       this.uiContext?.animateTo({
         duration: 100,
         curve: Curve.Sharp,
       }, () => {
-        this.navDestinationBgColor = '#00ffffff';
+        this.navDestinationBgColor = Color.Black;
       });
     }
     // ---- Pop animation: full screen → thumbnail position ----

@@ -55,7 +55,7 @@ export struct MainScreen {
     const camId = this.svc.pendingCamIdForDialog;
     const camName = this.svc.pendingCamNameForDialog;
     if (!camId) return;
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '发现新相机',
       message: `检测到新相机「${camName}」，是否启用缩略图缓存？\n\n启用后下次连接时将直接从本地加载缩略图，大幅提升加载速度。`,
       autoCancel: false,
@@ -82,8 +82,6 @@ export struct MainScreen {
     // Subscribe to GPS state changes
     this.gpsRecorder.onChange = () => { this.syncGpsState(); };
     this.syncGpsState();
-    this.syncDownloadedKeys();
-
     // Subscribe to download state
     this.syncDownloadedKeys();
   }
@@ -131,7 +129,7 @@ export struct MainScreen {
 
   build() {
     NavDestination() {
-      Tabs({ index: 1, controller: this.tabsController }) {
+      Tabs({ index: this.currentTab, controller: this.tabsController }) {
         TabContent() {
           GalleryPage({
             downloadProgress: this.downloadProgress,
@@ -150,14 +148,13 @@ export struct MainScreen {
 
               // 1. Capture thumbnail position for shared-element animation
               let cardItemInfoStr: string = '';
-              try {
-                const rect = ComponentAttrUtils.getRectInfoById(
-                  this.getUIContext(), `thumb_${handle}`);
-                cardItemInfoStr = JSON.stringify(rect);
-                this.svc.getLog().add(`thumbPos handle=${handle} rect=${JSON.stringify(rect)}`);
-              } catch (_err) {
-                this.svc.getLog().add(`thumbPos FAIL handle=${handle} err=${_err}`);
-                // Fallback: empty rect → no animation
+              const thumbRect = ComponentAttrUtils.getRectInfoById(
+                this.getUIContext(), `thumb_${handle}`);
+              if (thumbRect) {
+                cardItemInfoStr = JSON.stringify(thumbRect);
+                this.svc.getLog().add(`thumbPos handle=${handle} rect=${cardItemInfoStr}`);
+              } else {
+                this.svc.getLog().add(`thumbPos MISS handle=${handle}`);
               }
 
               // 2. Populate the global BuilderNode with this thumbnail
@@ -175,12 +172,10 @@ export struct MainScreen {
               const posCache: Record<string, string> = {};
               for (const g of _displayGroups) {
                 const h = g.displayPhoto.handle;
-                try {
-                  const r = ComponentAttrUtils.getRectInfoById(
-                    this.getUIContext(), `thumb_${h}`);
+                const r = ComponentAttrUtils.getRectInfoById(
+                  this.getUIContext(), `thumb_${h}`);
+                if (r) {
                   posCache[String(h)] = JSON.stringify(r);
-                } catch (_e) {
-                  // skip — not in viewport
                 }
               }
 
@@ -198,16 +193,15 @@ export struct MainScreen {
                 // Fallback: use cached position if available
                 const cached = posCache[String(targetHandle)];
                 if (cached) return cached;
-                try {
-                  const r = ComponentAttrUtils.getRectInfoById(
-                    this.getUIContext(), `thumb_${targetHandle}`);
+                const r = ComponentAttrUtils.getRectInfoById(
+                  this.getUIContext(), `thumb_${targetHandle}`);
+                if (r) {
                   const s = JSON.stringify(r);
                   this.svc.getLog().add(`posLookup handle=${targetHandle} rect=${s}`);
                   return s;
-                } catch (_err) {
-                  this.svc.getLog().add(`posLookup FAIL handle=${targetHandle} err=${_err}`);
-                  return '';
                 }
+                this.svc.getLog().add(`posLookup MISS handle=${targetHandle}`);
+                return '';
               };
               this.pageInfos.pushPath({ name: 'PhotoViewerScreen', param: pushParam });
             },
@@ -222,7 +216,12 @@ export struct MainScreen {
               this.syncDownloadedKeys();
 
               try {
-                const ctx = getContext(this) as common.UIAbilityContext;
+                const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+                if (!ctx) {
+                  this.svc.getLog().add('下载失败: 无法获取应用上下文');
+                  this.downloadProgress = null;
+                  return;
+                }
                 await this.svc.downloadPhotos(
                   handles,
                   (progress: DownloadProgress) => {
@@ -284,7 +283,9 @@ export struct MainScreen {
             },
             onGpsToggle: () => { this.toggleGps(); },
             onGpsModeChange: (mode: number) => { this.changeGpsMode(mode); },
-            onGpsClear: () => { this.clearGpsRecords(); }
+            onGpsClear: () => { this.clearGpsRecords(); },
+            onOpenGpsManagement: () => { this.pageInfos.pushPath({ name: 'GpsManagementPage' }); },
+            onOpenCacheManagement: () => { this.pageInfos.pushPath({ name: 'CacheManagementPage' }); }
           })
         }
       }

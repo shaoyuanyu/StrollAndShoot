@@ -6,12 +6,14 @@ import { common } from '@kit.AbilityKit';
 import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
-import { PtpSession, setPtpLog, type DeviceInfo } from '../pages/PtpHost';
+import { PtpSession, setPtpLog, type DeviceInfo, type PtpTransport } from '../pages/PtpHost';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
 import { ExifGeotagger } from './ExifGeotagger';
 import { CameraCachePrefs } from './CameraCachePrefs';
 import { ThumbnailCache, type CacheEntry } from './ThumbnailCache';
+import { MockPtpDevice } from '../debug/MockPtpDevice';
+import { MockPtpSession } from '../debug/MockPtpSession';
 import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } from '../model/PhotoEntry';
 
 const DOMAIN = 0x0000;
@@ -53,7 +55,9 @@ class DecodedPhotoResult {
 @ObservedV2
 export class CameraService {
   private static instance: CameraService;
-  private session: PtpSession = new PtpSession();
+  private session: PtpTransport = new PtpSession();
+  /** 当前 session 是不是调试用的假相机，用来判断是否需要换回真实 USB。 */
+  private sessionIsMock: boolean = false;
   private log: AppLog = new AppLog();
 
   // State
@@ -654,9 +658,15 @@ export class CameraService {
     }
 
     const phAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
-    const desFileUris = await phAccessHelper.showAssetsCreationDialog(
-      srcFileUris, photoCreationConfigs
-    );
+    let desFileUris: string[] = [];
+    try {
+      desFileUris = await phAccessHelper.showAssetsCreationDialog(
+        srcFileUris, photoCreationConfigs
+      );
+    } catch (err) {
+      this.log.add(`保存到相册弹窗失败: ${JSON.stringify(err)}`);
+      return galleryUris;
+    }
 
     if (desFileUris.length === 0) {
       this.log.add('用户取消保存到相册，文件保留在应用沙箱');
@@ -783,11 +793,14 @@ export class CameraService {
     this.log.clear();
     this.log.add('=== 开始扫描 ===');
 
+    // Debug builds only: swap in the virtual camera before searching.
+    this.syncSessionMode();
+
     this.statusText = '正在搜索USB相机...';
 
 
     try {
-      const cameras = PtpSession.findCameras();
+      const cameras = this.sessionIsMock ? MockPtpDevice.findCameras() : PtpSession.findCameras();
       if (cameras.length === 0) {
         this.statusText = '未检测到USB相机';
         this.connected = false;
@@ -883,6 +896,9 @@ export class CameraService {
           this.cachePrefs.hasCamera(this.cameraIdentity)) {
         this.log.add('[快速扫描] 部署缓存快照...');
         this.statusText = '正在加载缓存...';
+        // Manifest must be loaded before findCached() can hit anything.
+        this.thumbCache.init(this.filesDir, this.cameraIdentity);
+        await this.thumbCache.loadManifest();
         await this.deployCacheSnapshot();
         this.log.add(`[快速扫描] 缓存快照就绪: ${this.photoCount} 张`);
       }
@@ -1660,6 +1676,34 @@ export class CameraService {
     this.detailIndex = -1;
     this.prevDetailIndex = -1;
     this.preloadPhotos = [];
+  }
+
+  /**
+   * 调试开关变化后调用：断开当前相机，让下一次「搜索相机」重新挑选传输实现。
+   * 注意不要在这里改 `sessionIsMock`，否则 `syncSessionMode()` 会以为已经切换过
+   * 而跳过真正的替换。
+   */
+  onMockCameraToggled(): void {
+    if (this.connected) {
+      this.disconnect().catch((_e: Error) => { /* best effort */ });
+    }
+  }
+
+  /**
+   * 按调试开关选择传输实现。真实 USB 与虚拟相机实现同一个 `PtpTransport`，
+   * 上层扫描流程完全一致。
+   */
+  private syncSessionMode(): void {
+    const wantMock = MockPtpDevice.isEnabled();
+    if (wantMock === this.sessionIsMock) return;
+    const previous: PtpTransport = this.session;
+    if (this.connected) {
+      previous.closeSessionAndPipe().catch((_e: Error) => { /* best effort */ });
+      this.connected = false;
+    }
+    this.session = wantMock ? new MockPtpSession() : new PtpSession();
+    this.sessionIsMock = wantMock;
+    this.log.add(wantMock ? '[Mock] 使用虚拟相机' : '[Mock] 使用真实 USB 相机');
   }
 
   async disconnect(): Promise<void> {

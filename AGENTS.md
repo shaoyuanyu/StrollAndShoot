@@ -90,14 +90,70 @@ StrollAndShoot/
 │   │   │   ├── workers/            # ImageDecoder：TaskPool 并发函数（不是 Worker 线程）
 │   │   │   ├── CustomTransition/   # 一镜到底转场的动画参数与注册表
 │   │   │   └── NodeContainer/      # BuilderNode 单例，承载共享元素
+│   │   ├── debug/                  # 仅调试包生效的虚拟 PTP 相机（MockPtpDevice / MockPtpSession）
 │   │   ├── cpp/                    # NAPI 代码与 libentry.so 的类型声明
 │   │   └── resources/              # base 为浅色，dark 为深色
-│   ├── src/test/                   # 本地单元测试（模板用例）
-│   └── src/ohosTest/               # 设备集成测试（模板用例）
+│   ├── src/test/                   # Local Test：主机侧 ArkTS 单测，不需要设备
+│   ├── src/ohosTest/               # Instrument Test：装到设备/模拟器上跑（仍是模板用例）
+│   └── src/mock/                   # NAPI mock，让 Local Test 能跑依赖 libentry.so 的代码
 └── hvigor/
 ```
 
 ## 构建与部署
+
+### 测试
+
+HarmonyOS 的测试分三层，本工程三层都已就位：
+
+| 层 | 位置 | 运行位置 | 用途 |
+|---|---|---|---|
+| Local Test | `entry/src/test/` | 主机，**不需要设备** | 纯逻辑单测：分组、排序、键计算、时间解析 |
+| Instrument Test | `entry/src/ohosTest/` | 设备/模拟器 | 真实 Ability、硬件与 UI 自动化（仍是模板用例） |
+| NAPI mock | `entry/src/mock/` | 仅 Local Test | 用 ArkTS 假实现替换 `libentry.so` 的 13 个导出函数 |
+
+框架是 Hypium（`describe` / `it` / `expect`）+ Hamock，都在根 `oh-package.json5` 的 `devDependencies` 里。
+
+```bash
+# macOS：根目录没有 hvigorw，用 DevEco 自带的那个，并且必须给 DEVECO_SDK_HOME
+export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
+/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw test -p module=entry -p coverage=false
+
+# 只跑某个套件 / 某个用例
+hvigorw test -p module=entry -p scope=PhotoGroupUtil
+hvigorw test -p module=entry -p scope='PhotoGroupUtil#getExt 取最后一个点之后的部分并转大写'
+
+# 带覆盖率
+hvigorw test -p module=entry -p coverage=true
+```
+
+- `devecocli` **没有** `test` 子命令，测试只能走 hvigor。
+- 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`，末尾一行是 `Tests run / Failure / Error / Pass`。
+- `entry/src/mock/Libentry.mock.ets` 是模板生成的，曾经编译不过（三处无类型对象字面量，`arkts-no-untyped-obj-literals`），已改为先声明 `interface` 再返回。改动 mock 的返回值时必须保持这一点。
+- Instrument Test 需要设备，且 `ohosTest` 的 HAP 要签名，本机模拟器装不了签名的包。
+
+### 调试用的虚拟相机
+
+模拟器没有 USB 主机，PTP 永远搜不到相机，画廊、预览器、共享元素转场这些纯 UI 功能因此无法验收。调试包内置了一台**虚拟 PTP 相机**，走的是与真机完全相同的流程：
+
+| 文件 | 作用 |
+|---|---|
+| `debug/MockPtpDevice.ets` | 虚拟相机的“硬件”：USB 描述符、DeviceInfo、1 个 storage、`DCIM → 100MOCK / 101MOCK` 两层目录树、38 张照片的元数据，以及按 handle 现场编码出的 JPEG（缩略图 180×120，原图 1200×800） |
+| `debug/MockPtpSession.ets` | `PtpTransport` 的第二个实现：`connect` / `getDeviceInfo` / `getStorageIDs` / `getObjectHandles` / `getObjectInfo` / `getThumb` / `getObject` / `getPartialObject`，每个调用带少量延迟让进度条可见 |
+
+`PtpHost.ets` 里 `PtpSession` 与 `MockPtpSession` 共用 `PtpTransport` 接口，`CameraService.session` 声明为该接口，`scanForCamera()` 开头用 `syncSessionMode()` 按调试开关选实现。于是：
+
+- 设置页最底部「调试（仅调试包可见）→ 模拟相机设备」打开开关；
+- 到「相机」页点「搜索相机」，会走 **搜索 → 连接 → 取设备信息 → 首次连接询问是否启用缓存 → 遍历目录 → 取元数据 → 按行取缩略图** 的完整流程；
+- 画廊里看到的是扫描结果，不是直接塞进去的数组；第二次点「快速扫描」会命中磁盘缩略图缓存（`[CACHE_HIT]`）；
+- 预览器里的原图来自 `getObject()` 返回的真实 JPEG。
+
+其它注意点：
+
+- 是否调试包由 `bundleManager.getBundleInfoForSelfSync(...).appInfo.debug` 判定，release 包里设置项不渲染、`isEnabled()` 恒为 false。
+- 未签名的 HAP 装到模拟器上同样返回 true，所以模拟器上可以正常用。
+- 虚拟相机的身份是 `Mock_Virtual_PTP_Camera_MOCK-0001`，它的缩略图缓存会落到真实缓存目录里，可用于验证缓存与快速扫描。
+- 开关状态持久化在 `SettingsStore.mockCameraEnabled`。改完开关或重装包后，需要重新到「相机」页点一次「搜索相机」。
+- 验证完记得关掉开关，否则会与真实相机状态混淆。
 
 ### macOS
 
@@ -143,7 +199,7 @@ devecocli check lint entry/src/main/ets
 - 产物在 `entry/build/<product>/outputs/default/`：调试在 `entry/build/default/`，指定设备发布在 `entry/build/dist/`。`*-signed.hap` 已签名，`*-unsigned.hap` 未签名。
 - macOS 上 `devecocli build` 会用 AgentDebug 签名；Linux 上仍由 `deploy.sh` 单独处理签名。
 - `deploy.sh` 被 `.gitignore` 忽略，只存在于 Linux 开发机，里面写着签名材料的路径与口令。
-- `entry/src/test`、`entry/src/ohosTest` 只有新建工程自带的模板用例，`hvigorw test` 不会检查项目逻辑。
+- `entry/src/test` 已有真实单测（`PhotoGroupUtil.test.ets` 7 个用例，含模板自带的 1 个），`hvigorw test` 会实际执行；`entry/src/ohosTest` 仍是模板用例。
 
 ### 签名与分发
 
@@ -421,21 +477,33 @@ interface PhotoEntry {
 
 ## 已知问题
 
-2026-10-14 审视代码时定位到的问题。修掉一处就删一条。
+2026-10-14 审视代码时定位到的问题，2026-11-05 复核。修掉一处就删一条。
 
 | 位置 | 问题 |
 |---|---|
-| `CameraService.ets:1675` / `:1688` | `disconnect()` 先把 `cachingEnabled` 置 false，之后的 `if (this.cachingEnabled) { thumbCache.flush() }` 永远不会执行 |
-| `CameraService.ets:1247` → `:1812` → `ThumbnailCache.ets:170` | 参数错位：`saveRawThumbnail` 的第 4 个形参是 `handle`，实际传进去的是原始宽度，于是缓存条目里 `handle` 变成原始宽度、`origWidth` 变成原始高度、`origHeight` 缺失 |
-| `CameraService.ets:1591` | `setDetailIndex()` 没有调用点，`detailIndex` 恒为 -1，导致 `evictFurthest()` 退化成“淘汰 handle 最大的一张”，`preloadAdjacent()` 从不运行 |
-| `MainScreen.ets:169` 起 | 点击缩略图时对全部照片逐张调用 `ComponentAttrUtils.getRectInfoById()`，该函数找不到组件就抛异常，屏幕外的照片全部走异常分支 |
-| `MainScreen.ets:85` / `:88` | `syncDownloadedKeys()` 重复调用两次 |
+| `CameraService.ets` `disconnect()` | 先把 `cachingEnabled` 置 false，之后的 `if (this.cachingEnabled) { thumbCache.flush() }` 永远不会执行，断开连接时挂起的缩略图缓存不会落盘 |
+| `CameraService.ets:1823` → `ThumbnailCache.saveRawThumbnail` | 参数错位：第 4 个形参是 `handle`，实际传进去的是原始宽度，于是缓存条目里 `handle` 变成原始宽度、`origWidth` 变成原始高度、`origHeight` 缺失 |
+| `CameraService.ets:1600` | `setDetailIndex()` 没有调用点，`detailIndex` 恒为 -1，导致 `evictFurthest()` 退化成“淘汰 handle 最大的一张”，`preloadAdjacent()` 从不运行 |
 | `CameraService.ets:1013` | 遗留调试代码 `// TEST: only load first 300 photos` 与注释掉的 slice |
-| `PhotoViewer.ets:302` | `scanRefreshKey` 参数传入后从未被读取 |
-| `pages/SwiperSyncTestPage.ets` | 早期原型页，仍注册在 `main_pages.json`，会随应用打包 |
+| `PhotoViewer.ets:301` | `scanRefreshKey` 参数传入后从未被 `build()` 读取，V2 下不会触发刷新 |
 | `services/ThumbnailCache.ets` | `CacheEntry` 的 `handle`、`exifRotate`、`exifFlipH`、`exifFlipV`、`origWidth`、`origHeight` 只写不读；`CameraService.loadCachedThumbnail()` 一律按“已经旋转裁剪过”解码，而 `saveRawThumbnail()` 写入的是原始 JPEG，两次写入之间进程退出，下次启动就会把未纠正的缩略图当成已纠正的版本显示 |
+| `pages/SettingsPage.ets` | 亮色下卡片用 `bg_surface`（#FFFFFF）而页面背景也是白色，没有阴影或描边，分组边界几乎不可见 |
 
 没有调用点的代码，可以直接删除：`PhotoViewer.getDisplayPixelMap`、`CameraService.getLogText` / `isPhotoDownloaded` / `loadThumbnail` / `cacheOrientedSize`、`ThumbnailCache.loadThumbnail` / `getCacheSizeBytes` / `getEntryCount` / `getAllEntries` / `debugLookup` / `getCameraCacheSize`、`PtpSession.close`、`AppLog.getEntries`、`ZoomableImage.onEdgeChange`。
+
+### 2026-11-05 已修复
+
+- 共享元素转场结束后 NavDestination 背景是 `#00ffffff`，亮色下露出窗口白底：标题栏变灰、底部出现白条 → 改为不透明黑色
+- 预览器标题栏与缩略图条重复叠加状态栏/手势区高度，顶部多出约 39vp 空白 → 去掉重复内边距
+- 系统栏颜色只在预览器里设置过，退出后固定为亮色，后续切深色模式时状态栏仍然是白的 → 统一由 `WindowUtils.applyThemeSystemBars()` 跟随主题
+- 主题切换后标签页回到“相机”（`Tabs({ index: 1 })` 写死）→ 绑定 `currentTab`
+- 快速扫描 Phase 0 早于 `loadManifest()`，磁盘缓存永远不命中 → 先加载 manifest 再部署快照，`ThumbnailCache.init()` 同相机幂等
+- 画廊列数设置不生效（`buildFlatItems()` 缓存键缺列数与宽度）→ 缓存键补齐
+- 自动列数恒为 8 列、缩小无效果（`baseItemW()` 用 px 当 vp）→ 统一为 vp，宽度改为 `onAreaChange` 实测
+- 点击标题栏返回绕过了 `onBackPressed` 的共享元素更新，回退动画飞向最初点击的缩略图 → 合并为 `handleBack()`
+- 早期原型页 `SwiperSyncTestPage` 随应用打包 → 删除
+- 已废弃 API（`animateTo`、`AlertDialog.show`、`router.*`、`getContext`、`Packer.packing`）全部迁移
+- syscap 告警（`geoLocationManager`）用 `canIUse()` 防护，构建 0 告警
 
 ## 调试经验
 

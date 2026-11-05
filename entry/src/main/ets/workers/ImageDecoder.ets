@@ -41,63 +41,81 @@ export async function decodeThumbnailTask(
   const TAG = 'ImageDecoder';
   const DOMAIN = 0x0000;
   const t0 = Date.now();
-  const imageSource = image.createImageSource(data);
   const needsFlip = flipH || flipV;
   const needsRotate = rotate !== 0;
-  const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
+  let imageSource: image.ImageSource | null = null;
+  let pixelMap: image.PixelMap | null = null;
 
-  hilog.info(DOMAIN, TAG, '[CROP] start orient=(%{public}d,%{public}s,%{public}s) orig=%{public}dx%{public}d',
-    rotate, flipH.toString(), flipV.toString(), origW, origH);
+  try {
+    imageSource = image.createImageSource(data);
+    const pm = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
+    pixelMap = pm;
 
-  if (needsRotate) {
-    await pixelMap.rotate(rotate);
-  }
-  if (needsFlip) {
-    pixelMap.flip(flipH, flipV);
-  }
+    hilog.info(DOMAIN, TAG, '[CROP] start orient=(%{public}d,%{public}s,%{public}s) orig=%{public}dx%{public}d',
+      rotate, flipH.toString(), flipV.toString(), origW, origH);
 
-  // 根据原始尺寸裁剪黑边
-  const imgInfo = await pixelMap.getImageInfo();
-  const tw = imgInfo.size.width;
-  const th = imgInfo.size.height;
-
-  let cropW: number;
-  let cropH: number;
-  if (origW > 0 && origH > 0) {
-    let ow = origW;
-    let oh = origH;
-    // 如果旋转角度为 90°/270°，交换原始宽高
-    if (rotate === 90 || rotate === 270) {
-      const tmp = ow;
-      ow = oh;
-      oh = tmp;
+    if (needsRotate) {
+      await pm.rotate(rotate);
     }
-    const scale = Math.min(tw / ow, th / oh);
-    cropW = Math.floor(ow * scale);
-    cropH = Math.floor(oh * scale);
-    hilog.info(DOMAIN, TAG, '[CROP] thumb=%{public}dx%{public}d scale=%{public}s crop=%{public}dx%{public}d',
-      tw, th, scale.toFixed(4), cropW, cropH);
-  } else {
-    cropW = tw;
-    cropH = th;
-    hilog.info(DOMAIN, TAG, '[CROP] no orig dims, skip crop thumb=%{public}dx%{public}d', tw, th);
+    if (needsFlip) {
+      pm.flip(flipH, flipV);
+    }
+
+    // 根据原始尺寸裁剪黑边
+    const imgInfo = await pm.getImageInfo();
+    const tw = imgInfo.size.width;
+    const th = imgInfo.size.height;
+
+    let cropW: number;
+    let cropH: number;
+    if (origW > 0 && origH > 0) {
+      let ow = origW;
+      let oh = origH;
+      // 如果旋转角度为 90°/270°，交换原始宽高
+      if (rotate === 90 || rotate === 270) {
+        const tmp = ow;
+        ow = oh;
+        oh = tmp;
+      }
+      const scale = Math.min(tw / ow, th / oh);
+      cropW = Math.floor(ow * scale);
+      cropH = Math.floor(oh * scale);
+      hilog.info(DOMAIN, TAG, '[CROP] thumb=%{public}dx%{public}d scale=%{public}s crop=%{public}dx%{public}d',
+        tw, th, scale.toFixed(4), cropW, cropH);
+    } else {
+      cropW = tw;
+      cropH = th;
+      hilog.info(DOMAIN, TAG, '[CROP] no orig dims, skip crop thumb=%{public}dx%{public}d', tw, th);
+    }
+
+    const region: image.Region = {
+      x: Math.floor((tw - cropW) / 2),
+      y: Math.floor((th - cropH) / 2),
+      size: { width: cropW, height: cropH }
+    };
+    const cropped = await pm.createCroppedAndScaledPixelMap(region, 1.0, 1.0);
+
+    // 所有权转移到主线程
+    cropped.setTransferDetached(true);
+
+    const t1 = Date.now();
+    hilog.info(DOMAIN, TAG, `thumb decode done in ${t1 - t0}ms crop=${cropW}x${cropH}`);
+    return cropped;
+  } catch (err) {
+    hilog.error(DOMAIN, TAG, 'thumb decode failed: %{public}s', JSON.stringify(err));
+    throw new Error(`thumb decode failed: ${JSON.stringify(err)}`);
+  } finally {
+    if (pixelMap) {
+      try {
+        pixelMap.release();
+      } catch (_e) { /* ignore */ }
+    }
+    if (imageSource) {
+      try {
+        imageSource.release();
+      } catch (_e) { /* ignore */ }
+    }
   }
-
-  const region: image.Region = {
-    x: Math.floor((tw - cropW) / 2),
-    y: Math.floor((th - cropH) / 2),
-    size: { width: cropW, height: cropH }
-  };
-  const cropped = await pixelMap.createCroppedAndScaledPixelMap(region, 1.0, 1.0);
-  pixelMap.release();
-  imageSource.release();
-
-  // 所有权转移到主线程
-  cropped.setTransferDetached(true);
-
-  const t1 = Date.now();
-  hilog.info(DOMAIN, TAG, `thumb decode done in ${t1 - t0}ms crop=${cropW}x${cropH}`);
-  return cropped;
 }
 
 /**
@@ -120,23 +138,42 @@ export async function decodeFullPhotoTask(
   const TAG = 'ImageDecoder';
   const DOMAIN = 0x0000;
   const t0 = Date.now();
-  const imageSource = image.createImageSource(data);
   const needsFlip = flipH || flipV;
   const needsRotate = rotate !== 0;
-  const pixelMap = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
+  let imageSource: image.ImageSource | null = null;
+  let pixelMap: image.PixelMap | null = null;
 
-  if (needsRotate) {
-    await pixelMap.rotate(rotate);
+  try {
+    imageSource = image.createImageSource(data);
+    const pm = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
+    pixelMap = pm;
+
+    if (needsRotate) {
+      await pm.rotate(rotate);
+    }
+    if (needsFlip) {
+      pm.flip(flipH, flipV);
+    }
+
+    pm.setTransferDetached(true);
+
+    const t1 = Date.now();
+    const info = await pm.getImageInfo();
+    hilog.info(DOMAIN, TAG, `full decode done ${info.size.width}x${info.size.height} in ${t1 - t0}ms`);
+    return pm;
+  } catch (err) {
+    if (pixelMap) {
+      try {
+        pixelMap.release();
+      } catch (_e) { /* ignore */ }
+    }
+    hilog.error(DOMAIN, TAG, 'full decode failed: %{public}s', JSON.stringify(err));
+    throw new Error(`full decode failed: ${JSON.stringify(err)}`);
+  } finally {
+    if (imageSource) {
+      try {
+        imageSource.release();
+      } catch (_e) { /* ignore */ }
+    }
   }
-  if (needsFlip) {
-    pixelMap.flip(flipH, flipV);
-  }
-  imageSource.release();
-
-  pixelMap.setTransferDetached(true);
-
-  const t1 = Date.now();
-  const info = await pixelMap.getImageInfo();
-  hilog.info(DOMAIN, TAG, `full decode done ${info.size.width}x${info.size.height} in ${t1 - t0}ms`);
-  return pixelMap;
 }

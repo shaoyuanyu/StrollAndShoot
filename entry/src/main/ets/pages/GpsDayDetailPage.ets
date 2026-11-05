@@ -1,28 +1,43 @@
-import { router } from '@kit.ArkUI';
-import { geoLocationManager } from '@kit.LocationKit';
+import geoLocationManager from '@ohos.geoLocationManager';
 import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsRecord } from '../model/PhotoEntry';
 
-@Entry
+@Builder
+export function GpsDayDetailPageBuilder() {
+  GpsDayDetailPage();
+}
+
 @ComponentV2
-struct GpsDayDetailPage {
+export struct GpsDayDetailPage {
+  private pageInfos: NavPathStack = new NavPathStack();
   private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
   @Local records: GpsRecord[] = [];
   @Local addresses: Map<number, string> = new Map();
-  private day: string = '';
+  @Local day: string = '';
 
-  aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
-    if (params && typeof params.day === 'string') {
-      this.day = params.day as string;
-      this.records = this.gpsRecorder.getDayRecords(this.day);
+  private initFromParams(param: Record<string, Object> | undefined): void {
+    if (param) {
+      const day = param['day'] as string;
+      if (day) {
+        this.day = day;
+        this.records = this.gpsRecorder.getDayRecords(day);
+      }
     }
     this.loadAddresses();
   }
 
   /** Fetch reverse geocoding for all records (network required). */
   private async loadAddresses(): Promise<void> {
-    if (!geoLocationManager.isGeocoderAvailable()) return;
+    let geocoderAvailable = false;
+    if (canIUse('SystemCapability.Location.Location.Geocoder')) {
+      try {
+        // @SuppressWarnings syscap
+        geocoderAvailable = geoLocationManager.isGeocoderAvailable();
+      } catch (_e) {
+        return;
+      }
+    }
+    if (!geocoderAvailable) return;
 
     const addressCache = new Map<string, string>();
 
@@ -55,21 +70,30 @@ struct GpsDayDetailPage {
         longitude: lon,
         maxItems: 1
       };
-      geoLocationManager.getAddressesFromLocation(req, (err, data) => {
-        if (err || !data || data.length === 0) {
+      try {
+        if (canIUse('SystemCapability.Location.Location.Geocoder')) {
+          // @SuppressWarnings syscap
+          geoLocationManager.getAddressesFromLocation(req, (err, data) => {
+            if (err || !data || data.length === 0) {
+              resolve(null);
+              return;
+            }
+            const addr = data[0];
+            const parts: string[] = [];
+            if (addr.administrativeArea) parts.push(addr.administrativeArea);
+            if (addr.subAdministrativeArea) parts.push(addr.subAdministrativeArea);
+            if (addr.locality) parts.push(addr.locality);
+            if (addr.subLocality) parts.push(addr.subLocality);
+            if (addr.roadName) parts.push(addr.roadName);
+            if (addr.premises) parts.push(addr.premises);
+            resolve(parts.length > 0 ? parts.join(' ') : (addr.placeName || null));
+          });
+        } else {
           resolve(null);
-          return;
         }
-        const addr = data[0];
-        const parts: string[] = [];
-        if (addr.administrativeArea) parts.push(addr.administrativeArea);
-        if (addr.subAdministrativeArea) parts.push(addr.subAdministrativeArea);
-        if (addr.locality) parts.push(addr.locality);
-        if (addr.subLocality) parts.push(addr.subLocality);
-        if (addr.roadName) parts.push(addr.roadName);
-        if (addr.premises) parts.push(addr.premises);
-        resolve(parts.length > 0 ? parts.join(' ') : (addr.placeName || null));
-      });
+      } catch (_e) {
+        resolve(null);
+      }
     });
   }
 
@@ -82,14 +106,15 @@ struct GpsDayDetailPage {
   }
 
   build() {
-    Column() {
+    NavDestination() {
+      Column() {
       Row() {
         Button({ type: ButtonType.Circle }) {
           Text('←').fontSize(18)
         }
         .width(36).height(36)
         .backgroundColor($r('app.color.bg_surface'))
-        .onClick(() => { router.back(); })
+        .onClick(() => { this.pageInfos.pop(); })
 
         Text(this.day)
           .fontSize(18).fontWeight(FontWeight.Medium)
@@ -155,8 +180,15 @@ struct GpsDayDetailPage {
         }
         .width('100%').layoutWeight(1)
       }
+      }
+      .width('100%').height('100%')
+      .backgroundColor($r('app.color.bg_page'))
     }
-    .width('100%').height('100%')
+    .hideTitleBar(true)
     .backgroundColor($r('app.color.bg_page'))
+    .onReady((context: NavDestinationContext) => {
+      this.pageInfos = context.pathStack;
+      this.initFromParams(context.pathInfo?.param as Record<string, Object> | undefined);
+    })
   }
 }

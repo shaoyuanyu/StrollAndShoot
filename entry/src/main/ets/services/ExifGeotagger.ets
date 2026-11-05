@@ -34,9 +34,11 @@ export class ExifGeotagger {
       await imgSrc.modifyImagePropertiesEnhanced(records);
 
       // Verify
-      const PK = image.PropertyKey;
       const v = await imgSrc.getImageProperties([
-        PK.GPS_LATITUDE_REF, PK.GPS_LATITUDE, PK.GPS_LONGITUDE_REF, PK.GPS_LONGITUDE
+        image.PropertyKey.GPS_LATITUDE_REF,
+        image.PropertyKey.GPS_LATITUDE,
+        image.PropertyKey.GPS_LONGITUDE_REF,
+        image.PropertyKey.GPS_LONGITUDE
       ]);
       ExifGeotagger.log.add(`GPS验证: ${JSON.stringify(v)}`);
       return true;

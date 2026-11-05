@@ -69,7 +69,27 @@ const USB_PROTO_PTP = 0x01;
 
 export { type PhotoEntry } from '../model/PhotoEntry';
 
-export class PtpSession {
+/**
+ * 相机会话的传输契约。
+ *
+ * `CameraService` 只依赖这组方法，因此调试包可以换上一台假的 PTP 设备
+ * （见 `debug/MockPtpSession.ets`），让“搜索 → 连接 → 遍历 → 取元数据 →
+ * 取缩略图”的完整流程原样跑一遍，而不需要在业务代码里插数据。
+ */
+export interface PtpTransport {
+  readonly connectedDeviceName: string;
+  connect(device: usbManager.USBDevice): Promise<boolean>;
+  getDeviceInfo(): Promise<DeviceInfo | null>;
+  getStorageIDs(): Promise<number[]>;
+  getObjectHandles(storageId: number, parent?: number, formatCode?: number): Promise<number[]>;
+  getObjectInfo(handle: number): Promise<ObjectInfo | null>;
+  getThumb(handle: number): Promise<Uint8Array | null>;
+  getObject(handle: number): Promise<Uint8Array | null>;
+  getPartialObject(handle: number, offset: number, maxBytes: number): Promise<Uint8Array | null>;
+  closeSessionAndPipe(): Promise<void>;
+}
+
+export class PtpSession implements PtpTransport {
   private device: usbManager.USBDevice | null = null;
   private pipe: usbManager.USBDevicePipe | null = null;
   private bulkIn: usbManager.USBEndpoint | null = null;
@@ -318,7 +338,13 @@ export class PtpSession {
    */
   private async ptpCommand(cmd: Uint8Array, expectData: boolean): Promise<boolean> {
     logHex('CMD OUT', cmd);
-    const n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    let n = -1;
+    try {
+      n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    } catch (err) {
+      log(`OUT exception: ${JSON.stringify(err)}`);
+      return false;
+    }
     if (n < 0) {
       log(`OUT failed: ${n}`);
       return false;
@@ -327,7 +353,13 @@ export class PtpSession {
     // Read and process IN data until we get a response
     for (let attempt = 0; attempt < 10; attempt++) {
       const buf = new Uint8Array(1024);
-      const rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      let rn = -1;
+      try {
+        rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      } catch (err) {
+        log(`IN exception: ${JSON.stringify(err)}`);
+        return false;
+      }
       if (rn < 0) {
         log(`IN failed: ${rn}`);
         return false;
@@ -358,7 +390,13 @@ export class PtpSession {
    */
   private async ptpCommandGetData(cmd: Uint8Array): Promise<Uint8Array | null> {
     logHex('CMD OUT', cmd);
-    const n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    let n = -1;
+    try {
+      n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    } catch (err) {
+      log(`OUT exception: ${JSON.stringify(err)}`);
+      return null;
+    }
     if (n < 0) {
       log(`OUT failed: ${n}`);
       return null;
@@ -369,7 +407,13 @@ export class PtpSession {
     // Read IN until we get both data and response
     for (let attempt = 0; attempt < 10; attempt++) {
       const buf = new Uint8Array(1024);
-      const rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      let rn = -1;
+      try {
+        rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      } catch (err) {
+        log(`IN exception: ${JSON.stringify(err)}`);
+        return null;
+      }
       if (rn < 0) {
         log(`IN failed: ${rn}`);
         return null;
@@ -405,7 +449,13 @@ export class PtpSession {
    */
   private async ptpCommandGetLargeData(cmd: Uint8Array): Promise<Uint8Array | null> {
     logHex('CMD OUT', cmd);
-    const n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    let n = -1;
+    try {
+      n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    } catch (err) {
+      log(`OUT exception: ${JSON.stringify(err)}`);
+      return null;
+    }
     if (n < 0) {
       log(`OUT failed: ${n}`);
       return null;
@@ -417,7 +467,13 @@ export class PtpSession {
     // Read IN until we get both data and response.
     const buf = new Uint8Array(196608);  // 192KB — under HMOS 200KB limit
     for (let attempt = 0; attempt < 350; attempt++) {
-      const rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      let rn = -1;
+      try {
+        rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      } catch (err) {
+        log(`IN exception: ${JSON.stringify(err)}`);
+        return null;
+      }
       if (rn < 0) {
         log(`IN failed: ${rn}`);
         return null;
@@ -459,13 +515,23 @@ export class PtpSession {
   private findAndClaimInterface(): boolean {
     if (!this.pipe || !this.device) return false;
     for (const cfg of this.device.configs) {
-      usbManager.setConfiguration(this.pipe, cfg);
+      try {
+        usbManager.setConfiguration(this.pipe, cfg);
+      } catch (err) {
+        log(`setConfiguration failed: ${JSON.stringify(err)}`);
+        continue;
+      }
       for (const iface of cfg.interfaces) {
         log(`Interface id=${iface.id} class=0x${iface.clazz.toString(16)} sub=0x${iface.subClass.toString(16)} proto=0x${iface.protocol.toString(16)}`);
         if (iface.clazz === USB_CLASS_IMAGE &&
             iface.subClass === USB_SUBCLASS_SIC &&
             iface.protocol === USB_PROTO_PTP) {
-          usbManager.claimInterface(this.pipe, iface, true);
+          try {
+            usbManager.claimInterface(this.pipe, iface, true);
+          } catch (err) {
+            log(`claimInterface failed: ${JSON.stringify(err)}`);
+            continue;
+          }
           for (const ep of iface.endpoints) {
             const ts = ep.type === 2 ? 'BULK' : (ep.type === 3 ? 'INT' : `type${ep.type}`);
             log(`  EP addr=0x${ep.address.toString(16)} dir=${ep.direction === 0x80 ? 'IN' : 'OUT'} type=${ts}`);

@@ -4,13 +4,17 @@
  * Settings sub-page showing all cameras that have been connected,
  * their thumbnail cache sizes, and per-camera caching toggles.
  */
-import { router } from '@kit.ArkUI';
 import { CameraCachePrefs, type CameraCachePref } from '../services/CameraCachePrefs';
 import { ThumbnailCache, type CacheInfo } from '../services/ThumbnailCache';
 
-@Entry
+@Builder
+export function CacheManagementPageBuilder() {
+  CacheManagementPage();
+}
+
 @ComponentV2
-struct CacheManagementPage {
+export struct CacheManagementPage {
+  private pageInfos: NavPathStack = new NavPathStack();
   private cachePrefs: CameraCachePrefs = CameraCachePrefs.getInstance();
   @Local cameras: CacheDisplayItem[] = [];
   @Local totalCacheSize: number = 0;
@@ -54,7 +58,7 @@ struct CacheManagementPage {
   }
 
   deleteCameraCache(cameraId: string, friendlyName: string): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '删除缓存',
       message: `删除「${friendlyName}」的所有缓存缩略图？此操作不可恢复。`,
       autoCancel: true,
@@ -77,7 +81,7 @@ struct CacheManagementPage {
   clearAllCaches(): void {
     const total = this.cameras.length;
     if (total === 0) return;
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '清除所有缓存',
       message: `删除全部 ${total} 个相机的缩略图缓存？此操作不可恢复。`,
       autoCancel: true,
@@ -117,15 +121,16 @@ struct CacheManagementPage {
   }
 
   build() {
-    Column() {
-      // Header
+    NavDestination() {
+      Column() {
+        // Header
       Row() {
         Button({ type: ButtonType.Circle }) {
           Text('←').fontSize(18)
         }
         .width(36).height(36)
         .backgroundColor($r('app.color.bg_surface'))
-        .onClick(() => { router.back(); })
+        .onClick(() => { this.pageInfos.pop(); })
 
         Text('缓存管理')
           .fontSize(18).fontWeight(FontWeight.Medium)
@@ -203,9 +208,15 @@ struct CacheManagementPage {
           .backgroundColor($r('app.color.bg_surface'))
           .onClick(() => { this.clearAllCaches(); })
       }
+      }
+      .width('100%').height('100%')
+      .backgroundColor($r('app.color.bg_page'))
     }
-    .width('100%').height('100%')
+    .hideTitleBar(true)
     .backgroundColor($r('app.color.bg_page'))
+    .onReady((context: NavDestinationContext) => {
+      this.pageInfos = context.pathStack;
+    })
   }
 }
 

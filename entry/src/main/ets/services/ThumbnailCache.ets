@@ -77,10 +77,15 @@ export class ThumbnailCache {
   private loaded: boolean = false;
   private pendingSaves: Promise<void>[] = [];
 
-  /** Initialize cache for a specific camera. */
+  /** Initialize cache for a specific camera. Idempotent for the same camera. */
   init(filesDir: string, cameraId: string): void {
     const safeId = cameraId.replace(/[\\/:*?"<>|]/g, '_');
-    this.cacheDir = filesDir + '/thumb_cache/' + safeId;
+    const dir = filesDir + '/thumb_cache/' + safeId;
+    if (this.cacheDir === dir) {
+      // Same camera — keep the loaded manifest and pending writes intact.
+      return;
+    }
+    this.cacheDir = dir;
     this.manifestPath = this.cacheDir + '/manifest.json';
     this.loaded = false;
     this.manifest.clear();
@@ -239,6 +244,25 @@ export class ThumbnailCache {
     origWidth?: number,
     origHeight?: number
   ): Promise<void> {
+    const promise = this.doSaveEncodedThumbnail(key, modDate, pixelMap, handle,
+      exifRotate, exifFlipH, exifFlipV, origWidth, origHeight);
+    this.pendingSaves.push(promise);
+    await promise;
+    const idx = this.pendingSaves.indexOf(promise);
+    if (idx >= 0) this.pendingSaves.splice(idx, 1);
+  }
+
+  private async doSaveEncodedThumbnail(
+    key: string,
+    modDate: string,
+    pixelMap: image.PixelMap,
+    handle?: number,
+    exifRotate?: number,
+    exifFlipH?: boolean,
+    exifFlipV?: boolean,
+    origWidth?: number,
+    origHeight?: number
+  ): Promise<void> {
     try {
       this.ensureCacheDir();
       const cacheFileName = hashString(key) + '.jpg';
@@ -250,7 +274,7 @@ export class ThumbnailCache {
         format: 'image/jpeg',
         quality: 85
       };
-      const encoded = await packer.packing(pixelMap, packOpts);
+      const encoded = await packer.packToData(pixelMap, packOpts);
       packer.release();
 
       // Write to file (overwrites raw version)

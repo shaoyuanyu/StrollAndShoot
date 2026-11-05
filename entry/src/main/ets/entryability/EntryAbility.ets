@@ -27,21 +27,26 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
 
     // ---- Initialize WindowUtils ----
-    WindowUtils.window = windowStage.getMainWindowSync();
-    WindowUtils.windowWidthPx = WindowUtils.window.getWindowProperties().windowRect.width;
-    WindowUtils.windowHeightPx = WindowUtils.window.getWindowProperties().windowRect.height;
+    try {
+      WindowUtils.window = windowStage.getMainWindowSync();
+      const mainRect = WindowUtils.window.getWindowProperties().windowRect;
+      WindowUtils.windowWidthPx = mainRect.width;
+      WindowUtils.windowHeightPx = mainRect.height;
 
-    // Get top avoid area (status bar etc.)
-    const avoidArea = WindowUtils.window.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-    WindowUtils.topAvoidAreaHeightPx = avoidArea.topRect.height;
+      // Get top avoid area (status bar etc.)
+      const avoidArea = WindowUtils.window.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+      WindowUtils.topAvoidAreaHeightPx = avoidArea.topRect.height;
 
-    // Get navigation indicator height
-    const navigationArea = WindowUtils.window.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-    WindowUtils.navigationIndicatorHeightPx = navigationArea.bottomRect.height;
+      // Get navigation indicator height
+      const navigationArea = WindowUtils.window.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
+      WindowUtils.navigationIndicatorHeightPx = navigationArea.bottomRect.height;
 
-    hilog.info(DOMAIN, TAG, 'window size: ' + WindowUtils.windowWidthPx + 'x' + WindowUtils.windowHeightPx +
-      ' topAvoidArea: ' + WindowUtils.topAvoidAreaHeightPx +
-      ' navIndicator: ' + WindowUtils.navigationIndicatorHeightPx);
+      hilog.info(DOMAIN, TAG, 'window size: ' + WindowUtils.windowWidthPx + 'x' + WindowUtils.windowHeightPx +
+        ' topAvoidArea: ' + WindowUtils.topAvoidAreaHeightPx +
+        ' navIndicator: ' + WindowUtils.navigationIndicatorHeightPx);
+    } catch (exception) {
+      hilog.error(DOMAIN, TAG, 'init WindowUtils failed: ' + JSON.stringify(exception));
+    }
 
     // Listen for window size changes
     try {
