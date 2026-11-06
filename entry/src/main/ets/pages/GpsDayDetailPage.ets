@@ -11,91 +11,123 @@ export function GpsDayDetailPageBuilder() {
 @ComponentV2
 export struct GpsDayDetailPage {
   private pageInfos: NavPathStack = new NavPathStack();
-  private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
-  @Local records: GpsRecord[] = [];
-  @Local addresses: Map<number, string> = new Map();
+  @Local gps: GpsRecorder = GpsRecorder.getInstance();
+  @Local addresses: Map<string, string> = new Map();
   @Local day: string = '';
+  /** 逆地理编码是否正在跑，避免新记录到达时叠起第二个循环。 */
+  private geocoding: boolean = false;
+  /** 跑循环期间又有新记录到达：结束后再补一轮，否则新记录的地址会一直空着。 */
+  private geocodeAgain: boolean = false;
 
   private initFromParams(param: Record<string, Object> | undefined): void {
     if (param) {
       const day = param['day'] as string;
       if (day) {
         this.day = day;
-        this.records = this.gpsRecorder.getDayRecords(day);
       }
     }
     this.loadAddresses();
   }
 
+  /** 记录有变化（正在记录时每来一条）就补拉还没解析过的坐标。 */
+  @Monitor('gps.recordsVersion')
+  onRecordsChanged(): void {
+    this.loadAddresses();
+  }
+
+  /**
+   * 当天记录。参数直接传 gps.recordsVersion，让 Repeat / if 的表达式
+   * 在构建期就读到这个 @Trace，新位置点到达时才会重新求值。
+   */
+  private recordsFor(version: number): GpsRecord[] {
+    if (version < 0) return [];
+    return this.gps.getDayRecords(this.day);
+  }
+
+  /** 地址只跟坐标有关，所以按坐标做缓存键，记录增删后不会错位。 */
+  private coordKey(lat: number, lon: number): string {
+    return `${lat.toFixed(5)},${lon.toFixed(5)}`;
+  }
+
   /** Fetch reverse geocoding for all records (network required). */
   private async loadAddresses(): Promise<void> {
+    if (this.geocoding) {
+      this.geocodeAgain = true;
+      return;
+    }
+    if (this.day === '') return;
+    if (!canIUse('SystemCapability.Location.Location.Geocoder')) return;
+
     let geocoderAvailable = false;
-    if (canIUse('SystemCapability.Location.Location.Geocoder')) {
-      try {
-        // @SuppressWarnings syscap
-        geocoderAvailable = geoLocationManager.isGeocoderAvailable();
-      } catch (_e) {
-        return;
-      }
+    try {
+      // @SuppressWarnings syscap
+      geocoderAvailable = geoLocationManager.isGeocoderAvailable();
+    } catch (_e) {
+      return;
     }
     if (!geocoderAvailable) return;
 
-    const addressCache = new Map<string, string>();
+    this.geocoding = true;
+    try {
+      do {
+        this.geocodeAgain = false;
+        const targets = this.recordsFor(this.gps.recordsVersion);
+        for (let i = 0; i < targets.length; i++) {
+          const r = targets[i];
+          const key = this.coordKey(r.latitude, r.longitude);
+          if (this.addresses.has(key)) continue;
 
-    for (let i = 0; i < this.records.length; i++) {
-      const r = this.records[i];
-      const cacheKey = `${r.latitude.toFixed(5)},${r.longitude.toFixed(5)}`;
-      const cached = addressCache.get(cacheKey);
-      if (cached !== undefined) {
-        this.addresses.set(i, cached);
-        continue;
-      }
-
-      try {
-        const addr = await this.reverseGeocode(r.latitude, r.longitude);
-        if (addr) {
-          addressCache.set(cacheKey, addr);
-          this.addresses.set(i, addr);
+          const addr = await this.reverseGeocode(r.latitude, r.longitude);
+          if (addr) {
+            this.addresses.set(key, addr);
+          }
         }
-      } catch (_e) {
-        // skip on error
-      }
+      } while (this.geocodeAgain);
+    } finally {
+      this.geocoding = false;
     }
   }
 
-  /** Wrap callback-based getAddressesFromLocation in a Promise. */
-  private reverseGeocode(lat: number, lon: number): Promise<string | null> {
-    return new Promise((resolve: (value: string | null) => void) => {
-      const req: geoLocationManager.ReverseGeoCodeRequest = {
-        latitude: lat,
-        longitude: lon,
-        maxItems: 1
-      };
-      try {
-        if (canIUse('SystemCapability.Location.Location.Geocoder')) {
-          // @SuppressWarnings syscap
-          geoLocationManager.getAddressesFromLocation(req, (err, data) => {
-            if (err || !data || data.length === 0) {
-              resolve(null);
-              return;
-            }
-            const addr = data[0];
-            const parts: string[] = [];
-            if (addr.administrativeArea) parts.push(addr.administrativeArea);
-            if (addr.subAdministrativeArea) parts.push(addr.subAdministrativeArea);
-            if (addr.locality) parts.push(addr.locality);
-            if (addr.subLocality) parts.push(addr.subLocality);
-            if (addr.roadName) parts.push(addr.roadName);
-            if (addr.premises) parts.push(addr.premises);
-            resolve(parts.length > 0 ? parts.join(' ') : (addr.placeName || null));
-          });
-        } else {
-          resolve(null);
-        }
-      } catch (_e) {
-        resolve(null);
+  /** 逆地理编码，返回拼好的中文地址；失败返回 null。 */
+  private async reverseGeocode(lat: number, lon: number): Promise<string | null> {
+    const req: geoLocationManager.ReverseGeoCodeRequest = {
+      latitude: lat,
+      longitude: lon,
+      maxItems: 1
+    };
+    try {
+      // @SuppressWarnings syscap
+      const list = await geoLocationManager.getAddressesFromLocation(req);
+      if (!list || list.length === 0) return null;
+      return this.formatAddress(list[0]);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
+   * 拼地址。行政层级里同一段会重复出现（「上海市 上海市 上海市 黄浦区」、
+   * 「广东省 东莞市 东莞市 松山湖」），这里去重后再拼，避免一行里念三遍。
+   */
+  private formatAddress(addr: geoLocationManager.GeoAddress): string {
+    const parts: string[] = [];
+    const push = (v: string | undefined): void => {
+      const s = (v ?? '').trim();
+      if (s !== '' && !parts.includes(s)) {
+        parts.push(s);
       }
-    });
+    };
+    push(addr.administrativeArea);
+    push(addr.subAdministrativeArea);
+    push(addr.locality);
+    push(addr.subLocality);
+    push(addr.roadName);
+    push(addr.premises);
+    if (parts.length === 0) {
+      const place = (addr.placeName ?? '').trim();
+      return place;
+    }
+    return parts.join(' ');
   }
 
   formatTime(ts: number): string {
@@ -111,68 +143,64 @@ export struct GpsDayDetailPage {
       Column() {
         PageHeader({
           title: this.day,
-          subtitle: `${this.records.length} 条记录`,
+          subtitle: `${this.recordsFor(this.gps.recordsVersion).length} 条记录`,
           onBack: () => { this.pageInfos.pop(); }
         })
 
-      if (this.records.length === 0) {
-        Column() {
-          Text('当天无记录')
-            .fontSize(14).fontColor($r('app.color.text_secondary'))
-            .margin({ top: 80 })
-        }
-        .width('100%').layoutWeight(1)
-      } else {
-        List() {
-          Repeat<GpsRecord>(this.records)
-            .each((ri: RepeatItem<GpsRecord>) => {
-              ListItem() {
-                Column() {
-                  Row() {
-                    Text(`#${ri.index + 1}`)
-                      .fontSize(12).fontColor($r('app.color.text_secondary'))
-                      .width(36)
-
-                    Column() {
+        if (this.recordsFor(this.gps.recordsVersion).length === 0) {
+          Column({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
+              .fontSize(44)
+              .fontColor([$r('app.color.text_tertiary')])
+            Text('当天无记录')
+              .fontSize(15).fontColor($r('app.color.text_secondary'))
+          }
+          .width('100%').layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          List() {
+            Repeat<GpsRecord>(this.recordsFor(this.gps.recordsVersion))
+              .each((ri: RepeatItem<GpsRecord>) => {
+                ListItem() {
+                  Column({ space: 4 }) {
+                    Row() {
                       Text(this.formatTime(ri.item.timestamp))
-                        .fontSize(15).fontWeight(FontWeight.Medium)
+                        .fontSize(16).fontWeight(FontWeight.Medium)
                         .fontColor($r('app.color.text_primary'))
-                      Text(`${ri.item.latitude.toFixed(6)}, ${ri.item.longitude.toFixed(6)}`)
-                        .fontSize(12).fontColor($r('app.color.text_secondary'))
-                        .margin({ top: 2 })
+
+                      Blank()
+
+                      if (ri.item.altitude !== 0) {
+                        Text(`海拔 ${ri.item.altitude.toFixed(0)}m`)
+                          .fontSize(11).fontColor($r('app.color.text_tertiary'))
+                      }
                     }
-                    .alignItems(HorizontalAlign.Start)
+                    .width('100%')
 
-                    Blank()
+                    Text(`${ri.item.latitude.toFixed(6)}, ${ri.item.longitude.toFixed(6)}`)
+                      .fontSize(12).fontColor($r('app.color.text_secondary'))
+                      .alignSelf(ItemAlign.Start)
 
-                    if (ri.item.altitude !== 0) {
-                      Text(`${ri.item.altitude.toFixed(0)}m`)
-                        .fontSize(12).fontColor($r('app.color.text_secondary'))
+                    if (this.addresses.has(this.coordKey(ri.item.latitude, ri.item.longitude))) {
+                      Text(this.addresses.get(this.coordKey(ri.item.latitude, ri.item.longitude))!.trim())
+                        .fontSize(11).fontColor($r('app.color.text_tertiary'))
+                        .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .alignSelf(ItemAlign.Start)
                     }
                   }
-                  .width('100%')
-
-                  if (this.addresses.has(ri.index)) {
-                    Text(this.addresses.get(ri.index)!.trim())
-                      .fontSize(11).fontColor($r('app.color.text_secondary'))
-                      .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-                      .margin({ top: 4 })
-                  }
+                  .width('100%').padding(16)
+                  .alignItems(HorizontalAlign.Start)
+                  .backgroundColor($r('app.color.bg_surface'))
+                  .borderRadius(24)
                 }
-                .width('100%').padding(16)
-                .alignItems(HorizontalAlign.Start)
-                .backgroundColor($r('app.color.bg_surface'))
-                .borderRadius(16)
-                .border({ width: 1, color: $r('app.color.card_border') })
-              }
-              .margin({ bottom: 8 })
-            })
-            .key((_r: GpsRecord, idx: number) => `${idx}`)
+                .margin({ bottom: 8 })
+              })
+              .key((r: GpsRecord) => `${r.timestamp}_${r.latitude}_${r.longitude}`)
+          }
+          .width('100%').layoutWeight(1)
+          .padding({ left: 16, right: 16, top: 8 })
+          .scrollBar(BarState.Off)
         }
-        .width('100%').layoutWeight(1)
-        .padding({ left: 16, right: 16, top: 8 })
-        .scrollBar(BarState.Off)
-      }
       }
       .width('100%').height('100%')
       .backgroundColor($r('app.color.bg_page'))

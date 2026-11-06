@@ -2,6 +2,7 @@ import { ConfigurationConstant, bundleManager } from '@kit.AbilityKit';
 import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 import { SettingsStore } from '../model/SettingsStore';
 import { CameraService } from '../services/CameraService';
+import { GpsRecorder } from '../services/GpsRecorder';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
@@ -43,17 +44,15 @@ const GPS_MODE_OPTIONS: SelectOption[] = [
 export struct SettingsPage {
   @Param scroller: Scroller = new Scroller();
   @Param logText: string = '';
-  @Param gpsRunning: boolean = false;
-  @Param gpsRecordCount: number = 0;
-  @Param gpsMode: number = 2;
   @Event onClear: () => void = () => {};
   @Event onCopy: () => void = () => {};
-  @Event onGpsToggle: () => void = () => {};
-  @Event onGpsModeChange: (mode: number) => void = (_m: number) => {};
-  @Event onGpsClear: () => void = () => {};
   @Event onOpenGpsManagement: () => void = () => {};
   @Event onOpenCacheManagement: () => void = () => {};
   settings: SettingsStore = SettingsStore.getInstance();
+  /** GPS 服务的真实状态。直接读单例的 @Trace 字段，不再要页面之间传副本。 */
+  @Local gps: GpsRecorder = GpsRecorder.getInstance();
+  /** 开关的显示值。用 !! 双向绑定，启动失败时才能把滑块弹回去。 */
+  @Local gpsOn: boolean = false;
   @Local versionName: string = '';
   @Local debugBuild: boolean = false;
   @Local svc: CameraService = CameraService.getInstance();
@@ -66,6 +65,64 @@ export struct SettingsPage {
       this.versionName = `${(err as BusinessError).message}`;
     }
     this.debugBuild = MockPtpDevice.isDebugBuild();
+    this.gpsOn = this.gps.running;
+  }
+
+  /** 服务侧状态变化（自动恢复、启动失败回滚）时跟上开关显示。 */
+  @Monitor('gps.running')
+  onGpsRunningChanged(monitor: IMonitor): void {
+    const now = monitor.value('gps.running')?.now as boolean;
+    this.gpsOn = now === true;
+  }
+
+  /** 开关的意图交给服务执行；服务拒绝（如位置服务未开）时弹提示并回弹滑块。 */
+  private async onToggleGps(on: boolean): Promise<void> {
+    // 不要在这里提前 return：启动过程中 running 还是 false，用户拨回开关时
+    // 必须让 GpsRecorder.toggle(false) 等启动落定后再停，否则开关会弹回去。
+    const ok = await this.gps.toggle(on);
+    this.gpsOn = this.gps.running;
+    if (!ok) {
+      this.toast(this.gps.lastError === '' ? '定位启动失败' : this.gps.lastError);
+    }
+  }
+
+  private async onChangeGpsMode(mode: number): Promise<void> {
+    const ok = await this.gps.setGpsMode(mode);
+    if (!ok && this.gps.lastError !== '') {
+      this.toast(this.gps.lastError);
+    }
+  }
+
+  private toast(message: string): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message, duration: 3000 });
+    } catch (_e) {
+      // ignore
+    }
+  }
+
+  private clearGpsRecords(): void {
+    this.getUIContext().showAlertDialog({
+      title: '清除定位记录',
+      message: `将删除全部 ${this.gps.recordCount} 条定位记录，已导出照片里的定位信息不受影响。`,
+      autoCancel: true,
+      primaryButton: { value: '取消', action: () => {} },
+      secondaryButton: {
+        value: '清除',
+        fontColor: $r('app.color.button_danger'),
+        action: () => {
+          this.gps.clearRecords();
+          this.toast('定位记录已清除');
+        }
+      }
+    });
+  }
+
+  /** 开关下面那行说明：还要区分「已启动但还没拿到定位」。 */
+  private gpsStatusText(): string {
+    if (!this.gps.running) return '关闭时不会记录位置';
+    if (this.gps.lastFix === null) return '正在等待定位…';
+    return '正在记录位置';
   }
 
   onToggleMockCamera(enabled: boolean): void {
@@ -169,7 +226,7 @@ export struct SettingsPage {
                 .fontSize(16)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
-              Text(this.gpsRunning ? '正在记录位置' : '关闭时不会记录位置')
+              Text(this.gpsStatusText())
                 .fontSize(11)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)
@@ -179,8 +236,10 @@ export struct SettingsPage {
 
             // 不设 selectedColor：应用级沉浸光感开启后，Toggle 的开关样式
             // 由系统预设材质接管，自己添颜色会把手感改回去。
-            Toggle({ type: ToggleType.Switch, isOn: this.gpsRunning })
-              .onChange((_on: boolean) => { this.onGpsToggle(); })
+            // isOn 用 !! 双向绑定：用户拨动后状态变真，服务拒绝启动时才能把
+            // 滑块弹回去（单向绑定下组件会停在拨动后的位置，和真实状态对不上）。
+            Toggle({ type: ToggleType.Switch, isOn: this.gpsOn!! })
+              .onChange((on: boolean) => { this.onToggleGps(on); })
           }
           .width('100%').height(64)
           .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
@@ -188,8 +247,8 @@ export struct SettingsPage {
           SettingSelectRow({
             label: '记录频率',
             options: GPS_MODE_OPTIONS,
-            selectedIndex: this.gpsMode,
-            onSelect: (index: number) => { this.onGpsModeChange(index); }
+            selectedIndex: this.gps.gpsMode,
+            onSelect: (index: number) => { this.onChangeGpsMode(index); }
           })
 
           Row({ space: 8 }) {
@@ -198,7 +257,7 @@ export struct SettingsPage {
                 .fontSize(16)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
-              Text(`已记录 ${this.gpsRecordCount} 个位置点`)
+              Text(`已记录 ${this.gps.recordCount} 个位置点`)
                 .fontSize(11)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)
@@ -220,7 +279,7 @@ export struct SettingsPage {
               .fontColor($r('app.color.button_danger'))
           }
           .width('100%').height(56)
-          .onClick(() => { this.onGpsClear(); })
+          .onClick(() => { this.clearGpsRecords(); })
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
