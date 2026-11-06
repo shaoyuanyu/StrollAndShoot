@@ -720,12 +720,12 @@ hdc list targets
 
 凡是涉及 HarmonyOS / ArkTS / ArkUI 的 **API 用法、参数含义、起始版本、设计规范、最佳实践、版本行为差异**，一律**先查知识库，再动手写代码**。不要凭记忆回答，也不要只翻本地 `.d.ts` 就下结论——`.d.ts` 只看得到签名，看不到"什么条件下才生效"。
 
-HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp_kms_-__`）：
+HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_knowledge__`）：
 
 | 工具 | 用途 |
 |---|---|
-| `mcp_kms_-__searchDocuments` | 自然语言检索官方知识库（API 参考、开发指南、设计规范、最佳实践、FAQ、版本说明）。入参 `query`，可选 `topK` |
-| `mcp_kms_-__getDocumentsById` | 用搜索结果里的 `parent` 字段（文档 ID）取正文，一次最多 10 篇 |
+| `mcp__harmonyos_developer_knowledge__searchDocuments` | 自然语言检索官方知识库（API 参考、开发指南、设计规范、最佳实践、FAQ、版本说明）。入参 `query`，可选 `topK` |
+| `mcp__harmonyos_developer_knowledge__getDocumentsById` | 用搜索结果里的 `parent` 字段（文档 ID）取正文，一次最多 10 篇 |
 
 - `parent` 前缀说明来源：`alliance/document/cn/harmonyos-guides/…` 是开发指南，`alliance/document/cn/harmonyos-references/…` 是 API 参考，`alliance/document/cn/design-guides/…` 是设计规范
 - 返回内容过长会被截断，改用更精确的关键词分多次检索；或先 `getDocumentsById` 落盘再读全文
