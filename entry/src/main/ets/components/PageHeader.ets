@@ -1,5 +1,10 @@
+import { WindowUtils } from '../utils/WindowUtils';
+
 /**
- * 统一的二级页面头部：返回按钮 + 标题 + 可选副标题。
+ * 二级页头部：返回键 + 主标题 + 副标题。
+ *
+ * 窗口是全屏布局（内容延伸到状态栏下方），所以这里自己避让状态栏。
+ * 一级页的标题栏走 `NavDestination.title({ builder })`，二级页只需要一个轻量头部。
  */
 @ComponentV2
 export struct PageHeader {
@@ -7,15 +12,23 @@ export struct PageHeader {
   @Param subtitle: string = '';
   @Event onBack: () => void = () => {};
 
+  /** 状态栏高度（vp）。 */
+  private statusBarVp(): number {
+    const px = WindowUtils.topAvoidAreaHeightPx;
+    return px > 0 ? px2vp(px) : 0;
+  }
+
   build() {
-    Row({ space: 10 }) {
-      Button({ type: ButtonType.Circle }) {
+    Row({ space: 8 }) {
+      Button() {
         SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(20)
+          .fontSize(22)
           .fontColor([$r('app.color.text_primary')])
       }
-      .width(40).height(40)
-      .backgroundColor($r('app.color.primary_soft'))
+      .width(40)
+      .height(40)
+      .backgroundColor(Color.Transparent)
+      .borderRadius(20)
       .accessibilityText('返回')
       .onClick(() => { this.onBack(); })
 
@@ -25,21 +38,23 @@ export struct PageHeader {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        if (this.subtitle) {
+        if (this.subtitle.length > 0) {
           Text(this.subtitle)
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
         }
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+    .alignItems(VerticalAlign.Center)
+    .padding({
+      left: 8,
+      right: 16,
+      top: this.statusBarVp() + 4,
+      bottom: 8
+    })
   }
 }

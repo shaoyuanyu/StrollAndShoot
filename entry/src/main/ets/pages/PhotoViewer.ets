@@ -1210,6 +1210,18 @@ export struct PhotoViewerScreen {
     })
   }
 
+  /** 状态栏高度（vp），全屏布局下预览器自己避让。 */
+  private topInsetVp(): number {
+    const px = WindowUtils.topAvoidAreaHeightPx;
+    return px > 0 ? px2vp(px) : 0;
+  }
+
+  /** 底部导航条高度（vp）。 */
+  private bottomInsetVp(): number {
+    const px = WindowUtils.navigationIndicatorHeightPx;
+    return px > 0 ? px2vp(px) : 0;
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
@@ -1340,6 +1352,8 @@ export struct PhotoViewerScreen {
           .layoutWeight(1)
         }
         .width('100%').height('100%')
+        // 窗口是全屏布局，预览器自己要避让状态栏与导航条
+        .padding({ top: this.topInsetVp(), bottom: this.bottomInsetVp() })
         .opacity(this.animationProperties?.showDetailContent ? 1.0 : 0.0)
         .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
       }

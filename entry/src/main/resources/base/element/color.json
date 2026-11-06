@@ -62,7 +62,7 @@
     },
     {
       "name": "tab_bar_bg",
-      "value": "#CCFFFFFF"
+      "value": "#B3FFFFFF"
     },
     {
       "name": "divider",
@@ -89,18 +89,6 @@
       "value": "#0D000000"
     },
     {
-      "name": "filter_chip_active_bg",
-      "value": "#0A59F7"
-    },
-    {
-      "name": "filter_chip_text",
-      "value": "#99000000"
-    },
-    {
-      "name": "filter_chip_active_text",
-      "value": "#FFFFFF"
-    },
-    {
       "name": "thumbnail_placeholder",
       "value": "#E8EAED"
     },
@@ -122,7 +110,27 @@
     },
     {
       "name": "nav_bg",
-      "value": "#E6F1F3F5"
+      "value": "#C4F1F3F5"
+    },
+    {
+      "name": "bg_page_fade",
+      "value": "#00F1F3F5"
+    },
+    {
+      "name": "nav_bg_mid",
+      "value": "#8CF1F3F5"
+    },
+    {
+      "name": "nav_bg_weak",
+      "value": "#33F1F3F5"
+    },
+    {
+      "name": "progress_track",
+      "value": "#1F000000"
+    },
+    {
+      "name": "glass_bg",
+      "value": "#8CFFFFFF"
     }
   ]
 }

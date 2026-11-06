@@ -1,8 +1,10 @@
 import { CameraService } from '../services/CameraService';
+import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
+  @Param scroller: Scroller = new Scroller();
   @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
 
@@ -110,27 +112,32 @@ export struct CameraPage {
       Column({ space: 10 }) {
         Row({ space: 10 }) {
           Button('快速扫描')
-            .layoutWeight(1).height(44)
+            .layoutWeight(1).height(48)
             .fontSize(15)
+            .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_on_primary'))
             .backgroundColor($r('app.color.primary'))
             .enabled(!this.svc.scanning)
+            .opacity(this.svc.scanning ? 0.4 : 1)
             .onClick(() => { this.onScan(true); })
           Button('全量扫描')
-            .layoutWeight(1).height(44)
+            .layoutWeight(1).height(48)
             .fontSize(15)
             .fontColor($r('app.color.primary'))
             .backgroundColor($r('app.color.primary_soft'))
+            .border({ width: 1, color: $r('app.color.primary') })
             .enabled(!this.svc.scanning)
+            .opacity(this.svc.scanning ? 0.4 : 1)
             .onClick(() => { this.onScan(false); })
         }
         .width('100%')
 
         Button('断开连接')
-          .width('100%').height(40)
-          .fontSize(14)
+          .width('100%').height(44)
+          .fontSize(15)
           .fontColor($r('app.color.button_danger'))
-          .backgroundColor(Color.Transparent)
+          .backgroundColor($r('app.color.bg_surface'))
+          .border({ width: 1, color: $r('app.color.button_danger') })
           .onClick(() => { this.onDisconnect(); })
       }
       .width('100%')
@@ -138,21 +145,8 @@ export struct CameraPage {
   }
 
   build() {
-    Scroll() {
+    Scroll(this.scroller) {
       Column({ space: 12 }) {
-        Column({ space: 3 }) {
-          Text('相机')
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.text_primary'))
-          Text('通过 USB PTP 浏览与导入相机照片')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ top: 8 })
-
         if (this.svc.connected || this.svc.scanning || this.svc.scanTotal > 0) {
           this.StatusCard()
         }
@@ -184,11 +178,13 @@ export struct CameraPage {
         }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, bottom: 24 })
+      .padding({ left: 16, right: 16, top: 8, bottom: 96 })
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
     .align(Alignment.Top)
+    // 标题栏浮在内容之上，首屏内容按其高度内缩；滚动时从标题栏下方穿过
+    .contentStartOffset(titleBarTotalVp())
   }
 }
 

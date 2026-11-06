@@ -1,6 +1,6 @@
+import { PageHeader } from '../components/PageHeader';
 import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
-import { PageHeader } from '../components/PageHeader';
 
 @Builder
 export function GpsManagementPageBuilder() {
@@ -47,7 +47,6 @@ export struct GpsManagementPage {
   build() {
     NavDestination() {
       Column() {
-        // Header
         PageHeader({
           title: '定位记录',
           subtitle: `共 ${this.totalCount} 条`,

@@ -73,6 +73,16 @@ export class CameraService {
   thumbnailLoadedSet: Set<number> = new Set();
   @Trace thumbnailVersion: number = 0;
 
+  /**
+   * 取缩略图供界面渲染。
+   * 方法内先读一次 thumbnailVersion，建立 V2 依赖：调用方组件在缩略图更新时会重建。
+   * Map 本身不参与状态跟踪，不读版本号的话单元格会永远停在占位图。
+   */
+  thumbForRender(handle: number): image.PixelMap | undefined {
+    if (this.thumbnailVersion < 0) return undefined;
+    return this.thumbnailPixelMapMap.get(handle);
+  }
+
   // Orientation-corrected display dimensions (populated during thumbnail/full decode)
   orientedDisplaySizes: Map<number, OrientedSize> = new Map();
 
@@ -905,7 +915,10 @@ export class CameraService {
       this.connected = false;
     } finally {
       this.scanning = false;
-
+      if (this.pendingCachingPrompt) {
+        this.pendingCachingPrompt = false;
+        this.cachingDialogRequired = true;
+      }
     }
   }
 
@@ -1145,13 +1158,14 @@ export class CameraService {
     for (let batchStart = 0; batchStart < totalToLoad; batchStart += rowWidth) {
       const batchEnd = Math.min(batchStart + rowWidth, totalToLoad);
       const rowPromises: Promise<void>[] = [];
-      let hasNewLoads = false;
 
       for (let i = batchStart; i < batchEnd; i++) {
         const photo = photos[i];
 
-        // Already loaded (from Phase 0 deployCacheSnapshot or prior scan)
-        if (this.thumbnailLoadedSet.has(photo.handle)) {
+        // Already loaded (from Phase 0 deployCacheSnapshot or prior scan).
+        // 两个集合要同时命中才算真的“已有图”，否则会漏加载、单元格永远停在占位符。
+        if (this.thumbnailLoadedSet.has(photo.handle)
+          && this.thumbnailPixelMapMap.has(photo.handle)) {
           totalLoaded++;
           continue;
         }
@@ -1170,7 +1184,6 @@ export class CameraService {
         }
 
         // Need USB: getThumb + EXIF + decode
-        hasNewLoads = true;
         rowPromises.push(this.loadSingleThumbnail(photo, key, modDate));
       }
 
@@ -1178,8 +1191,10 @@ export class CameraService {
         await Promise.all(rowPromises);
       }
 
-      // Row complete: bump thumbnailVersion so GalleryPage re-evaluates rowComplete
-      if (hasNewLoads) {
+      // Row complete: bump thumbnailVersion so GalleryPage re-evaluates rowComplete.
+      // 必须只要本行有加载动作就递增：命中磁盘缓存的行不走 USB，以前只在 USB 分支
+      // 置位的标志会让这些行一次都不递增，扫描结束前已挂载的单元格就永远停在占位符。
+      if (rowPromises.length > 0) {
         this.thumbnailVersion++;
       }
 
@@ -1748,6 +1763,9 @@ export class CameraService {
    * If previously rejected (cachingEnabled=false), keeps it false.
    * If previously accepted, initializes the thumbnail cache.
    */
+  /** 扫描结束后再弹缓存询问，避免阻塞首次扫描。 */
+  private pendingCachingPrompt: boolean = false;
+
   private checkCachingState(): void {
     if (!this.cameraIdentity) {
       this.cachingEnabled = false;
@@ -1761,7 +1779,11 @@ export class CameraService {
       this.pendingCamIdForDialog = this.cameraIdentity;
       this.pendingCamNameForDialog = this.cameraName;
       this.cachingEnabled = true;
-      this.cachingDialogRequired = true;
+      // 关键：不能在这里就把 cachingDialogRequired 置 true，
+      // scanForCamera 见到它为 true 会直接 return 等待用户选择，
+      // 而对话框要等 scan 结束后才会被弹出 → 首次连接永远扫不出照片。
+      this.cachingDialogRequired = false;
+      this.pendingCachingPrompt = true;
       this.thumbCache.init(this.filesDir, this.cameraIdentity);
       this.log.add(`新相机 ${this.cameraName}，先缓存后询问`);
       return;
@@ -1785,11 +1807,9 @@ export class CameraService {
     this.cachePrefs.set(cameraId, this.pendingCamNameForDialog, enabled);
     this.cachingDialogRequired = false;
     this.cachingEnabled = enabled;
+    this.pendingCachingPrompt = false;
     this.log.add(enabled ? `用户已启用缓存: ${this.cameraName}` : `用户拒绝缓存: ${this.cameraName}`);
-    // Start the delayed scan now that user has decided
-    if (this.cameraIdentity === cameraId) {
-      this.scanForCamera();
-    }
+    // 扫描在弹窗之前就已完成，这里只落库设置，不重复扫描。
   }
 
   /**

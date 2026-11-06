@@ -8,7 +8,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 
 | 项 | 值 |
 |---|---|
-| 平台 | HarmonyOS 6.1.0（API 23，Stage model） |
+| 平台 | HarmonyOS 7.0.0（API 26，Stage model） |
 | 语言 | ArkTS |
 | UI | ArkUI，状态管理只用 V2 |
 | 构建 | Hvigor；命令行用 DevEco CLI（`devecocli`） |
@@ -16,7 +16,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.5.0 / 1005000 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.15.2 / 1015002 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署）。见“macOS 开发环境” |
 
 ## macOS 开发环境
@@ -44,7 +44,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | `hvigorw` 脚本 | 项目根目录**没有**，只能用 `devecocli` | 有（本地文件，未纳入版本控制） |
 | `deploy.sh` | **不存在**（被 `.gitignore` 忽略，只在 Linux 上） | 有，内含签名材料路径与口令 |
 | 签名材料 | **三套签名配置**：`default` 自动签名（`~/.ohos/config/`，备用）、`AgentDebug`、`AgentRelease`；手动材料在 `../KEYS/hmos_dev_key.p12`、`../CERTIFICATES/` 与 `.profile/` | `deploy.sh` 负责 |
-| 安装到手机 | 真机装不上，只能装模拟器，见「模拟器」 | `bash deploy.sh full` |
+| 安装到手机 | 真机走 Wi-Fi：`hdc -t IP:端口 install -r entry-default-signed.hap`，见「无线调试（Wi-Fi）」；模拟器只认 unsigned 包 | `bash deploy.sh full` |
 
 ### macOS 上的流程
 
@@ -64,8 +64,10 @@ devecocli build clean
 
 - `devecocli build` 产出 `entry/build/<product>/outputs/default/` 下的两个 HAP：`entry-default-signed.hap`（AgentDebug 签名，已过 `hap-sign-tool verify-app`）与 `entry-default-unsigned.hap`。
 - macOS 上签名材料分散在项目外：`.p12` 在 `../KEYS/hmos_dev_key.p12`，`.cer` 在 `../CERTIFICATES/`（`Agent_Debug.cer`、`Agent_RELEASE.cer`），Profile 在 `.profile/`。`build-profile.json5` 里已配好 `AgentDebug` / `AgentRelease` 两套手动签名：`default` product 用 AgentDebug，`dist` product 用 AgentRelease。
-- 签好的 HAP 仍然装不进真机：两套 Profile 的 `debug-info.device-ids` 只登记了真机 UDID，且 `hdc install` 在真机上的可行性未验证。真机部署仍交给 Linux 的 `deploy.sh`。
-- 项目声明 `compatibleSdkVersion: 6.1.0(23)`，本机 SDK 是 API 26，构建能通过。不要因为本机 SDK 版本高就去改 `build-profile.json5` 里的版本。
+- **签好的 HAP 能装真机**（2026-11-06 实测）：Profile 的 `debug-info.device-ids` 里登记了真机 UDID，手机打开无线调试后 `hdc -t IP:端口 install -r entry-default-signed.hap` 1.4 秒装完并成功启动。真正装不进的是**模拟器**，它只接受 unsigned 包。详见「无线调试（Wi-Fi）」。
+- `build-profile.json5` 里两个 product 都是 `targetSdkVersion: "26.0.0"`、`compatibleSdkVersion: "26.0.0"`：功能、行为变更与最低安装版本统一按 API 26，**只能安装到 7.0.0 及以上设备**，因此调用 API 26 接口不需要再包 `deviceInfo.apiAvailable('26.0.0')`。
+- **API 26 起版本号写法变了**：26 及以上写成纯语义化字符串 `"26.0.0"`，不再是 `"6.1.0(23)"` 那种 `M.S.F(N)` 形式。
+- 升级到 26 后已核过的行为变更：`shadow` 的 `radius: 0` 从“无阴影”变为“无模糊阴影”、Media Library `READ_IMAGEVIDEO` 只能读本地图库、`.kernel` 权限需 bin 显式声明——本项目均未触及（未用 `shadow`、未申请 `READ_IMAGEVIDEO`、手机应用无 bin 子进程）。
 - 涉及相机与 USB 的验证仍然只能在真机上做。模拟器能跑界面，但 PTP、EXIF、相册保存这些必须真机确认，见「模拟器」。
 
 ## 目录结构
@@ -79,14 +81,14 @@ StrollAndShoot/
 ├── entry/
 │   ├── build-profile.json5         # 模块构建；CMake 配置在 externalNativeOptions
 │   ├── src/main/
-│   │   ├── module.json5            # ability、权限（LOCATION、APPROXIMATELY_LOCATION、KEEP_BACKGROUND_RUNNING）
+│   │   ├── module.json5            # ability、权限（LOCATION、APPROXIMATELY_LOCATION、KEEP_BACKGROUND_RUNNING、DETECT_GESTURE）
 │   │   ├── ets/
 │   │   │   ├── entryability/       # EntryAbility：窗口尺寸、避让区监听、加载 pages/Index
 │   │   │   ├── pages/              # 页面、PTP 会话层、早期原型页
 │   │   │   ├── components/         # 复用组件
 │   │   │   ├── services/           # 单例服务
 │   │   │   ├── model/              # 数据结构与持久化设置
-│   │   │   ├── utils/              # 分组、组件坐标、窗口信息
+│   │   │   ├── utils/              # 分组、组件坐标、窗口信息、标题栏尺寸
 │   │   │   ├── workers/            # ImageDecoder：TaskPool 并发函数（不是 Worker 线程）
 │   │   │   ├── CustomTransition/   # 一镜到底转场的动画参数与注册表
 │   │   │   └── NodeContainer/      # BuilderNode 单例，承载共享元素
@@ -138,7 +140,7 @@ hvigorw test -p module=entry -p coverage=true
 | 文件 | 作用 |
 |---|---|
 | `debug/MockPtpDevice.ets` | 虚拟相机的“硬件”：USB 描述符、DeviceInfo、1 个 storage、`DCIM → 100MOCK / 101MOCK` 两层目录树、38 张照片的元数据，以及按 handle 现场编码出的 JPEG（缩略图 180×120，原图 1200×800） |
-| `debug/MockPtpSession.ets` | `PtpTransport` 的第二个实现：`connect` / `getDeviceInfo` / `getStorageIDs` / `getObjectHandles` / `getObjectInfo` / `getThumb` / `getObject` / `getPartialObject`，每个调用带少量延迟让进度条可见 |
+| `debug/MockPtpSession.ets` | `PtpTransport` 的第二个实现：`connect` / `getDeviceInfo` / `getStorageIDs` / `getObjectHandles` / `getObjectInfo` / `getThumb` / `getObject` / `getPartialObject`，每个调用带少量延迟让进度条可见。**`getObject` 固定 520ms/张**（靠近真实 USB 单张原图耗时）：之前 120ms 时 38 张几秒就传完，进度浮岛的下载中 / 保存中 / 完成三种状态根本来不及看 |
 
 `PtpHost.ets` 里 `PtpSession` 与 `MockPtpSession` 共用 `PtpTransport` 接口，`CameraService.session` 声明为该接口，`scanForCamera()` 开头用 `syncSessionMode()` 按调试开关选实现。于是：
 
@@ -232,13 +234,79 @@ devecocli check lint entry/src/main/ets
 - 正式上架 AppGallery 时改用**发布证书 + 发布 Profile**。
 - 注意：`build-profile.json5` 里的签名密文与本机绑定，不要直接把带密文的配置提交给 Linux 使用，否则会报 `Unsupported state or unable to authenticate data`。
 
+### 无线调试（Wi-Fi）
+
+本项目最实用的部署通道：**手机的 USB 口要留给相机做 PTP**，只有 hdc 走 Wi-Fi 才能一边接相机一边部署看日志。2026-11-06 在真机 VYG-AL00 / 7.0.0.111 上完整跑通。
+
+**手机端**：设置 > 系统 > 开发者选项 > **无线调试** 打开，页面上会显示 `IP:端口`。端口随开关变化，**每次重开会变，不要写死**。首次连接手机会弹「允许调试」，必须点允许，否则设备一直停在 `Unauthorized`。
+
+**电脑端**：
+
+```bash
+HDC=/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc
+T=192.168.1.23:42135          # 换成手机上显示的 IP:端口
+
+$HDC tconn $T                 # 返回 Connect OK
+$HDC list targets -v          # 状态从 Unauthorized 变 Connected 才算通
+$HDC tconn $T -remove         # 断开
+
+devecocli build
+$HDC -t $T install -r entry/build/default/outputs/default/entry-default-signed.hap
+$HDC -t $T shell aa force-stop io.github.shaoyuanyu.strollandshoot
+$HDC -t $T shell aa start -a EntryAbility -b io.github.shaoyuanyu.strollandshoot
+```
+
+- **必须带 `-t`**：`hdc list targets` 里常年挂着一个 `127.0.0.1:5555 Offline` 的模拟器残项，不带 `-t` 就报 `ExecuteCommand need connect-key`。
+- **`hdc discover` 在本机所在办公网无效**：实测 `Broadcast find daemon, total:0`。ARP 表里大量 `0:0:5e:0:1:2` 是代理网关，说明开了客户端隔离，广播包过不去。只能手工 `tconn IP:端口`。
+- 装包实测 **1.4 秒**，比 USB 慢但可接受；`-r` 覆盖安装保留数据。
+- 锁屏、切网会让连接变 `Offline`，重新 `tconn` 一次即可。
+
+**读日志 / 截图**：
+
+```bash
+# hilog 必须带 -x，否则会一直阻塞
+$HDC -t $T shell "hilog -x -T AppLog"
+$HDC -t $T shell "hilog -x -T ThumbnailCache"
+
+# 应用自己的日志文件
+$HDC -t $T file recv \
+  /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/entry/files/app_log.txt \
+  /tmp/app_log.txt
+
+# 界面验收
+$HDC -t $T shell snapshot_display -f /data/local/tmp/w.jpeg
+$HDC -t $T file recv /data/local/tmp/w.jpeg /tmp/w.jpeg
+```
+
+**断点调试**：hdc 本身不带调试器。断点仍走 DevEco Studio 的 `Tools > IP Connection`（6.1.1 起）或设备下拉框里的 IP Connection，输入同一个 `IP:端口`，再用 Debug 启动。
+
+**坑：首次启动可能被应用市场管控拦截**
+
+装完第一次 `aa start` 可能报：
+
+```text
+error: failed to start ability.
+Error Code:10106105  Error Message:The target application is under control.
+Error cause: The application is suspected of malicious behavior and is restricted from launching by the appStore
+```
+
+而且此时 `bm dump -a` 里**查不到这个包**——安装返回了成功，但包被管控策略清掉了。重新 `install -r` 一次即可恢复。遇到启动被拒时先确认包还在不在，别急着怀疑代码：
+
+```bash
+$HDC -t $T shell "bm dump -a" | grep stroll
+```
+
 ## 架构
 
 ### 导航
 
-- `pages/Index.ets` 是唯一入口（`@Entry`），内部用 `Navigation` + `NavPathStack`，隐藏系统导航栏（`hideNavBar(true)`），并注册自定义转场 `customNavContentTransition`。
+- `pages/Index.ets` 是唯一入口（`@Entry`），内部用 ArkUI 原生 **`Navigation`** + `NavPathStack`，隐藏系统导航栏（`hideNavBar(true)`），并注册自定义转场 `customNavContentTransition`。
 - `route_map.json` 注册两个 NavDestination：`MainScreen` 与 `PhotoViewerScreen`。
-- `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。使用系统 `Tabs` 的原生标签栏（`barPosition: End`、`barHeight(64)`、`barBackgroundBlurStyle(COMPONENT_THICK)`），标签项用 `SymbolGlyph` + 文字，页面隐藏 TitleBar 后自绘大标题。
+- `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。底部是系统 `Tabs` 的**悬浮页签**：只设 `barOverlap(true)` + `barFloatingStyle({ barBottomMargin: this.navIndicatorVp(), maskColor: Color.Transparent, systemMaterial: new uiMaterial.ImmersiveMaterial({ style: REGULAR, interactive: true }) })`。**不要**再设 `barBackgroundColor` / `barBackgroundBlurStyle`（会盖住材质），也不要设 `barMode` / `scrollable`（会破坏悬浮样式的默认布局）。`barHeight` 只在多选态动态置 0。
+- **不要用 HDS 的 `HdsNavigation` / `HdsNavDestination`**：2026-11-06 试过又全部退回。官方《沉浸光感》写明 HDS 的 `systemMaterialEffect` 只给**标题栏按钮**材质，背板永远拿不到沉浸光感，轻划时看着就是全透明。
+- 一级页标题栏是 `.title({ builder: this.TitleBar, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })` 自定义 builder；二级页 `.hideTitleBar(true)` + `components/PageHeader.ets`（自己避让状态栏）；预览器 `.hideTitleBar(true)` 自己全屏。
+- 首屏内容避让用**滚动容器的 `contentStartOffset(titleBarInsetVp())`**（不是 `padding-top`），详见「沉浸光感 > 顶部标题栏」。
+- **底部要给悬浮页签留空间，但不能用 `List.padding({ bottom })`**：那会收缩 List 的可视区域，内容在胶囊上方就被裁断、中间露出一条空带。正确做法是给 List 末尾加一个 104vp 占位项（`FlatItem.tail()`）；`Scroll` 页面（相机 / 设置）用内容末尾的 `padding-bottom` 即可。
 - `CacheManagementPage`、`GpsManagementPage`、`GpsDayDetailPage` 是 `@Entry` 页面，用已废弃的 `router.pushUrl` / `router.back` / `router.getParams` 跳转。
 - `SwiperSyncTestPage` 是早期原型页，仍注册在 `main_pages.json`，没有任何入口。
 
@@ -269,6 +337,11 @@ devecocli check lint entry/src/main/ets
 
 **注意**：`thumbnailPixelMapMap`、`orientedDisplaySizes`、`compressedCache` 是普通 `Map`，不参与自动追踪。界面能刷新依靠 `thumbnailVersion`、`lastDecodedHandle`、`photosVersion` 这类手工计数被 `build()` 读到。改动缩略图与原图加载逻辑时，必须同时维护这些计数。
 
+**两个必须记住的刷新坑**（2026-11-05 实测）：
+
+1. `Repeat` 命中相同 key **不会重跑 `each`**。把 `Image(pm)` 直接写在 `@Builder` 里，缩略图解码完成后单元格会永远停在占位图。正确做法是把单元格内容抽成独立 `@ComponentV2`（见 `GalleryPage.ets` 末尾的 `ThumbImage`），并在 `build()` 里调 `svc.thumbForRender(handle)`——该方法内部先读一次 `thumbnailVersion`，从而让组件订阅材质变化（Map 本身不可观测）。
+2. `@Builder` 的**值参数不会刷新**。例如 `WideChip(label, selected, onTap)` 这种写法，点击后 `selected` 变了但高亮不跟随。凡是会变化的状态，都要在构建期直接读（`this.settings.darkMode === ...`），不要经由 `@Builder` 形参传入。
+
 ### Native bridge
 
 `libentry.so` 暴露的函数，类型声明在 `entry/src/main/cpp/types/libentry/Index.d.ts`：
@@ -281,9 +354,62 @@ devecocli check lint entry/src/main/ets
 ### 资源
 
 - `$r('app.type.name')` 从 `entry/src/main/resources/` 解析。浅色在 `base/element/`，深色在 `dark/element/`。
-- 颜色资源成体系，共 31 条（`base/element/color.json` 与 `dark/element/color.json` 各一份），命名如 `primary`、`bg_page`、`bg_surface`、`text_primary`、`text_secondary`、`text_tertiary`、`divider`、`card_border`、`primary_soft`、`scrim`、`nav_bg`。设计语言为 HarmonyOS 沉浸光感：冷灰页面底、纯黑/白卡片、品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态、底栏与预览器标题栏使用半透明模糊材质。新增界面一律引用资源，不要写定颜色值。
+- 颜色资源成体系，共 33 条（`base/element/color.json` 与 `dark/element/color.json` 各一份），命名如 `primary`、`bg_page`、`bg_surface`、`text_primary`、`text_secondary`、`text_tertiary`、`divider`、`card_border`、`primary_soft`、`scrim`、`nav_bg`、`tab_bar_bg`、`glass_bg`、`progress_track`。设计语言为 HarmonyOS 沉浸光感：冷灰页面底、纯黑/白卡片、品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态、底栏与预览器标题栏使用半透明模糊材质。新增界面一律引用资源，不要写定颜色值。
 - `base/element/string.json` 有 36 条字符串，代码里没有任何引用，界面文案直接写在组件内部。
 - 颜色模式跟随系统：`COLOR_MODE_NOT_SET`（值为 -1）表示不设置，`COLOR_MODE_LIGHT` / `COLOR_MODE_DARK` 为显式指定。
+
+### 沉浸光感
+
+- **应用级开关**在 `entry/src/main/module.json5` 的 `metadata`：`{ "name": "ohos.arkui.UIMaterial.state", "value": "enable" }`。开启后 `Toggle` / `Slider` / `Select` / 弹窗类组件在全页面生效，其余组件只在 Navigation/NavDestination 标题栏与底部 TabBar 生效。
+- **底部页签**：`Tabs.barFloatingStyle({ barBottomMargin: navIndicatorVp(), maskColor: Color.Transparent, systemMaterial })` + `barOverlap(true)`（`vertical(false)`、`barPosition: End` 为默认），不要同时设置 `barBackgroundColor` / `barBackgroundBlurStyle`，否则会遮挡材质。
+  - **底边距必须自己算**：窗口是 `setWindowLayoutFullScreen(true)`，Tabs 是全屏的，`barFloatingStyle` 不会自动避让手势条。`barBottomMargin: this.navIndicatorVp()` 才让胶囊底边正好贴在手势条避让区上沿；写成固定的 10 会让胶囊压在手势条上（官方图库也是这么摆的）。
+  - **实测（2026-11-06，模拟器 Mate 80 + 真机 VYG-AL00）**：只写 `systemMaterial` 时，两边都能正确呈现磨砂透明，内容从胶囊下面透出且带模糊与折射。
+  - **踩过的坑**：一度以为"模拟器渲染不出材质"，其实是同时设了 `barBackgroundColor` + `barBackgroundBlurStyle`，把材质整个盖住了。**只要这两个属性还在，材质就一定看不到**——不是设备能力问题。排查时先确认没有别的东西压在上面。
+- **顶部标题栏 = 大标题浮层 + 浮动玻璃控件 + 渐隐遮罩**（2026-11-06 对照官方「备忘录」逐帧校准）。官方形态**不是**一条通栏材质背板：
+  1. 顶部只有**独立的浮动玻璃控件**（圆形钮 / 胶囊），它们之间是纯页面底色，看不到任何"条"；
+  2. 大标题是**纯文字浮在内容上**，内容滑到标题后面时被**平滑压淡**——`linearGradient` 用 4 档压色（`nav_bg` 77% → `nav_bg_mid` 55% → `nav_bg_weak` 20% → `bg_page_fade` 0%）做缓出，衰减一直延伸到标题下方 28vp（`TITLE_FADE_EXTRA`）。**不要**做成「上不透明 → 下全透明」（内容被抹掉），也**不要**做成均匀一块压色（看着像一条带子）；标题要停在渐隐区**顶部**（状态栏下方），不要压在渐隐区底边；
+  4. 压色之外还要一点点**磨砂**，但**不能用 `backdropBlur`**：它的边界是硬的，标题栏下边缘会留下一条泾渭分明的横线（2026-11-06 实测，用户一眼看出来）。正解是给**内容容器**加 `linearGradientBlur(96, { fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18]], direction: GradientDirection.Bottom })`——模糊强度连续衰减到 0，天然没有边界；
+  3. 玻璃控件用 `uiMaterial.ImmersiveMaterial`（`ULTRA_THIN` + `interactive: true`），与底部页签同一套材质，且与滚动无关、常驻。
+  - 实现：`MainScreen.TitleBar` = `Stack` 里「一整块 `linearGradient` 渐隐层」+「底部 56vp 的一行：28fp 大标题 + 右���两颗玻璃胶囊」，`.title({ builder, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })`。
+- **材质只在「Navigation/NavDestination 标题栏」或「横向 Tabs 且 barPosition: End 的底部 TabBar」里生效**（官方《组件适配沉浸光感》）。写在内容区不生效——所以胶囊必须画在 `title({ builder })` 里，不能挪到页面内容里。
+- **内容区的浮动卡片拿真材质：挂进标题栏 builder，再用 `position` 画到目标位置**（2026-11-06 突破）。这是目前唯一同时满足「真材质 + 不挡交互」的做法，下载进度浮岛与多选底部操作栏都这么干：
+  - 在 `MainScreen.TitleBar` 的 `Stack` 里加一层「浮岛层」，把组件写成它的子节点；
+  - 外面包一层 `Column` 承载 `.position({ top, left/right })` 与 `.systemMaterial(this.floatMaterial)` —— **自定义组件不能直接链式挂通用属性**（会报 `does not meet UI component syntax`），必须包容器；
+  - `position` 的原点是标题栏顶部（= 屏幕顶部，因为 `windowLayoutFullScreen`），所以可以直接用屏幕绝对 vp 坐标（`WindowUtils.windowHeightPx` 换算）；
+  - **标题栏容器不裁剪超出边界的子节点**，所以能画到屏幕中部和底部；材质照样生效，且**不会拦截其他区域的点击**（实测点「全选」、点缩略图、滚列表都正常）。
+- **不要试图用弹层（popup / tips / dialog）在内容区拿材质 —— 它会吞掉整页点击**（同日实测，试过又退回）。官方确实把 `Popup控制` / `Tips控制` / `菜单控制` / `半模态转场` / `PromptAction` 列为「沉浸光感可在全页面生效」的接口，`bindPopup` + `CustomPopupOptions.systemMaterial` 也真能渲染出材质（折射、高光都对）。但**弹层一显示就铺一层全屏遮罩**：点标题栏「全选」、点缩略图、滚动列表全部失效；`autoCancel: false` + `focusable: false` + `levelMode: LevelMode.EMBEDDED`（需 `import { LevelMode } from '@ohos.promptAction'`）都救不回来。
+- **兜底方案**（万一标题栏壳子走不通）：`backgroundColor(glass_bg)`（55% 白/黑）+ `backgroundBlurStyle(BlurStyle.COMPONENT_THICK)`，官方 FAQ 的降级做法。但观感明显不如真材质，只在真材质不可用时用。判断依据看日志：`Material inactive: out of scope. Use component in navigation title bar or Tabbar.`
+- **HDS 的 `HdsNavDestination.titleBar` 拿不到背板材质**：官方原文「可为**标题栏按钮**设置沉浸光感视效」，轻划时整条标题栏会变成全透明（踩过）。所以本项目用 ArkUI 原生 `Navigation` / `NavDestination`，不用 HDS 导航组件。
+- **标题栏要延伸到状态栏**：`EntryAbility` 里 `setWindowLayoutFullScreen(true)`，`applyThemeSystemBars` 把 `statusBarColor` 设成透明；标题 builder 的渐隐层自然铺到最顶，标题文字靠 `Stack` 的底部对齐停在状态栏下方。
+- **`Navigation` 上不要再加 `ignoreLayoutSafeArea(TOP)`**：加完 `NavDestination` 的标题栏会被整个推出可视区，直接消失（2026-11-06 实测）。
+- **`NavDestination` 上不要再加 `bindToScrollable`**：它的语义是「上滑隐藏、下滑显示」标题栏，一滚标题栏就没了。
+- **`enableComponentSafeArea` / `avoidLayoutSafeArea` / `titleBar(...)` / `systemMaterialEffect` 都是 HDS 专有**，ArkUI 的 `NavDestination` 没有这些，别混用。
+- **材质可用性**：`uiMaterial.isImmersiveMaterialSupported()` 为 `true`、`getGlobalMaterialLevel()` 为 `EXQUISITE` 时材质可正常渲染（模拟器与真机均验证过）。判断依据是**胶囊背后有没有被模糊的内容**，不是胶囊的底色。
+- **功耗约束**：不要在大面积容器上用材质，不要与 `backgroundBlurStyle` / `backgroundEffect` 叠加，同一子树只设一次；算力档位交给 `MaterialLevel.ADAPTIVE` 或系统自适应。
+
+## 多选模式
+
+2026-11-06 对照顶行官方图库（`com.huawei.hmos.photos`）逐像素校准过一轮，形态与实现要点如下。
+
+**标题栏**（`MainScreen.SelectTitleRow`）：左叉 40vp 圆形玻璃钮（`sys.symbol.xmark` + `systemMaterial`）→ **左对齐** 22fp 粗体标题「已选择 N 项」（**不要居中**，那是上一版的错误做法）→ 右侧 40vp 高玻璃胶囊「全选 / 取消全选」。外层 `Row` 左右内边距 16vp，与浏览态大标题对齐。
+
+**底部操作栏**（`components/SelectionActionBar.ets`）：悬浮胶囊，图标在上（24fp）、文字在下（10fp），与底部页签的 `TabItem` 尺寸一致；宿主 `MainScreen.TitleBar` 的浮岛层负责 `position` 与 `systemMaterial`。
+
+**位置**：操作栏胶囊 **高 56vp**，`top = screenHeightVp() - navIndicatorVp() - 56`，宽 96vp 水平居中。页签栏是 `barBottomMargin: navIndicatorVp()`、高 56vp —— 两者在屏幕上完全同一矩形（实测都是 `[*,2538][*,2734]`），切换多选态时下沿不会跳。
+
+**页签栏在多选时隐藏**：`.barHeight(this.gallerySelectMode ? 0 : 56)`。实测 `barHeight(0)` 对悬浮样式的页签栏有效，置 0 后 `barFloatingStyle` 的材质与圆角一并消失、操作栏可以占据同一位置；恢复 56 后悬浮样式正常。**这是唯一需要动态改 `barHeight` 的场景**，其他时候不要碰它。
+
+**选中态**：与官方图库一致，**不加遮罩、不加描边**（早期版本用 `primary_soft` 蒙一层淡蓝 + 左上角勾选，都是错的）。勾选圆点 20vp，在单元格 **右下角**、内缩 4vp：选中实心蓝 + 白勾，未选半透明黑 + 1.5vp 白描边。已下载的照片不可选，只在 **右上角** 留一个绿点（`status_connected`，10vp），**不要再给整张缩略图描一圈绿框**。
+
+**日期标题（含整组全选）**：官方图库在多选态的每个日期标题 **右侧** 放一个 20vp 圆形勾选（不是「全选当天」文字胶囊）。三态：未选 = 空心细圈（`text_tertiary` 1.5vp）、部分选中 = 实心蓝 + 白色横线、全选 = 实心蓝 + 白勾；热区用 `responseRegion` 扩到 44vp。点击调 `toggleSelectDate(dateKey)` 整组切换。
+
+**数据流**：选中集在 `GalleryPage`，标题栏在 `MainScreen`，靠一组计数与 `@Monitor` 双向打通：
+
+- 上行：`@Event onSelectionStats(selected, selectable)`，`GalleryPage` 每次增删选中项后调 `syncSelectionStats()`
+- 下行：`@Local selectAllVersion` 递增 → `GalleryPage` 的 `@Monitor('selectAllVersion')` 执行 `toggleSelectAll()`
+- 退出：`@Local exitSelectModeVersion` 递增 → `GalleryPage` 清空选中集
+
+**新增选择入口时别忘调 `syncSelectionStats()`**，否则标题栏数量与全选态不会更新（`toggleSelectAll` / `toggleSelectDate` / 长按进多选 / 单击切换 / 退出 / 下载完成，六处都要）。
 
 ## 页面
 
@@ -291,18 +417,22 @@ devecocli check lint entry/src/main/ets
 导航根与初始化。设置日志路径与下载目录、初始化 `GpsRecorder`、把 `AppLog` 交给 `PtpHost` 与 `ExifGeotagger`、监听深色模式设置并调用 `setColorMode`，最后把 `MainScreen` 作为首个目的地压入 `NavPathStack`。
 
 ### MainScreen.ets
-NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时收集该缩略图的屏幕坐标与 PixelMap 交给 BuilderNode，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。返回键在选择模式下先退出选择模式。
+NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时收集该缩略图的屏幕坐标与 PixelMap 交给 BuilderNode，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。
 
 ### GalleryPage.ets
-- 按拍摄日期分组（`YYYY-MM-DD`，最新在前，没有日期的归入“未知日期”）
-- 格式筛选 chip，按照片里出现过的扩展名动态生成，只在“文件优先”模式下出现
-- 两指缩放网格（0.4x–6.0x），列数随缩放手势与设置里的默认列数重新计算
-- 长按进入多选，`SelectionActionBar` 显示已选数量、全选、取消、下载
-- 缩略图按整行显示：一行（宽度 4）全部解码完成才同时出现，否则该行显示占位
-- `buildFlatItems()` 把日期标题与行拍平成一个数组交给 `Repeat` + `.virtualScroll()`，结果按 `photosVersion`、`thumbnailVersion`、显示模式、筛选值、缩放比例做缓存
+- 网格对齐官方图库：**默认 3 列**（设置里可改 4/5/6）、**贴边无页边距**、间距 2vp、**直角无圆角**、缩略图上**不叠时刻角标**。两指缩放（0.4x–6.0x）时列数随之重算
+- 按拍摄日期分组，标题文案对齐官方：`今天` / `昨天` / `11月6日` / `2025年11月6日`，没有拍摄日期的归入「未知日期」。分组键是 `YYYYMMDD` 原始串，显示文案由 `dateHeaderLabel()` 换算
+- 日期标题：左侧 16fp 粗体、上下各 24vp 留白、左右 16vp；多选态右侧多一个整组勾选圆圈（三态，见「多选模式」）
+- 格式筛选是标题栏右侧的 `Select` 下拉（选项 = 全部 + 照片里出现过的扩展名，只在“文件优先”模式下出现）。**不要**再做成「点一下轮换到下一个格式」的循环按钮 —— 用户猜不到下一下会到哪，设计很差
+- 长按进入多选（或点标题栏的「选择」胶囊）。多选态标题栏左叉 + 左对齐「已选择 N 项」+ 全选胶囊，底部悬浮胶囊操作栏只有「下载」一项。详见「多选模式」
+- 缩略图按整行显示：一行（当前列数）全部解码完成才同时出现，否则该行显示占位
+- `buildFlatItems()` 把日期标题与行拍平成一个数组交给 `Repeat` + `.virtualScroll()`，结果按 `photosVersion`、`thumbnailVersion`、显示模式、筛选值、缩放比例、列数、宽度做缓存
+- 缩略图单元格抽成独立 `@ComponentV2 ThumbImage`，内部调 `svc.thumbForRender(handle)` 建立 V2 依赖（原因见「状态管理」里的两个刷新坑）
+- 末尾有 `FlatItem.tail()` 占位项（104vp），给悬浮页签留滚动空间；`ListItem` 的 `key` 必须保持稳定，把「行是否加载完成」编进 `key` 会让 `virtualScroll` 的复用项失效、整行渲染成空白
+- `List` 用 `.contentStartOffset(this.listTopInset())` 让首行避开 HDS 标题栏，并设 `.clip(false)` + `.cachedCount(6, true)` 让滚动中的照片能穿到标题栏下方被模糊；扫描横幅显示时它自己就在内容顶部，此时 `listTopInset()` 归零（原因见「沉浸光感 > 顶部标题栏」）
 
 ### CameraPage.ets
-未连接时只有一个“搜索相机”按钮；已连接时显示“快速扫描”、“全量扫描”、“断开连接”，以及设备信息卡（品牌、型号、PTP 序列号、固件版本、USB 识别码、USB 序列号、缓存标识、照片数量）。
+未连接时只有一个“搜索相机”按钮；已连接时显示“快速扫描”、“全量扫描”、“断开连接”，以及设备信息卡（品牌、型号、PTP 序列号、固件版本、USB 识别码、USB 序列号、缓存标识、照片数量）。根节点 `Scroll` 用 `.contentStartOffset(TITLE_BAR_HEIGHT)` 避让标题栏。
 
 ### SettingsPage.ets
 深色模式（跟随系统 / 浅色 / 深色）、画廊默认列数、显示模式（内容优先 / 文件优先）、GPS 定位开关、定位模式（精确 31 秒 / 日常 61 秒 / 省电 121 秒）、版本号、缩略图缓存入口、调试日志面板（清除 / 复制，等宽字体，高 300vp）。
@@ -327,9 +457,9 @@ PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
 
 | 组件 | 位置 | 用途 |
 |---|---|---|
-| `PageHeader` | `components/PageHeader.ets` | 二级页统一头部：返回按钮 + 标题 + 副标题 |
-| `SelectionActionBar` | `components/SelectionActionBar.ets` | 多选底部栏：全选、已选数量、取消、下载 |
-| `DownloadProgressBar` | `components/DownloadProgressBar.ets` | 下载进度条：阶段、当前文件、进度百分比、错误数、取消 |
+| `PageHeader` | `components/PageHeader.ets` | 二级页头部：返回键 + 主/副标题（自己避让状态栏） |
+| `SelectionActionBar` | `components/SelectionActionBar.ets` | 多选底部操作栏：悬浮胶囊 + 图标在上文字在下的「下载」项。**自身不设背景**，材质由 `MainScreen.TitleBar` 的浮岛层提供 |
+| `DownloadProgressBar` | `components/DownloadProgressBar.ets` | 下载进度浮岛：**竖条**（60vp 宽）贴握持手一侧，**环心显示「第几张/共几张」**（百分比看弧长就够；**≥1000 张时自动拆成两行**；完成态是**同一个环满格 + 环心换成一个品牌蓝的勾**，不要换成绿色实心圆盘）+ 环下状态词 + 取消圆钮；不显文件名。**自身不设背景**，材质由 `MainScreen.TitleBar` 的浮岛层提供 |
 
 ## 服务
 
@@ -355,8 +485,17 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 ### GpsRecorder（`services/GpsRecorder.ets`）
 连续定位记录。三种模式（精确 31 秒 / 日常 61 秒 / 省电 121 秒）对应 `TRANSPORT` 与 `DAILY_LIFE_SERVICE` 场景。启动时申请位置权限与后台长时任务（`backgroundMode: location`）。记录写入 `gps_records.json`，模式与运行状态写入 `gps_settings.json`，下次启动由 `autoStart()` 恢复。`findClosest(captureDate)` 用二分查找找时间最接近的记录，默认容忍 30 分钟。
 
-### ExifGeotagger（`services/ExifGeotagger.ets`）
-用 `modifyImagePropertiesEnhanced` 一次性写入 `GPSLatitudeRef`、`GPSLatitude`、`GPSLongitudeRef`、`GPSLongitude`（有海拔时还有 `GPSAltitudeRef`、`GPSAltitude`），写完读回验证。经纬度写成逗号分隔的度分秒，例如 `43,49,23.16`；官方把这两个字段定义为三个 RATIONAL 值，典型写法是 `dd/1,mm/1,ss/1`，改动格式之前先在真机确认读回结果。
+### HandednessService（`services/HandednessService.ets`）
+握持手感知，决定下载进度浮岛贴左还是贴右。`@ObservedV2` 单例，只暴露一个 `leftHanded` 布尔（默认 `false`，即右侧）。
+
+- 订阅 `motion.on('holdingHandChanged')`（`@kit.MultimodalAwarenessKit`），`LEFT_HAND_HELD` 切左、`RIGHT_HAND_HELD` 切右；`BOTH_HANDS_HELD` / `NOT_HELD` / `UNKNOWN_STATUS` **一律保持原位**，否则手机放桌上或换手途中浮岛会来回跳
+- 由 `MainScreen.aboutToAppear` 启、`aboutToDisappear` 停
+- 权限 `ohos.permission.DETECT_GESTURE`（normal / system_grant，声明即授予，不弹窗）
+- 机型支持面窄：握持手识别自 API 20 起提供，只有系统设置里带「智感握姿」开关的机型可用，否则订阅抛 **801**。本项目全部走「失败即保持默认右侧」
+- **模拟器一定返回 801**（`subscribe failed code=801`），只能验降级路径；握持切换必须真机验证
+- 浮岛距屏幕边固定 12vp，不能更贴：官方写明「屏幕四周边缘 8mm 范围内不支持触控响应」，再贴边取消按钮会点不动
+
+### ExifGeotagger（`services/ExifGeotagger.ets`）用 `modifyImagePropertiesEnhanced` 一次性写入 `GPSLatitudeRef`、`GPSLatitude`、`GPSLongitudeRef`、`GPSLongitude`（有海拔时还有 `GPSAltitudeRef`、`GPSAltitude`），写完读回验证。经纬度写成逗号分隔的度分秒，例如 `43,49,23.16`；官方把这两个字段定义为三个 RATIONAL 值，典型写法是 `dd/1,mm/1,ss/1`，改动格式之前先在真机确认读回结果。
 
 ## 缩略图缓存与快速扫描
 
@@ -514,6 +653,32 @@ interface PhotoEntry {
 ### `deploy.sh run` 不会重新构建
 `bash deploy.sh run` 只做签名、安装、启动。代码有改动时用 `bash deploy.sh full`，否则安装的还是旧 HAP。这个坑已经造成过多次“bug 没有修复”的误判。
 
+### 只截应用窗口（不含系统浮层）
+
+`hdc shell snapshot_display` 和 `uitest screenCap` 都只能截**整屏**，会把其它应用的悬浮窗（视频通话、录屏控件等）一起截进来。应用侧 `window.Window.snapshot()` 只渲染本应用窗口，调试包已内置触发器（`utils/WindowShot.ets` + `EntryAbility.onNewWant`）：
+
+```bash
+HDC=.../hdc; T=<设备>
+$HDC -t $T shell "aa start -a EntryAbility -b io.github.shaoyuanyu.strollandshoot --ps shot gallery"
+$HDC -t $T shell "ls -t /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/entry/files/*.jpg" | head -1
+$HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
+```
+
+- `--ps shot <label>` 的 `label` 只用于文件名后缀，便于区分场景
+- 走的是 singleton 的 `onNewWant`，**不会重启应用、不改变当前页面**，所以在任何页面任何时刻都能截；已验证画廊/设置两页分别触发
+- 应用没在运行时 `aa start` 走 `onCreate`，不会回调 `onNewWant` → 不截图（冷启动截到的是启动画面，没意义）
+- 仅 debug 包生效（`MockPtpDevice.isDebugBuild()` 判断），release 包里不执行
+- 截图落在应用沙箱 `filesDir`，命名 `shot_<label>_<时间戳>.jpg`
+- 只有 `want.parameters.shot` 存在时才触发，正常启动不受影响
+- 图里不含状态栏与系统手势条，判断应用内布局用它、判断沉浸/状态栏效果仍要用整屏截图
+- **阅后即焚（强制规则）**：这些 jpg 没有任何自动清理机制。`file recv` 取回后**必须立刻删除**设备上的文件，取图与删除写进同一条命令，不要分两步、更不要留到"以后清理"：
+
+  ```bash
+  $HDC -t $T file recv <path> /tmp/app_shot.jpg && $HDC -t $T shell rm -f <path>
+  ```
+
+  验收收尾时用 `ls .../files/shot_*.jpg` 确认没有残留；有残留就当场删掉。不打算删就不要截。
+
 ### 构建缓存会造成假象
 改动回退之后直接重新构建，hvigor 可能复用旧的构建产物，看起来像是回退没有生效。回退代码之后先清理：Linux 用 `hvigorw clean --no-daemon`，macOS 用 `devecocli build clean`。
 
@@ -533,20 +698,46 @@ hdc list targets
 /Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains/hdc list targets
 ```
 
+手机改走无线调试后不受插拔影响，部署与查日志都不再依赖 USB 线的接触，见「无线调试（Wi-Fi）」。
+
 ### 统计计数器要与条件分支同步
 `statsPartialSkips` 曾经声明了、也用在统计公式里，但没有任何地方递增，导致 USB 调用次数统计翻倍。新增计数变量后，检查每个对应的条件分支是否都做了递增。
+
+**同类型坑（2026-11-06，真机反馈“很多缩略图无法显示”）**：`loadThumbnailsRowByRow()` 里原来只有一个 `hasNewLoads` 标志、仅在走 USB 的分支置位，`if (hasNewLoads) thumbnailVersion++`。命中磁盘缓存的行（`loadCachedThumbnail`）不置位，于是**整轮扫描一次都不递增**——扫描结束前就已挂载的缩略图单元格（比如扫描中切到画廊）永远停在占位符，只有重新进出画廊才会刷新。现改为「本行只要有加载动作（`rowPromises.length > 0`）就递增」。另外 `thumbnailLoadedSet` 与 `thumbnailPixelMapMap` 必须同时命中才算“已有图”，否则会出现标记已加载但实际没图、被永久跳过。
 
 ### 涉及相机与 USB 的改动要在真机上确认
 流程：构建 → 部署 → 告诉用户改了什么 → 用户把手机从电脑拔开、接上相机测试 → 用户反馈结果 → 用户把手机接回电脑 → 查看 hilog。手势与相机相关功能在没有真机确认之前，不要当成已经可用。
 
-### 查 HarmonyOS 官方资料
-需要 API 参考、开发指南、系统接口，或者要核对项目里积累的技术结论时，优先用本地 `developercomm` 知识库 MCP：
+### 查 HarmonyOS 官方资料（强制前置步骤）
 
-- `mcp_developercomm_searchDocuments` — 用自然语言检索官方知识库（API 参考、开发指南、最佳实践、FAQ、版本说明）
-- `mcp_developercomm_getDocumentsById` — 用搜索结果的 `parent` 字段（文档 ID）取完整内容，一次最多 10 篇
-- 返回内容过长会被截断（标记 `[truncated]`），改用更精确的关键词分多次检索
-- 备用渠道：`devecocli docs`（`catalog` / `search` / `read`）提供同一份离线文档，输出完整 markdown 且不截断
-- 本机 SDK 的类型声明：Linux 在 `~/.hmos/command-line-tools/sdk/default/openharmony/ets/api/`，macOS 在 `/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/api/`。接口名、参数类型与起始版本以那里的 `.d.ts` 为准
+凡是涉及 HarmonyOS / ArkTS / ArkUI 的 **API 用法、参数含义、起始版本、设计规范、最佳实践、版本行为差异**，一律**先查知识库，再动手写代码**。不要凭记忆回答，也不要只翻本地 `.d.ts` 就下结论——`.d.ts` 只看得到签名，看不到"什么条件下才生效"。
+
+HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp_kms_-__`）：
+
+| 工具 | 用途 |
+|---|---|
+| `mcp_kms_-__searchDocuments` | 自然语言检索官方知识库（API 参考、开发指南、设计规范、最佳实践、FAQ、版本说明）。入参 `query`，可选 `topK` |
+| `mcp_kms_-__getDocumentsById` | 用搜索结果里的 `parent` 字段（文档 ID）取正文，一次最多 10 篇 |
+
+- `parent` 前缀说明来源：`alliance/document/cn/harmonyos-guides/…` 是开发指南，`alliance/document/cn/harmonyos-references/…` 是 API 参考，`alliance/document/cn/design-guides/…` 是设计规范
+- 返回内容过长会被截断，改用更精确的关键词分多次检索；或先 `getDocumentsById` 落盘再读全文
+- 检索词尽量用文档里会出现的中文原词，命中率明显更高：
+
+| 想问什么 | 检索词 |
+|---|---|
+| 某视觉效果有没有官方实现 | `沉浸光感 设计规范 开发指南`、`HDS 组件 材质` |
+| 某组件怎么用 | `HdsTabs 使用指南`、`HdsNavigation TitleBarStyleOptions` |
+| 某接口从哪个版本开始有 | `<接口名> 起始版本` |
+| 效果写了但看不到 | `<能力名> FAQ`、`生效范围` |
+| 性能/功耗约束 | `<能力名> 功耗优化`、`约束与限制` |
+
+**为什么这一步不能省（本项目真实踩坑）**：做沉浸光感 UI 时只查了本地 SDK 的 `@ohos.arkui.uiMaterial.d.ts`，看到 `@since 26.0.0` 就判定“项目 targetSdk 23 用不了”，转而用 `backgroundBlurStyle` 手搓毛玻璃。而知识库的《HDS 组件沉浸光感》明确写着 **UI Design Kit 的 `HdsNavigation` / `HdsTabs` 自 6.1.0(23) 起就支持 `systemMaterialEffect`**。根因是：SDK 的 OpenHarmony 目录只覆盖 ArkUI 那部分，HMS 侧的 `@kit.UIDesignKit` 在 `sdk/default/hms/ets/kits/`，翻一个目录就漏了。
+
+备用渠道与补充材料：
+
+- `devecocli docs`（`catalog` / `search` / `read`）——离线文档目录、全文检索、读完整 markdown（不截断）
+- 本机 SDK 类型声明：OpenHarmony 侧 `…/sdk/default/openharmony/ets/api/`（Linux 为 `~/.hmos/command-line-tools/sdk/default/openharmony/ets/api/`），HMS 侧 `…/sdk/default/hms/ets/kits/`
+- 两者的分工：`.d.ts` 确认签名、参数类型、`@since`；**"生效范围、前置条件、算力档位、和别的属性冲突"必须回知识库确认**，这类信息不在类型声明里
 
 ### 已经对照官方资料核对过的结论
 
@@ -556,6 +747,13 @@ hdc list targets
 - EXIF Orientation：官方 FAQ 给出 8 个取值与字符串表示的对应关系（1 = `Top-left`，……，8 = `Left-bottom`），读取时返回字符串，未写入该字段的图片按不旋转处理
 - GPS 经纬度：官方把 `GPSLatitude` / `GPSLongitude` 定义为三个 RATIONAL 值（度、分、秒），典型写法是 `dd/1,mm/1,ss/1`；本项目写入的是逗号分隔的度分秒（如 `43,49,23.16`），写完读回验证
 - 图片编码默认不保留 EXIF：`PackingOption.needsPackProperties` 默认 false。缩略图缓存里保存的编码结果因此没有 EXIF，方向信息另外记在 manifest 里
+- 沉浸光感有两条技术路线，版本门槛不同：
+  - **ArkUI 侧**：`uiMaterial.ImmersiveMaterial` + 通用属性 `systemMaterial()`，`@since 26.0.0`，且要求 **targetSdkVersion ≥ 26.0.0** 才生效。本项目 targetSdk 与 compatibleSdk 都是 26.0.0，可直接使用，无需版本保护
+  - **UI Design Kit 侧**：`HdsNavigation` 的 `TitleBarStyleOptions.systemMaterialEffect`、`HdsTabs` 的 `HdsTabsFloatingStyle.systemMaterialEffect`，**自 6.1.0(23) 起支持**，无需版本保护
+- 沉浸光感的生效范围有限制：除弹窗类组件与 `Slider`/`Toggle`/`Select` 外，其他组件的材质**只在 Navigation/NavDestination 标题栏，或横向 Tabs 且 `barPosition: End` 的底部 TabBar 里生效**；写在页面内容区不生效
+- 标题栏材质走 **UI Design Kit** 的 `HdsNavDestination.titleBar({ style: { systemMaterialEffect } })`，`@since 6.1.0(23)`，不需要版本保护；ArkUI 原生 `Navigation` 的 `NavigationTitleOptions.systemMaterial` 只落在返回键/menu 背板上，拿不到整条标题栏，所以最终没有用它
+- 材质与属性会打架：设了材质就要把 `backgroundColor` 设为 `Color.Transparent`（不透明背景会盖住材质），且**不要再叠加 `backgroundBlurStyle` / `backgroundEffect`**，否则重复模糊、功耗翻倍。同一子树只在外层设一次材质，避免嵌套
+- 材质效果随设备算力档位自适应：`hdsMaterial.MaterialLevel.ADAPTIVE` 交给系统决定；若自己指定，要先 `hdsMaterial.getSystemMaterialTypes()` 判断设备是否支持 `IMMERSIVE`，不支持则退回 `SMOOTH`
 
 ## DevEco CLI（`devecocli`）
 
@@ -631,7 +829,7 @@ $HDC -t 127.0.0.1:5555 shell snapshot_display -f /data/local/tmp/s.jpeg
 $HDC -t 127.0.0.1:5555 file recv /data/local/tmp/s.jpeg /tmp/s.jpeg
 ```
 
-能验证：布局、V2 状态管理、导航与转场、设置持久化、深色模式、空态与错误分支、崩溃排查。不能验证：USB PTP（模拟器无 USB 主机，`搜索相机` 必然搜不到）、相机通信、EXIF 方向与 GPS 写入、保存到系统相册、真实性能与手势手感。
+能验证：布局、V2 状态管理、导航与转场、设置持久化、深色模式、空态与错误分支、崩溃排查、**沉浸光感材质**（悬浮页签的磨砂/折射在模拟器上与真机一致）。不能验证：USB PTP（模拟器无 USB 主机，`搜索相机` 必然搜不到）、相机通信、EXIF 方向与 GPS 写入、保存到系统相册、真实性能与手势手感。
 
 ### 需要设备、登录或尚未验证
 
@@ -640,7 +838,7 @@ $HDC -t 127.0.0.1:5555 file recv /data/local/tmp/s.jpeg /tmp/s.jpeg
 - `signature generate`（生成签名材料，需先 `devecocli auth login` 且连接设备）
 - `check compat`（两个 SDK 版本之间的破坏性变更扫描）、`update`（更新 CLI 自身）
 
-签名与安装仍走 `deploy.sh`（仅 Linux），`devecocli` 只用来构建、静态检查、模拟器与查文档。macOS 上构建产物是 AgentDebug 签名的 HAP，能装模拟器的只有 unsigned 那个；真机安装未验证。
+签名与安装仍走 `deploy.sh`（仅 Linux），`devecocli` 只用来构建、静态检查、模拟器与查文档。macOS 上构建产物是 AgentDebug 签名的 HAP，能装模拟器的只有 unsigned 那个；真机走无线调试装 signed 包，已验证。
 
 ## 版本管理
 

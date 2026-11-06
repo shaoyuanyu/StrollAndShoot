@@ -11,6 +11,12 @@
     "installationFree": false,
     "pages": "$profile:main_pages",
     "routerMap": "$profile:route_map",
+    "metadata": [
+      {
+        "name": "ohos.arkui.UIMaterial.state",
+        "value": "enable"
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",
@@ -56,6 +62,14 @@
       {
         "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
         "reason": "$string:location_permission_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.DETECT_GESTURE",
+        "reason": "$string:gesture_permission_reason",
         "usedScene": {
           "abilities": ["EntryAbility"],
           "when": "inuse"

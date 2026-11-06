@@ -32,13 +32,15 @@ export class WindowUtils {
 
   /**
    * Paint the status/navigation bars for the given theme.
-   * Colours match `start_window_background`, i.e. the window backdrop the
-   * pages are drawn on, so the bars blend into the page.
+   * Colours match the window backdrop the pages are drawn on, so the bars blend
+   * into the page.
    */
   public static applyThemeSystemBars(dark: boolean): void {
     const w = WindowUtils.window;
     if (!w) return;
-    const bg = dark ? '#FF000000' : '#FFFFFFFF';
+    // 窗口是全屏布局（内容延伸到状态栏下方），状态栏透明，
+    // 状态栏区域的背板由页面的 HDS 标题栏材质提供
+    const bg = '#00000000';
     const fg = dark ? '#FFFFFF' : '#000000';
     w.setWindowSystemBarProperties({
       statusBarColor: bg,

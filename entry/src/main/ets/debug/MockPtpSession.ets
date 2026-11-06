@@ -69,7 +69,9 @@ export class MockPtpSession implements PtpTransport {
 
   async getObject(handle: number): Promise<Uint8Array | null> {
     if (!this.open) return null;
-    await delay(120);
+    // 真实 USB 上单张原图要几百毫秒。这里同样放慢到 520ms，
+    // 否则 38 张几秒钟就传完，底部/侧边进度浮岛的各种状态根本来不及看。
+    await delay(520);
     return MockPtpDevice.fullJpeg(handle);
   }
 

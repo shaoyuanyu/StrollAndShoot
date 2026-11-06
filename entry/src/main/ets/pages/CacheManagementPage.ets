@@ -4,9 +4,9 @@
  * Settings sub-page showing all cameras that have been connected,
  * their thumbnail cache sizes, and per-camera caching toggles.
  */
+import { PageHeader } from '../components/PageHeader';
 import { CameraCachePrefs, type CameraCachePref } from '../services/CameraCachePrefs';
 import { ThumbnailCache, type CacheInfo } from '../services/ThumbnailCache';
-import { PageHeader } from '../components/PageHeader';
 
 @Builder
 export function CacheManagementPageBuilder() {
@@ -124,7 +124,6 @@ export struct CacheManagementPage {
   build() {
     NavDestination() {
       Column() {
-        // Header
         PageHeader({
           title: '缓存管理',
           subtitle: `共 ${this.formatSize(this.totalCacheSize)}`,

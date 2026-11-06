@@ -143,6 +143,10 @@
     {
       "name": "location_permission_reason",
       "value": "用于记录拍照位置，为照片添加地理标记"
+    },
+    {
+      "name": "gesture_permission_reason",
+      "value": "用于识别握持手，让下载进度浮岛跟随到拇指易触及的一侧"
     }
   ]
 }

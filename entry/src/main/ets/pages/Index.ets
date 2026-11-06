@@ -102,5 +102,7 @@ struct Index {
         };
         return customAnimation;
       })
+      // 注意：ArkUI Navigation 不要再加 ignoreLayoutSafeArea(TOP)
+      // 会把 NavDestination 的标题栏整个推出可视区（实测标题栏直接消失）
   }
 }

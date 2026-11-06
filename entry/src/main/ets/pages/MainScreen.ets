@@ -1,15 +1,23 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
+import { uiMaterial } from '@kit.ArkUI';
+
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { ExifGeotagger } from '../services/ExifGeotagger';
+import { HandednessService } from '../services/HandednessService';
 import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
+import { DownloadProgressBar } from '../components/DownloadProgressBar';
+import { SelectionActionBar } from '../components/SelectionActionBar';
 import type { DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
 import { SettingsStore } from '../model/SettingsStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
+import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { WindowUtils } from '../utils/WindowUtils';
+import { getExt } from '../utils/PhotoGroupUtil';
 import { createMyNode, getMyNode } from '../NodeContainer/CustomComponent';
 import type { MyNodeController } from '../NodeContainer/CustomComponent';
 
@@ -34,54 +42,326 @@ export struct MainScreen {
   @Local gpsMode: number = 2;
   @Local settings: SettingsStore = SettingsStore.getInstance();
   @Local gallerySelectMode: boolean = false;
+  @Local galleryFilter: string = '';
   @Local exitSelectModeVersion: number = 0;
+  @Local toggleSelectVersion: number = 0;
+  /** 多选态：已选数量与可选项总数，由 GalleryPage 上报。 */
+  @Local gallerySelectedCount: number = 0;
+  @Local gallerySelectableCount: number = 0;
+  /** 点标题栏「全选 / 取消全选」时递增，GalleryPage 监听后执行。 */
+  @Local selectAllVersion: number = 0;
+  /** 点底部操作栏「下载」时递增，GalleryPage 监听后执行。 */
+  @Local downloadVersion: number = 0;
+  @Local handedness: HandednessService = HandednessService.getInstance();
 
-  @Monitor('svc.photosVersion')
-  onPhotosChanged(): void {
-    this.syncDownloadedKeys();
-  }
-
-  @Monitor('svc.cachingDialogRequired')
-  onCachingDialogRequired(): void {
-    if (!this.svc.cachingDialogRequired) return;
-    const camId = this.svc.pendingCamIdForDialog;
-    const camName = this.svc.pendingCamNameForDialog;
-    if (!camId) return;
-    this.getUIContext().showAlertDialog({
-      title: '发现新相机',
-      message: `检测到新相机「${camName}」，是否启用缩略图缓存？\n\n启用后下次连接时将直接从本地加载缩略图，大幅提升加载速度。`,
-      autoCancel: false,
-      primaryButton: {
-        value: '不缓存',
-        action: () => {
-          this.svc.setCachingPreference(camId, false);
-        }
-      },
-      secondaryButton: {
-        value: '启用缓存',
-        fontColor: $r('app.color.primary'),
-        action: () => {
-          this.svc.setCachingPreference(camId, true);
-        }
-      }
+  /**
+   * 浮岛材质。真·沉浸光感只能用在 Navigation 标题栏里，所以浮岛虽然画在
+   * 屏幕中部 / 底部，本体必须挂在 TitleBar 的 builder 下（见 TitleBar 的浮岛层）。
+   */
+  private readonly floatMaterial: uiMaterial.ImmersiveMaterial =
+    new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.REGULAR,
+      interactive: true
     });
-  }
+
+  /** 三个标签页的滚动容器，绑给 NavDestination 驱动标题栏动态显隐。 */
+  private galleryScroller: Scroller = new Scroller();
+  private cameraScroller: Scroller = new Scroller();
+  private settingsScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
-    // Initialize the global BuilderNode for shared element transitions
-    createMyNode(this.getUIContext());
-
-    // Subscribe to GPS state changes
-    this.gpsRecorder.onChange = () => { this.syncGpsState(); };
-    this.syncGpsState();
-    // Subscribe to download state
-    this.syncDownloadedKeys();
+    // 智感握姿：订阅握持手，下载浮岛贴到拇指易触及的一侧。
+    // 机型不支持时服务内部会静默降级为固定右侧。
+    HandednessService.getInstance().start();
   }
 
-  onPageShow(): void {
-    this.gpsRecorder.onChange = () => { this.syncGpsState(); };
-    this.syncGpsState();
-    this.syncDownloadedKeys();
+  aboutToDisappear(): void {
+    HandednessService.getInstance().stop();
+  }
+
+  private tabTitle(): string {
+    if (this.currentTab === 0) return '画廊';
+    if (this.currentTab === 1) return '相机';
+    return '设置';
+  }
+
+  /** 多选态标题文字：官方图库是「已选择 N 项」，左对齐跟在关闭钮后面。 */
+  private selectTitleText(): string {
+    return `已选择 ${this.gallerySelectedCount} 项`;
+  }
+
+  private allSelected(): boolean {
+    return this.gallerySelectableCount > 0 &&
+      this.gallerySelectedCount >= this.gallerySelectableCount;
+  }
+
+  /** 退出多选：通知画廊页清空选中集。 */
+  private exitSelectMode(): void {
+    this.exitSelectModeVersion++;
+    this.gallerySelectMode = false;
+  }
+
+  private screenHeightVp(): number {
+    const px = WindowUtils.windowHeightPx;
+    return px > 0 ? px2vp(px) : 800;
+  }
+
+  private screenWidthVp(): number {
+    const px = WindowUtils.windowWidthPx;
+    return px > 0 ? px2vp(px) : 392;
+  }
+
+  private navIndicatorVp(): number {
+    const px = WindowUtils.navigationIndicatorHeightPx;
+    return px > 0 ? px2vp(px) : 0;
+  }
+
+  /** 照片里出现过的格式，'' 表示“全部”。 */
+  private formatList(): string[] {
+    const out: string[] = [''];
+    const seen = new Set<string>();
+    for (const p of this.svc.photos) {
+      const ext = getExt(p.filename);
+      if (ext !== '' && !seen.has(ext)) {
+        seen.add(ext);
+        out.push(ext);
+      }
+    }
+    // 当前筛选值必须留在列表里：重新扫描后如果这种格式消失了，
+    // 下拉的选中态和按钮文字才不会对不上（还能手动切回「全部」）。
+    if (this.galleryFilter !== '' && !seen.has(this.galleryFilter)) {
+      out.push(this.galleryFilter);
+    }
+    return out;
+  }
+
+  private filterLabel(): string {
+    return this.galleryFilter === '' ? '全部' : this.galleryFilter;
+  }
+
+  /** 下拉筛选项：第 0 项永远是「全部」，后面按照片里出现过的格式排列。 */
+  private filterOptions(): SelectOption[] {
+    const out: SelectOption[] = [];
+    const list = this.formatList();
+    for (const ext of list) {
+      out.push({ value: ext === '' ? '全部' : ext });
+    }
+    return out;
+  }
+
+  private filterSelectedIndex(): number {
+    const idx = this.formatList().indexOf(this.galleryFilter);
+    return idx < 0 ? 0 : idx;
+  }
+
+  private applyFilterIndex(index: number): void {
+    const list = this.formatList();
+    if (index >= 0 && index < list.length) {
+      this.galleryFilter = list[index];
+    }
+  }
+
+  /**
+   * 标题栏。
+   *
+   * 官方《沉浸光感》：「Navigation 标题栏支持通过 NavigationTitleOptions 中的
+   * systemMaterial 字段设置沉浸光感效果」，且「组件开启沉浸光感的生效范围为
+   * Navigation/NavDestination 标题栏」。因此背板材质必须由标题栏内的容器自己
+   * 承载 —— 这里给整条 Row 设 systemMaterial，材质才会铺满整条标题栏（含状态栏）。
+   */
+  @Builder
+  TitleBar() {
+    Stack({ alignContent: Alignment.Top }) {
+      // 压色：铺满整条标题栏（含标题下方 TITLE_FADE_EXTRA 的余量），平滑衰减到 0。
+      // 磨砂不在这里做——backdropBlur 的边界是硬的，会留下一条泾渭分明的线；
+      // 改用内容区的 linearGradientBlur（见下面的 Tabs）。
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [$r('app.color.nav_bg'), 0.0],
+            [$r('app.color.nav_bg'), 0.20],
+            [$r('app.color.nav_bg_mid'), 0.50],
+            [$r('app.color.nav_bg_weak'), 0.78],
+            [$r('app.color.bg_page_fade'), 1.0]
+          ]
+        })
+
+      Column() {
+        // 标题停在状态栏下方（渐隐区顶部），衰减在标题下方继续
+        Blank().height(titleBarInsetVp() - TITLE_BAR_HEIGHT)
+
+        if (this.currentTab === 0 && this.gallerySelectMode) {
+          this.SelectTitleRow()
+        } else {
+          this.NormalTitleRow()
+        }
+      }
+      .width('100%')
+
+      // 浮岛层。
+      //
+      // 真·沉浸光感只在 Navigation/NavDestination 标题栏（或底部 TabBar）里生效，
+      // 弹层虽然也能拿到材质，但会铺一层遮罩把整页点击吞掉（实测过，行不通）。
+      // 折中的办法是把浮岛挂在这个标题栏 builder 里，再用 position 画到屏幕中部 /
+      // 底部 —— 组件树的归属还在标题栏内，材质就还是真的。
+      // position 的原点是标题栏顶部（也是屏幕顶部，因为 windowLayoutFullScreen），
+      // 所以这里可以直接用屏幕绝对坐标。
+      if (this.currentTab === 0) {
+        if (this.downloadProgress !== null && this.downloadProgress.phase !== 'idle') {
+          // 自定义组件不能直接链式挂通用属性，包一层 Column 承载 position / 材质
+          Column() {
+            DownloadProgressBar({
+              progress: this.downloadProgress,
+              onCancel: () => {
+                this.svc.cancelDownload();
+                this.downloadProgress = null;
+                this.syncDownloadedKeys();
+              }
+            })
+          }
+          .borderRadius(30)
+          .position({
+            top: this.screenHeightVp() * 0.5 - 63,
+            left: this.handedness.leftHanded ? 12 : undefined,
+            right: this.handedness.leftHanded ? undefined : 12
+          })
+          .systemMaterial(this.floatMaterial)
+          .animation({ duration: 220, curve: Curve.EaseOut })
+        } else if (this.gallerySelectMode) {
+          Column() {
+            SelectionActionBar({
+              selectedCount: this.gallerySelectedCount,
+              onDownload: () => { this.downloadVersion++; }
+            })
+          }
+          .width(96)
+          .height(56)
+          .borderRadius(28)
+          .position({
+            // 与底部页签完全同一基线：高 56vp，底边贴着导航手势条避让区
+            top: this.screenHeightVp() - this.navIndicatorVp() - 56,
+            left: (this.screenWidthVp() - 96) / 2
+          })
+          .systemMaterial(this.floatMaterial)
+        }
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /**
+   * 多选态标题栏：左叉 + 左对齐的「已选择 N 项」+ 右侧全选胶囊。
+   *
+   * 对齐官方图库（也是官方 EditableTitleBar 的形态：左叉右操作，标题左对齐），
+   * 不要做成居中标题 —— 大标题体系里居中会跟浏览态完全断开。
+   */
+  @Builder
+  SelectTitleRow() {
+    Row({ space: 8 }) {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph($r('sys.symbol.xmark'))
+          .fontSize(18)
+          .fontColor([$r('app.color.text_primary')])
+      }
+      .width(40)
+      .height(40)
+      .backgroundColor(Color.Transparent)
+      .accessibilityText('退出选择')
+      .systemMaterial(new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+        interactive: true
+      }))
+      .onClick(() => { this.exitSelectMode(); })
+
+      Text(this.selectTitleText())
+        .fontSize(22)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+
+      Button() {
+        Text(this.allSelected() ? '取消全选' : '全选')
+          .fontSize(15)
+          .fontColor($r('app.color.text_primary'))
+      }
+      .height(40)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(Color.Transparent)
+      .borderRadius(20)
+      .accessibilityText(this.allSelected() ? '取消全选' : '全选')
+      .systemMaterial(new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+        interactive: true
+      }))
+      .onClick(() => { this.selectAllVersion++; })
+    }
+    .width('100%')
+    .height(TITLE_BAR_HEIGHT)
+    .padding({ left: 16, right: 16 })
+  }
+
+  /** 浏览态标题栏：大标题 + 右侧浮动玻璃胶囊。 */
+  @Builder
+  NormalTitleRow() {
+    Row() {
+      Text(this.tabTitle())
+        .fontSize(28)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .layoutWeight(1)
+
+      if (this.currentTab === 0 && this.svc.photos.length > 0) {
+        if (this.settings.displayMode === 'file_first') {
+          // 格式筛选用 Select（官方选择类控件）：点开是带勾选态的下拉菜单。
+          // 以前是「点一下换下一个格式」的循环按钮，用户根本猜不到下一下会到哪。
+          Select(this.filterOptions())
+            .selected(this.filterSelectedIndex())
+            .value(this.filterLabel())
+            .font({ size: 15, weight: FontWeight.Medium })
+            .fontColor($r('app.color.text_primary'))
+            .selectedOptionFont({ size: 15, weight: FontWeight.Medium })
+            .selectedOptionFontColor($r('app.color.primary'))
+            .optionFont({ size: 15 })
+            .optionFontColor($r('app.color.text_primary'))
+            .height(40)
+            .borderRadius(20)
+            .backgroundColor(Color.Transparent)
+            .margin({ right: 8 })
+            .accessibilityText('格式筛选，当前' + this.filterLabel())
+            .systemMaterial(new uiMaterial.ImmersiveMaterial({
+              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+              interactive: true
+            }))
+            .onSelect((index: number) => { this.applyFilterIndex(index); })
+        }
+        Button() {
+          Text('选择')
+            .fontSize(15)
+            .fontColor($r('app.color.text_primary'))
+        }
+        .height(40)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor(Color.Transparent)
+        .borderRadius(20)
+        .accessibilityText('选择照片')
+        .systemMaterial(new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+          interactive: true
+        }))
+        .onClick(() => { this.toggleSelectVersion++; })
+      }
+    }
+    .width('100%')
+    .height(TITLE_BAR_HEIGHT)
+    .padding({ left: 16, right: 16 })
+    .alignItems(VerticalAlign.Center)
   }
 
   syncDownloadedKeys(): void {
@@ -139,8 +419,17 @@ export struct MainScreen {
             downloadedKeys: this.downloadedKeys,
             galleryColumnCount: this.settings.galleryColumnCount,
             displayMode: this.settings.displayMode,
+            filterValue: this.galleryFilter,
+            scroller: this.galleryScroller,
             onSelectModeChange: (v: boolean) => { this.gallerySelectMode = v; },
+            onSelectionStats: (selected: number, selectable: number) => {
+              this.gallerySelectedCount = selected;
+              this.gallerySelectableCount = selectable;
+            },
             exitSelectModeVersion: this.exitSelectModeVersion,
+            toggleSelectVersion: this.toggleSelectVersion,
+            selectAllVersion: this.selectAllVersion,
+            downloadVersion: this.downloadVersion,
             onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {
               const handle = _displayGroups[index].displayPhoto.handle;
               // Build handles array from visual order
@@ -270,6 +559,7 @@ export struct MainScreen {
 
         TabContent() {
           CameraPage({
+            scroller: this.cameraScroller,
             onScan: (quick: boolean) => { this.svc.scanForCamera(quick); },
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
           })
@@ -278,6 +568,7 @@ export struct MainScreen {
 
         TabContent() {
           SettingsPage({
+            scroller: this.settingsScroller,
             logText: this.logText,
             gpsRunning: this.gpsRunning,
             gpsRecordCount: this.gpsRecordCount,
@@ -298,24 +589,49 @@ export struct MainScreen {
         }
         .tabBar(this.TabItem('设置', $r('sys.symbol.gearshape'), 2))
       }
-      .barHeight(64)
-      .barMode(BarMode.Fixed)
-      .barBackgroundColor($r('app.color.tab_bar_bg'))
-      .barBackgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      .barOverlap(true)
+      .barFloatingStyle({
+        // 底边距要自己把导航手势条的高度加进来：窗口是全屏布局，Tabs 不会
+        // 自动避让。官方图库的悬浮栏就压在手势条避让区的上沿，多选操作栏用
+        // 同一个公式定位，两者才能严丝合缝地叠在同一位置。
+        barBottomMargin: this.navIndicatorVp(),
+        maskColor: Color.Transparent,
+        // 官方沉浸材质：接管胶囊的背景、模糊与折射（模拟器与真机均生效）
+        systemMaterial: new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.REGULAR,
+          interactive: true
+        })
+      })
+
       .animationDuration(220)
-      .scrollable(false)
+      // 多选时页签栏让位给底部操作栏：高度置 0，操作栏占据同一位置。
+      // 非多选态恢复系统默认高度，悬浮样式（barFloatingStyle 的材质与圆角）不受影响。
+      .barHeight(this.gallerySelectMode ? 0 : 56)
       .onChange((idx: number) => {
         this.currentTab = idx;
         if (idx === 2) { this.logText = this.svc.getLog().getText(); }
       })
       .width('100%').height('100%')
+      // 不裁剪超界子组件，页面里的列表才能穿透到标题栏下方
+      .clip(false)
+      // 内容区的渐进磨砂：模糊强度从顶部到底部连续衰减到 0，
+      // 没有硬边（backdropBlur 做不到这一点，会在标题栏下边缘留一条线）
+      .linearGradientBlur(96, {
+        fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18]],
+        direction: GradientDirection.Bottom
+      })
     }
-    .hideTitleBar(true)
+    .title({ builder: this.TitleBar, height: titleBarTotalVp() }, {
+      // STACK：内容区延伸到标题栏下方，标题栏材质才有可折射的底层
+      barStyle: BarStyle.STACK
+    })
+    .hideBackButton(true)
+    // 不要 bindToScrollable：ArkUI NavDestination 上它的作用是「上滑隐藏、下滑显示」标题栏，
+    // 会把标题栏整个藏掉（HDS 时代用它驱动动态模糊，换回 ArkUI 后必须去掉）
     .backgroundColor($r('app.color.bg_page'))
     .onBackPressed(() => {
       if (this.currentTab === 0 && this.gallerySelectMode) {
-        this.exitSelectModeVersion++;
-        this.gallerySelectMode = false;
+        this.exitSelectMode();
         return true;
       }
       return false;

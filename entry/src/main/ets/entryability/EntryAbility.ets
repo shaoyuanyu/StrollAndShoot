@@ -2,12 +2,37 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { WindowUtils } from '../utils/WindowUtils';
+import { saveWindowSnapshot } from '../utils/WindowShot';
+import { MockPtpDevice } from '../debug/MockPtpDevice';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
 
 export default class EntryAbility extends UIAbility {
   private currentBreakPoint: string = '';
+
+  /**
+   * 调试用截图。触发方式：
+   *   hdc shell aa start -a EntryAbility -b <bundle> --ps shot <label>
+   * `label` 只作为文件名后缀，便于区分截图场景（如 gallery / settings）。
+   * 仅调试包生效；release 包里不会执行。
+   */
+  onNewWant(want: Want): void {
+    const shot = want.parameters ? want.parameters['shot'] : undefined;
+    if (shot === undefined) return;
+    if (!MockPtpDevice.isDebugBuild()) return;
+    const label = String(shot).replace(/[^a-zA-Z0-9_-]/g, '');
+    // 稍等一帧，避免把前后台切换的中间态截进去
+    setTimeout(() => {
+      saveWindowSnapshot(this.context, label === '' ? 'window' : label)
+        .then((path: string) => {
+          hilog.info(DOMAIN, TAG, 'window snapshot: %{public}s', path);
+        })
+        .catch((err: Error) => {
+          hilog.error(DOMAIN, TAG, 'window snapshot failed: %{public}s', JSON.stringify(err));
+        });
+    }, 300);
+  }
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -74,6 +99,12 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(DOMAIN, TAG, 'Succeeded in loading the content.');
+      // 全屏布局：界面元素才能延伸到状态栏/导航条区域（官方《开发应用沉浸式效果》）
+      WindowUtils.window.setWindowLayoutFullScreen(true).then(() => {
+        WindowUtils.applyThemeSystemBars(WindowUtils.isDarkMode(this.context));
+      }).catch((e: Error) => {
+        hilog.error(DOMAIN, TAG, 'setWindowLayoutFullScreen failed: %{public}s', JSON.stringify(e));
+      });
     });
   }
 

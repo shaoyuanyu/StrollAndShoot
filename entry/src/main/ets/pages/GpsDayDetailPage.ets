@@ -1,7 +1,7 @@
 import geoLocationManager from '@ohos.geoLocationManager';
+import { PageHeader } from '../components/PageHeader';
 import { GpsRecorder } from '../services/GpsRecorder';
 import type { GpsRecord } from '../model/PhotoEntry';
-import { PageHeader } from '../components/PageHeader';
 
 @Builder
 export function GpsDayDetailPageBuilder() {
