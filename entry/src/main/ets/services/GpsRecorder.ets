@@ -5,6 +5,7 @@ import { abilityAccessCtrl, common, Permissions, wantAgent, WantAgent } from '@k
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { AppLog } from './AppLog';
 import { GpsTrack } from '../utils/GpsTrack';
+import { GpsMockTrack } from '../utils/GpsMockTrack';
 import type { GpsRecord, GpsDailyGroup } from '../model/PhotoEntry';
 
 const LOCATION_PERMS: Permissions[] = [
@@ -14,6 +15,13 @@ const LOCATION_PERMS: Permissions[] = [
 
 /** 记录总量上限，超出后丢弃最旧的 10%。 */
 const MAX_RECORDS = 20000;
+/**
+ * 记录较多时降低整写频率。11 秒一条、2 万条上限的全量 JSON 很大，
+ * 每来一个点都同步重写会长时间占用 UI 线程；2000 条以内仍逐点落盘，
+ * 数据量上来后最多每 30 秒落一次，停止记录时强制 flush。
+ */
+const DEFERRED_SAVE_THRESHOLD = 2000;
+const DEFERRED_SAVE_INTERVAL_MS = 30 * 1000;
 
 /**
  * 连续定位服务。状态直接暴露成 @Trace 字段，页面绑定后自动刷新，
@@ -37,6 +45,16 @@ export class GpsRecorder {
   @Trace recordsVersion: number = 0;
 
   private records: GpsRecord[] = [];
+  /** 调试包模拟轨迹：只在内存里覆盖当天的显示，不写 gps_records.json。 */
+  private mockDay: string = '';
+  private mockRecords: GpsRecord[] = [];
+  /** 按天聚合的缓存。recordsVersion 不变时直接复用，页面每帧取分组不再遍历全部记录。 */
+  private dailyCacheVersion: number = -1;
+  private dailyGroups: GpsDailyGroup[] = [];
+  private dailyGroupMap: Map<string, GpsDailyGroup> = new Map();
+  /** 与 dailyGroups 同步构建的按天记录，getDayRecords 直接复用，避免每次筛选+排序。 */
+  private dailyRecordsMap: Map<string, GpsRecord[]> = new Map();
+  private dailyDisplayCount: number = 0;
   private log: AppLog = new AppLog();
   private storageDir: string = '';
   private locationCallback?: (location: geoLocationManager.Location) => void;
@@ -44,6 +62,10 @@ export class GpsRecorder {
   private permissionsChecked: boolean = false;
   /** 正在启动中的启动流程，避免连点时重复订阅回调。 */
   private startPromise: Promise<boolean> | null = null;
+  /** 大记录集延迟落盘：定时器、脏标记、上次落盘时间。 */
+  private saveTimerId: number = -1;
+  private savePending: boolean = false;
+  private lastSaveAt: number = 0;
 
   static getInstance(): GpsRecorder {
     if (!GpsRecorder.instance) {
@@ -89,6 +111,7 @@ export class GpsRecorder {
 
   /** 切换记录频率。正在记录时会按新频率重启，返回是否最终在运行。 */
   async setGpsMode(mode: number): Promise<boolean> {
+    if (mode < 0 || mode > 2) mode = 2;
     if (mode === this.gpsMode) return this.running;
     this.gpsMode = mode;
     this.saveMode();
@@ -237,17 +260,20 @@ export class GpsRecorder {
       return;
     }
 
+    const lastBefore = this.records.length > 0
+      ? this.records[this.records.length - 1].timestamp
+      : 0;
     const merged = GpsTrack.append(this.records, record);
-    if (!merged && this.records.length >= 2 &&
-      record.timestamp <= this.records[this.records.length - 2].timestamp) {
-      // 系统时间被回拨时保持按时间有序，findClosest 的二分查找才不会失效
+    if (!merged && lastBefore > 0 && record.timestamp < lastBefore) {
+      // 系统时间被回拨时保持按时间有序，findClosest 的二分查找才不会失效。
+      // 只有一条旧记录时同样要排序，不能因为 length < 2 就跳过。
       this.records.sort((a: GpsRecord, b: GpsRecord) => a.timestamp - b.timestamp);
     }
     this.lastFix = merged ? this.records[this.records.length - 1] : record;
     this.pruneIfNeeded();
     this.recordCount = this.records.length;
     this.recordsVersion++;
-    this.saveRecords();
+    this.scheduleSaveRecords();
     const tag = merged ? '更新末点' : '新增';
     this.log.add(`GPS定位${tag}: ${record.latitude.toFixed(4)},${record.longitude.toFixed(4)} (共${this.records.length}条)`);
   }
@@ -277,6 +303,8 @@ export class GpsRecorder {
     this.running = false;
     this.lastFix = null;
     this.locationCallback = undefined;
+    // 延迟落盘的记录在停止时必须立即补齐，不能等定时器。
+    this.flushRecords();
     // 即使本来就没在跑也要落盘：启动失败后用户把开关拨回去时，
     // 不写 wasRunning=false 的话下次启动还会自动重试。
     this.saveMode();
@@ -353,6 +381,43 @@ export class GpsRecorder {
   getDailyStats(): GpsDailyGroup[] {
     // 先读一次 recordsVersion 建立 V2 依赖：records 是普通数组，不读版本号页面不会刷新
     if (this.recordsVersion < 0) return [];
+    this.ensureDailyCache();
+    return this.dailyGroups;
+  }
+
+  /** 单日分组，找不到返回 null。按天卡片用它刷新，不必每次遍历全部记录。 */
+  getGroupForDay(day: string): GpsDailyGroup | null {
+    if (this.recordsVersion < 0) return null;
+    this.ensureDailyCache();
+    const group = this.dailyGroupMap.get(day);
+    return group !== undefined ? group : null;
+  }
+
+  /** 页面上应该显示的总条数：模拟轨迹开启时，用模拟点替换当天真实记录。 */
+  displayRecordCount(): number {
+    if (this.recordsVersion < 0) return 0;
+    this.ensureDailyCache();
+    return this.dailyDisplayCount;
+  }
+
+  hasMockTrack(): boolean {
+    if (this.recordsVersion < 0) return false;
+    return this.mockRecords.length > 0;
+  }
+
+  mockCount(): number {
+    if (this.recordsVersion < 0) return 0;
+    return this.mockRecords.length;
+  }
+
+  isMockDay(day: string): boolean {
+    if (this.recordsVersion < 0) return false;
+    return this.mockRecords.length > 0 && this.mockDay === day;
+  }
+
+  private ensureDailyCache(): void {
+    if (this.dailyCacheVersion === this.recordsVersion) return;
+
     const map = new Map<string, GpsRecord[]>();
     const d = new Date();
     for (const r of this.records) {
@@ -362,9 +427,21 @@ export class GpsRecorder {
       if (!arr) { arr = []; map.set(key, arr); }
       arr.push(r);
     }
+
+    let displayCount = this.records.length;
+    if (this.mockRecords.length > 0) {
+      const realMockDay = map.get(this.mockDay);
+      displayCount = this.records.length -
+        (realMockDay !== undefined ? realMockDay.length : 0) + this.mockRecords.length;
+      // 当天只显示模拟轨迹；真实记录仍留在 records 里，关掉开关立刻恢复
+      map.delete(this.mockDay);
+      map.set(this.mockDay, this.mockRecords);
+    }
+
     const result: GpsDailyGroup[] = [];
+    const groupMap = new Map<string, GpsDailyGroup>();
     map.forEach((recs: GpsRecord[], day: string) => {
-      result.push({
+      const group: GpsDailyGroup = {
         day: day,
         count: recs.length,
         // 第一条用 runStart：静止心跳点的 timestamp 是这一轮的最后一个点，
@@ -372,26 +449,30 @@ export class GpsRecorder {
         // 前一天时（跨午夜的一轮静止）按当天 0 点裁剪，避免显示 23:55–00:05。
         first: Math.max(
           GpsTrack.runStartOf(recs[0]),
-          GpsRecorder.startOfDay(recs[0].timestamp)
+          GpsTrack.startOfDay(recs[0].timestamp)
         ),
-        last: recs[recs.length - 1].timestamp
-      });
+        last: recs[recs.length - 1].timestamp,
+        mock: this.mockRecords.length > 0 && day === this.mockDay
+      };
+      result.push(group);
+      groupMap.set(day, group);
     });
     result.sort((a: GpsDailyGroup, b: GpsDailyGroup) => b.day.localeCompare(a.day));
-    return result;
+
+    this.dailyGroups = result;
+    this.dailyGroupMap = groupMap;
+    this.dailyRecordsMap = map;
+    this.dailyDisplayCount = displayCount;
+    this.dailyCacheVersion = this.recordsVersion;
   }
 
   /** Returns all records for a specific day (YYYY-MM-DD), sorted by time ascending. */
   getDayRecords(dateKey: string): GpsRecord[] {
     // 同 getDailyStats：读版本号建立 V2 依赖（见 thumbForRender 的同样做法）
     if (this.recordsVersion < 0) return [];
-    const d = new Date();
-    return this.records
-      .filter((r: GpsRecord) => {
-        d.setTime(r.timestamp);
-        return GpsRecorder.dayKeyOf(d) === dateKey;
-      })
-      .sort((a: GpsRecord, b: GpsRecord) => a.timestamp - b.timestamp);
+    this.ensureDailyCache();
+    const records = this.dailyRecordsMap.get(dateKey);
+    return records !== undefined ? records : [];
   }
 
   private static dayKeyOf(d: Date): string {
@@ -404,14 +485,90 @@ export class GpsRecorder {
     return GpsRecorder.dayKeyOf(new Date(timestamp));
   }
 
-  private static startOfDay(timestamp: number): number {
-    const d = new Date(timestamp);
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
+  /** UI 用的当天键（YYYY-MM-DD）。 */
+  static dayKeyFor(timestamp: number): string {
+    return GpsRecorder.dayKeyOf(new Date(timestamp));
+  }
+
+  /**
+   * 调试包：以当前位置为起点生成相机图案，覆盖当天的显示。
+   * 真实记录不动，关掉后立即恢复；模拟点也不写盘、不参与 findClosest。
+   */
+  async createMockTrack(): Promise<boolean> {
+    this.lastError = '';
+    if (!canIUse('SystemCapability.Location.Location.Core')) {
+      this.lastError = '当前设备不支持定位能力';
+      return false;
+    }
+
+    const permError = await this.ensurePermissions();
+    if (permError !== '') {
+      this.lastError = permError;
+      return false;
+    }
+
+    const now = Date.now();
+    // 始终优先取一次当前定位；失败时用 5 分钟内的最后一次真实定位兜底
+    let origin: GpsRecord | null = null;
+    try {
+      const request: geoLocationManager.CurrentLocationRequest = {
+        priority: geoLocationManager.LocationRequestPriority.ACCURACY,
+        scenario: geoLocationManager.LocationRequestScenario.TRAJECTORY_TRACKING,
+        timeoutMs: 10000
+      };
+      // @SuppressWarnings syscap
+      const loc = await geoLocationManager.getCurrentLocation(request);
+      origin = {
+        timestamp: loc.timeStamp,
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        altitude: loc.altitude ?? 0
+      };
+    } catch (err) {
+      if (this.lastFix !== null && now - this.lastFix.timestamp <= 5 * 60 * 1000) {
+        origin = this.lastFix;
+      } else {
+        this.lastError = `获取当前位置失败: ${JSON.stringify(err)}`;
+        this.log.add(`模拟GPS轨迹: ${this.lastError}`);
+        return false;
+      }
+    }
+
+    if (origin === null) {
+      this.lastError = '没有可用的当前位置';
+      return false;
+    }
+
+    const records = GpsMockTrack.buildCameraTrack(origin, now);
+    if (records.length === 0) {
+      this.lastError = '模拟轨迹生成失败';
+      return false;
+    }
+
+    const day = GpsRecorder.dayKeyFor(now);
+    this.mockDay = day;
+    this.mockRecords = records.slice().sort((a: GpsRecord, b: GpsRecord) => a.timestamp - b.timestamp);
+    this.recordsVersion++;
+    this.log.add(`已注入模拟GPS轨迹: ${records.length} 点 (${day})`);
+    return true;
+  }
+
+  /** 清掉模拟轨迹，当天真实记录重新出现。 */
+  clearMockTrack(): void {
+    if (this.mockRecords.length === 0 && this.mockDay === '') return;
+    this.mockRecords = [];
+    this.mockDay = '';
+    this.recordsVersion++;
+    this.log.add('模拟GPS轨迹已清除');
   }
 
   /** Delete all records for a given day. Returns the new total count. */
   deleteDay(dateKey: string): number {
+    // 模拟轨迹只是当天的显示覆盖；删这一天的卡片时先撤掉模拟层
+    if (this.isMockDay(dateKey)) {
+      this.clearMockTrack();
+      return this.records.length;
+    }
     const before = this.records.length;
     const d = new Date();
     this.records = this.records.filter((r: GpsRecord) => {
@@ -430,15 +587,6 @@ export class GpsRecorder {
       this.log.add(`已删除 ${dateKey} 的 ${removed} 条GPS记录`);
     }
     return this.records.length;
-  }
-
-  clearRecords(): void {
-    this.records = [];
-    this.recordCount = 0;
-    this.recordsVersion++;
-    this.lastFix = null;
-    this.saveRecords();
-    this.log.add('GPS记录已清除');
   }
 
   private async requestContinuousTask(): Promise<void> {
@@ -490,7 +638,8 @@ export class GpsRecorder {
       const obj = JSON.parse(text) as Record<string, Object>;
       if (typeof obj.gpsMode === 'number') {
         // Also migrate from old boolean precisionMode
-        this.gpsMode = obj.gpsMode as number;
+        const mode = obj.gpsMode as number;
+        this.gpsMode = mode >= 0 && mode <= 2 ? mode : 2;
       } else if (typeof obj.precisionMode === 'boolean') {
         this.gpsMode = (obj.precisionMode as boolean) ? 0 : 2;
       }
@@ -499,17 +648,59 @@ export class GpsRecorder {
     }
   }
 
+  /** 小文件原子写：先写 .tmp，再 rename 覆盖，避免崩溃时留下半截 JSON。 */
+  private writeTextAtomic(path: string, text: string): void {
+    const tmp = path + '.tmp';
+    const f = fileIo.openSync(tmp,
+      fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+    try {
+      fileIo.writeSync(f.fd, text);
+    } finally {
+      fileIo.closeSync(f);
+    }
+    try {
+      fileIo.renameSync(tmp, path);
+    } catch (_e) {
+      // 少数文件系统不支持覆盖 rename：退回强制覆盖 copy，至少保证落盘。
+      fileIo.copyFileSync(tmp, path, 0);
+      fileIo.unlinkSync(tmp);
+    }
+  }
+
+  private cancelSaveTimer(): void {
+    if (this.saveTimerId >= 0) {
+      clearTimeout(this.saveTimerId);
+      this.saveTimerId = -1;
+    }
+  }
+
+  private scheduleSaveRecords(): void {
+    if (this.records.length <= DEFERRED_SAVE_THRESHOLD) {
+      this.saveRecords();
+      return;
+    }
+    this.savePending = true;
+    if (this.saveTimerId >= 0) return;
+    const delay = Math.max(0, DEFERRED_SAVE_INTERVAL_MS - (Date.now() - this.lastSaveAt));
+    this.saveTimerId = setTimeout(() => {
+      this.saveTimerId = -1;
+      this.flushRecords();
+    }, delay);
+  }
+
+  private flushRecords(): void {
+    if (!this.savePending) return;
+    this.savePending = false;
+    this.saveRecords();
+  }
+
   private saveMode(): void {
     if (!this.storageDir) return;
     try {
-      const text = JSON.stringify({
+      this.writeTextAtomic(this.settingsPath(), JSON.stringify({
         gpsMode: this.gpsMode,
         wasRunning: this.running
-      });
-      const f = fileIo.openSync(this.settingsPath(),
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(f.fd, text);
-      fileIo.closeSync(f);
+      }));
     } catch (_e) { /* ignore */ }
   }
 
@@ -536,6 +727,9 @@ export class GpsRecorder {
   }
 
   private loadRecords(): void {
+    // 模拟轨迹只在本次进程内有效，启动时不要带出上次的假数据
+    this.mockRecords = [];
+    this.mockDay = '';
     try {
       const f = fileIo.openSync(this.recordsPath(), fileIo.OpenMode.READ_ONLY);
       const stat = fileIo.statSync(this.recordsPath());
@@ -543,7 +737,8 @@ export class GpsRecorder {
       fileIo.readSync(f.fd, buf);
       fileIo.closeSync(f);
       const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-      this.records = JSON.parse(text) as GpsRecord[];
+      const parsed = JSON.parse(text) as Object;
+      this.records = Array.isArray(parsed) ? parsed as GpsRecord[] : [];
     } catch (_e) {
       this.records = [];
     }
@@ -576,12 +771,11 @@ export class GpsRecorder {
 
   private saveRecords(): void {
     if (!this.storageDir) return;
+    this.cancelSaveTimer();
     try {
-      const text = JSON.stringify(this.records);
-      const f = fileIo.openSync(this.recordsPath(),
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(f.fd, text);
-      fileIo.closeSync(f);
+      this.writeTextAtomic(this.recordsPath(), JSON.stringify(this.records));
+      this.savePending = false;
+      this.lastSaveAt = Date.now();
     } catch (err) {
       this.log.add(`GPS记录保存失败: ${JSON.stringify(err)}`);
     }

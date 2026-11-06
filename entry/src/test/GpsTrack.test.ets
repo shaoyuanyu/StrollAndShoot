@@ -1,5 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { GpsTrack } from '../main/ets/utils/GpsTrack';
+import { GpsTrackCache } from '../main/ets/services/GpsTrackCache';
 import type { GpsRecord } from '../main/ets/model/PhotoEntry';
 
 const BASE = 1793970000000;
@@ -98,6 +99,90 @@ export default function gpsTrackTest() {
       const r = fix(BASE + 1000);
       r.runStart = BASE + 5000;
       expect(GpsTrack.runStartOf(r)).assertEqual(BASE + 1000);
+    });
+
+    it('buildDayTrack 聚合距离、时长、边界与首条时间', 0, () => {
+      const dayStart = new Date(2026, 10, 6, 0, 0, 0).getTime();
+      const records: GpsRecord[] = [
+        fix(dayStart + 3600000, 22.8787, 113.8800, 45),
+        fix(dayStart + 3611000, 22.8787, 113.8801, 46),
+        fix(dayStart + 3622000, 22.8788, 113.8802, 47)
+      ];
+      records[0].runStart = dayStart + 3500000;
+
+      const track = GpsTrack.buildDayTrack('2026-11-06', records);
+      expect(track.count).assertEqual(3);
+      expect(track.first).assertEqual(dayStart + 3500000);
+      expect(track.last).assertEqual(dayStart + 3622000);
+      expect(track.durationMs).assertEqual(122000);
+      expect(track.distanceMeters > 10 && track.distanceMeters < 40).assertTrue();
+      expect(track.bounds.minLat).assertEqual(22.8787);
+      expect(track.bounds.maxLat).assertEqual(22.8788);
+      expect(track.bounds.minLon).assertEqual(113.8800);
+      expect(track.bounds.maxLon).assertEqual(113.8802);
+    });
+
+    it('跨午夜的 runStart 在当天轨迹里裁到 0 点', 0, () => {
+      const dayStart = new Date(2026, 10, 6, 0, 0, 0).getTime();
+      const r = fix(dayStart + 60000);
+      r.runStart = dayStart - 300000;
+      const track = GpsTrack.buildDayTrack('2026-11-06', [r]);
+      expect(track.first).assertEqual(dayStart);
+      expect(track.durationMs).assertEqual(60000);
+    });
+
+    it('sample 保留首尾点且不超过上限', 0, () => {
+      const points: GpsRecord[] = [];
+      for (let i = 0; i < 1000; i++) {
+        points.push(fix(BASE + i * 1000, LAT + i * 0.00001));
+      }
+      const sampled = GpsTrack.sample(points, 160);
+      expect(sampled.length).assertEqual(160);
+      expect(sampled[0] === points[0]).assertTrue();
+      expect(sampled[sampled.length - 1] === points[999]).assertTrue();
+
+      const short = GpsTrack.sample(points.slice(0, 20), 160);
+      expect(short.length).assertEqual(20);
+    });
+
+    it('fingerprint 对末点变化敏感、对海拔不敏感', 0, () => {
+      const records: GpsRecord[] = [
+        fix(BASE),
+        fix(BASE + 11000, LAT + 0.001)
+      ];
+      const fp = GpsTrack.fingerprint(records);
+      expect(GpsTrack.fingerprint(records)).assertEqual(fp);
+
+      const altitudeOnly = records.slice();
+      altitudeOnly[1] = fix(BASE + 11000, LAT + 0.001, LON, 99);
+      expect(GpsTrack.fingerprint(altitudeOnly)).assertEqual(fp);
+
+      const moved = records.slice();
+      moved[1] = fix(BASE + 12000, LAT + 0.001);
+      expect(GpsTrack.fingerprint(moved) === fp).assertFalse();
+    });
+
+    it('GpsTrackCache 命中同指纹、失效后重建', 0, () => {
+      const cache = GpsTrackCache.getInstance();
+      cache.clear();
+      const records: GpsRecord[] = [
+        fix(BASE),
+        fix(BASE + 11000, LAT + 0.001)
+      ];
+      const first = cache.getDayTrack('2026-11-06', records);
+      const again = cache.getDayTrack('2026-11-06', records);
+      expect(first === again).assertTrue();
+
+      const changed = records.slice();
+      changed.push(fix(BASE + 22000, LAT + 0.002));
+      const rebuilt = cache.getDayTrack('2026-11-06', changed);
+      expect(first === rebuilt).assertFalse();
+      expect(rebuilt.count).assertEqual(3);
+
+      cache.invalidate('2026-11-06');
+      const afterInvalidate = cache.getDayTrack('2026-11-06', changed);
+      expect(rebuilt === afterInvalidate).assertFalse();
+      cache.clear();
     });
   });
 }

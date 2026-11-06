@@ -4,6 +4,15 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 
 **交流语言：中文。**
 
+## 开发纪律（强制）
+
+### 官方组件优先
+
+- 任何 UI 都先使用官方 ArkUI / HarmonyOS 组件或系统能力（如 `bindSheet`、`List`、`Navigation`、`Tabs`、`Select`、`Toggle`、`Swiper` 等），按官方推荐方式实现。
+- **不得**以“自己画更可控/更快”为理由自绘组件。
+- 只有官方组件确实无法实现所需特殊效果时，才允许自绘；落地前必须先向用户说明：官方组件为什么不够、自绘范围、交互/无障碍/主题/性能风险、验证方式，并得到确认。
+- 自绘也必须遵循系统设计语言，优先保留官方组件的壳、动画和材质；能用官方容器 + 自定义内容组合的，不要从零画。
+
 ## 运行环境
 
 | 项 | 值 |
@@ -81,7 +90,7 @@ StrollAndShoot/
 ├── entry/
 │   ├── build-profile.json5         # 模块构建；CMake 配置在 externalNativeOptions
 │   ├── src/main/
-│   │   ├── module.json5            # ability、权限（LOCATION、APPROXIMATELY_LOCATION、KEEP_BACKGROUND_RUNNING、DETECT_GESTURE）
+│   │   ├── module.json5            # ability、权限（INTERNET、LOCATION、APPROXIMATELY_LOCATION、KEEP_BACKGROUND_RUNNING、DETECT_GESTURE）
 │   │   ├── ets/
 │   │   │   ├── entryability/       # EntryAbility：窗口尺寸、避让区监听、加载 pages/Index
 │   │   │   ├── pages/              # 页面、PTP 会话层、早期原型页
@@ -118,7 +127,7 @@ HarmonyOS 的测试分三层，本工程三层都已就位：
 ```bash
 # macOS：根目录没有 hvigorw，用 DevEco 自带的那个，并且必须给 DEVECO_SDK_HOME
 export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
-/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw test -p module=entry -p coverage=false
+/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw test -p module=entry -p coverage=false --no-daemon
 
 # 只跑某个套件 / 某个用例
 hvigorw test -p module=entry -p scope=PhotoGroupUtil
@@ -201,7 +210,7 @@ devecocli check lint entry/src/main/ets
 - 产物在 `entry/build/<product>/outputs/default/`：调试在 `entry/build/default/`，指定设备发布在 `entry/build/dist/`。`*-signed.hap` 已签名，`*-unsigned.hap` 未签名。
 - macOS 上 `devecocli build` 会用 AgentDebug 签名；Linux 上仍由 `deploy.sh` 单独处理签名。
 - `deploy.sh` 被 `.gitignore` 忽略，只存在于 Linux 开发机，里面写着签名材料的路径与口令。
-- `entry/src/test` 已有真实单测（`PhotoGroupUtil.test.ets` 7 个用例，含模板自带的 1 个），`hvigorw test` 会实际执行；`entry/src/ohosTest` 仍是模板用例。
+- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 29 个用例），`hvigorw test` 会实际执行；`entry/src/ohosTest` 仍是模板用例。
 
 ### 签名与分发
 
@@ -301,14 +310,14 @@ $HDC -t $T shell "bm dump -a" | grep stroll
 ### 导航
 
 - `pages/Index.ets` 是唯一入口（`@Entry`），内部用 ArkUI 原生 **`Navigation`** + `NavPathStack`，隐藏系统导航栏（`hideNavBar(true)`），并注册自定义转场 `customNavContentTransition`。
-- `route_map.json` 注册两个 NavDestination：`MainScreen` 与 `PhotoViewerScreen`。
+- `route_map.json` 注册 NavDestination：`MainScreen`、`PhotoViewerScreen`、`GpsManagementPage`、`GpsTrackViewerPage`、`CacheManagementPage`。
 - `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。底部是系统 `Tabs` 的**悬浮页签**：只设 `barOverlap(true)` + `barFloatingStyle({ barBottomMargin: this.navIndicatorVp(), maskColor: Color.Transparent, systemMaterial: new uiMaterial.ImmersiveMaterial({ style: REGULAR, interactive: true }) })`。**不要**再设 `barBackgroundColor` / `barBackgroundBlurStyle`（会盖住材质），也不要设 `barMode` / `scrollable`（会破坏悬浮样式的默认布局）。`barHeight` 只在多选态动态置 0。
 - **不要用 HDS 的 `HdsNavigation` / `HdsNavDestination`**：2026-11-06 试过又全部退回。官方《沉浸光感》写明 HDS 的 `systemMaterialEffect` 只给**标题栏按钮**材质，背板永远拿不到沉浸光感，轻划时看着就是全透明。
-- 一级页标题栏是 `.title({ builder: this.TitleBar, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })` 自定义 builder；二级页 `.hideTitleBar(true)` + `components/PageHeader.ets`（自己避让状态栏）；预览器 `.hideTitleBar(true)` 自己全屏。
+- 一级页标题栏是 `.title({ builder: this.TitleBar, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })` 自定义 builder；缓存管理等轻量二级页仍用 `.hideTitleBar(true)` + `components/PageHeader.ets`（自己避让状态栏）；定位记录页与轨迹全屏页改用原生 `.title()` 标题栏，返回/选择/日期胶囊才能拿到真材质；预览器 `.hideTitleBar(true)` 自己全屏。
 - 首屏内容避让用**滚动容器的 `contentStartOffset(titleBarInsetVp())`**（不是 `padding-top`），详见「沉浸光感 > 顶部标题栏」。
 - **底部要给悬浮页签留空间，但不能用 `List.padding({ bottom })`**：那会收缩 List 的可视区域，内容在胶囊上方就被裁断、中间露出一条空带。正确做法是给 List 末尾加一个 104vp 占位项（`FlatItem.tail()`）；`Scroll` 页面（相机 / 设置）用内容末尾的 `padding-bottom` 即可。
-- `CacheManagementPage`、`GpsManagementPage`、`GpsDayDetailPage` 是 `@Entry` 页面，用已废弃的 `router.pushUrl` / `router.back` / `router.getParams` 跳转。
-- `SwiperSyncTestPage` 是早期原型页，仍注册在 `main_pages.json`，没有任何入口。
+- 二级页（缓存管理、定位记录、轨迹全屏）都走 `route_map.json` 的 NavDestination，用 `NavPathStack.pushPath` / `pop`，不是 `@Entry`，也不再用 `router.*`。
+- 轨迹全屏页用 `BarStyle.STACK` 自定义标题栏，地图内容可以延伸到标题栏下方；`hideBackButton(true)`，否则系统返回键会和自定义返回键叠成两个。
 
 ### 状态管理
 
@@ -354,13 +363,14 @@ $HDC -t $T shell "bm dump -a" | grep stroll
 ### 资源
 
 - `$r('app.type.name')` 从 `entry/src/main/resources/` 解析。浅色在 `base/element/`，深色在 `dark/element/`。
-- 颜色资源成体系，共 33 条（`base/element/color.json` 与 `dark/element/color.json` 各一份），命名如 `primary`、`bg_page`、`bg_surface`、`text_primary`、`text_secondary`、`text_tertiary`、`divider`、`card_border`、`primary_soft`、`scrim`、`nav_bg`、`tab_bar_bg`、`glass_bg`、`progress_track`。设计语言为 HarmonyOS 沉浸光感：冷灰页面底、纯黑/白卡片、品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态、底栏与预览器标题栏使用半透明模糊材质。新增界面一律引用资源，不要写定颜色值。
+- 颜色资源成体系，共 34 条（`base/element/color.json` 与 `dark/element/color.json` 各一份），命名如 `primary`、`bg_page`、`bg_surface`、`text_primary`、`text_secondary`、`text_tertiary`、`divider`、`card_border`、`primary_soft`、`scrim`、`nav_bg`、`tab_bar_bg`、`glass_bg`、`sheet_bg`、`progress_track`。设计语言为 HarmonyOS 沉浸光感：冷灰页面底、纯黑/白卡片、品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态、底栏与预览器标题栏使用半透明模糊材质。新增界面一律引用资源，不要写定颜色值。
 - `base/element/string.json` 有 36 条字符串，代码里没有任何引用，界面文案直接写在组件内部。
 - 颜色模式跟随系统：`COLOR_MODE_NOT_SET`（值为 -1）表示不设置，`COLOR_MODE_LIGHT` / `COLOR_MODE_DARK` 为显式指定。
 
 ### 沉浸光感
 
 - **应用级开关**在 `entry/src/main/module.json5` 的 `metadata`：`{ "name": "ohos.arkui.UIMaterial.state", "value": "enable" }`。开启后 `Toggle` / `Slider` / `Select` / 弹窗类组件在全页面生效，其余组件只在 Navigation/NavDestination 标题栏与底部 TabBar 生效。
+- **`bindSheet` 不跟随应用级开关**：半模态的沉浸光感必须通过 `SheetOptions.systemMaterial` 显式设置（本项目用 `THICK`），设置后不要再设 `backgroundColor` / `blurStyle`，否则会盖住或重复处理材质。轨迹明细面板就是靠这一条拿到系统材质。
 - **底部页签**：`Tabs.barFloatingStyle({ barBottomMargin: navIndicatorVp(), maskColor: Color.Transparent, systemMaterial })` + `barOverlap(true)`（`vertical(false)`、`barPosition: End` 为默认），不要同时设置 `barBackgroundColor` / `barBackgroundBlurStyle`，否则会遮挡材质。
   - **底边距必须自己算**：窗口是 `setWindowLayoutFullScreen(true)`，Tabs 是全屏的，`barFloatingStyle` 不会自动避让手势条。`barBottomMargin: this.navIndicatorVp()` 才让胶囊底边正好贴在手势条避让区上沿；写成固定的 10 会让胶囊压在手势条上（官方图库也是这么摆的）。
   - **实测（2026-11-06，模拟器 Mate 80 + 真机 VYG-AL00）**：只写 `systemMaterial` 时，两边都能正确呈现磨砂透明，内容从胶囊下面透出且带模糊与折射。
@@ -442,8 +452,9 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 分组卡片统一 24vp 圆角、无描边、行高 56vp；分组标题 13fp 次级色。
 - 选项类（深色模式 / 默认列数 / 显示模式 / 记录频率）全是**右侧 `Select` 玻璃胶囊**（`SettingSelectRow`），不要再用自制的「灰底 + 蓝胶囊」分段按钮——那东西在内容区拿不到材质。
 - 开关（GPS 记录、模拟相机）用 `Toggle(Switch)`，**不要设 `selectedColor`**，否则会覆盖系统预设的沉浸光感样式。
-- 导航类行带 `chevron_right`（位置点管理、缩略图缓存）；危险行（清除定位记录）用 `button_danger` 红字。
+- 导航类行带 `chevron_right`（定位记录管理、缩略图缓存）。删除定位记录统一放在「定位记录管理」页（多选批量删除，或全屏轨迹页「更多」里删当天），设置页不再提供「清除定位记录」入口，避免误触。
 - 调试日志面板仍是等宽字体、高 240vp，只在调试包里渲染。
+- 调试区新增「模拟 GPS 轨迹」开关：以当前定位为起点生成相机图案，覆盖今天的地图/列表显示；真实 `gps_records.json` 不变，关掉开关立即恢复。仅 debug 包可见。
 
 ### PhotoViewer.ets
 预览器，一个文件里有四个结构：
@@ -453,10 +464,33 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - `ThumbCellView`：底部缩略图条的单元。
 - `PhotoViewerScreen`：NavDestination。主 `Swiper` 与缩略图 `Swiper` 双向联动（`startFakeDrag` / `fakeDragBy` 同步），主图滑动带惯性，缩略图中心项放大到 1.3x。原图按“当前照片优先，前后各 3 张”排队串行加载，手势期间暂停。返回时用当前照片的缩略图更新共享元素，保证转场起点正确。
 
-### CacheManagementPage.ets / GpsManagementPage.ets / GpsDayDetailPage.ets
-- 缓存管理：列出每个相机的缓存体积、条目数、开关、删除、清空全部
-- GPS 管理：按天分组列出记录条数，可删除某一天
-- 单日明细：逐条显示时间、坐标、海拔，以及反地理编码得到的地址（需要网络）
+### CacheManagementPage.ets
+- 列出每个相机的缓存体积、条目数、开关、删除、清空全部。
+
+### GpsManagementPage.ets
+- 用原生 `NavDestination.title({ builder: this.ManagementTitleBar }, { barStyle: BarStyle.STACK })`：玻璃返回圆钮、标题/总数、玻璃「选择/取消」胶囊。**不要退回内容区的 `PageHeader`**——内容区 Button 设 `systemMaterial` 不生效，会变回没有材质的透明按钮。列表用 `.contentStartOffset(titleBarInsetVp())` 避让标题栏，滚动时卡片从玻璃控件下面透出。
+- 按天分组列出记录条数、当天起止时间；卡片上不再放删除键，避免误触。
+- **手风琴展开**：同一时刻只保留一个展开项，进入页面默认展开第一条（`@Provider` / `@Consumer` 下发 `expandedDays`）。不要改成多天同时展开——一天一张 `MapComponent`，多开会把列表拖垮。
+- 页头右侧「选择」进入多选：多选态下卡片收起地图、右侧换成勾选圆圈，底部出现「已选 N 天 / 全选 / 删除」。批量删除要二次确认；单天删除只在全屏轨迹页的「更多」菜单里。多选删除要区分真实天和模拟天：模拟天只清内存覆盖层，弹窗不能把模拟条数算成真实删除，文案和按钮（删除/清除）都要对应。
+- 展开区 `GpsTrackMap`：预览地图禁用手势，点击整张图或「全屏」胶囊进入 `GpsTrackViewerPage`。地图不可用时自动降级为 `GpsTrackSketch`（Canvas 轨迹示意图），全屏入口仍可用。
+- 整图点击层用**最上层、带 1/255 背景的透明 Button**（实测 `0x01000000`），比空 `Column` + `Color.Transparent` 稳；点任意位置（包括「全屏」胶囊）都进全屏。
+- `GpsTrackSketch` 只在地图不可用时渲染；地图可用时不要把它留在下层，MapComponent 会完全盖住它，但 Canvas 仍会随选中点/记录更新重绘，纯浪费。
+- 卡片内部读 `gps.getGroupForDay()`，`Repeat` 的 key 只用 `day`：把 count/first/last 编进 key 会让每次心跳都重建整张卡片和地图。
+- 模拟轨迹开启时日期旁只有一个小号「模拟」文字标识（不再做胶囊徽章），页头用 `displayRecordCount()` 而不是 `recordCount`，避免总数和当天卡片对不上。
+
+### GpsTrackViewerPage.ets
+- 全屏轨迹页：地图铺满，底部明细面板用系统 **`bindSheet`**（真正的半模态），三档高度 380 / 600 / 780vp；系统自带圆角、拖动条、系统材质和吸附，不再自绘面板。`bindSheet` 的沉浸光感**不受应用级开关影响**，必须在 `SheetOptions.systemMaterial` 显式设置；设置后不要再设 `backgroundColor` / `blurStyle`，避免盖住或重复处理材质。
+- **`SheetOptions.onHeightDidChange` 回调高度单位是 px**（官方参考文档明确写“返回值为px”，模拟器 380vp 档实测返回 1330）。必须 `px2vp` 后再用于 `setPadding`、地图适配 padding 和示意图的 `bottomInset`；直接当 vp 用会把面板高度放大 3 倍多，地图/轨迹被压到顶部，示意图的说明文字也会沉到面板下面。
+- 地图适配用 `map.newLatLngBounds(bounds, mapCommon.Padding)`，把标题栏和 `sheetHeightVp` 算进 padding；不要只传一个 32px 的均匀边距，否则轨迹下半段会压在明细面板下面。
+- 标题栏只保留「返回 + 日期玻璃胶囊 + 更多」；日期胶囊是标题栏里的 Button + `systemMaterial`，单行只显示 `今天/昨天/11月7日`，高度与 40vp 返回/更多按钮一致；总数只放在面板统计行，不要在标题胶囊和统计行重复两次。更多菜单里放「删除当天记录」，二次确认后删除并返回。
+- 明细列表按时间升序，点一条会高亮、把相机移到该点，并在选中点画红色 marker。
+- 按**行程**分组，不再按 60 米逐点切：相邻采样间隔 >30 分钟才开新组；连续行程内累计位移 <120 米判为「停留」、否则判为「移动」。分组头标题统一用地点地址（移动组用起点地址），右侧状态字固定显示「移动/停留」，图标也区分（行走/定位）；副标题里移动给距离、停留给时长，再加时间范围和记录数。不要再用「地址 vs 移动距离」两种不同标题结构。小轨迹（≤30 条记录）默认展开，长轨迹默认收起只显示行程卡，用户点分组头展开。
+- 当天第一组的 `first` 用 `max(runStart, 当天 0 点)`，与面板统计的「时长」同源；后续组用本组第一条采样时间，避免上一轮静止的 `runStart` 跨过行程间隔。面板副标题也要用 `track.first` / `track.last`，不能直接用 `points[0].timestamp`，否则跨午夜静止时「00:00–03:03」和「3 小时 4 分」会对不上。
+- 分组内未选中行只显示时间、起点/终点；移动行程用 `HH:mm:ss`（采样间隔可能小于 1 分钟），停留行程用 `HH:mm`。选中行变成内嵌浅蓝卡，展开坐标、地址和海拔；面板头不再重复选中摘要。
+- 面板头是「轨迹明细 + 日期/时间范围 + 距离/时长/定位记录」三段统计；统计标签用官方 `SymbolGlyph` 图标（距离/时长/定位点），下面用官方 `Slider` 做轨迹采样拖动条，拖到哪一点就选中哪一点。选中时副标题变「第 N / 总数 条定位记录」，右侧出现「回到全程」浅蓝胶囊。
+- 明细列表用 `Repeat(...).virtualScroll()`；地址只为可视分组标题和选中点按需解析（`GpsGeocoder`）。不要在 `onScrollIndex` 里给每个可视点预取地址——未选中的行只显示时间，预取只会白耗逆地理编码请求。
+- `bindSheet` 设 `enableOutsideInteractive: true` + `maskColor: Color.Transparent`，面板展开时地图仍可操作；`shouldDismiss` 不调用 dismiss，拖到最低档会停住而不是把面板关掉。`onHeightDidChange` 同步更新地图 padding / logo 和 Canvas 的 `bottomInset`。
+- 地图不可用时（模拟器未签名、无网络）用 Canvas 示意图兜底，列表和地址仍然可用；`titleBarInsetVp()` / 底部面板高度会作为 `topInset` / `bottomInset` 传给示意图，避免轨迹被标题栏或面板裁掉。
 
 ### PtpHost.ets
 PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
@@ -465,9 +499,11 @@ PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
 
 | 组件 | 位置 | 用途 |
 |---|---|---|
-| `PageHeader` | `components/PageHeader.ets` | 二级页头部：返回键 + 主/副标题（自己避让状态栏） |
+| `PageHeader` | `components/PageHeader.ets` | 二级页头部：返回键 + 主/副标题 + 可选右侧文字操作（自己避让状态栏） |
 | `SelectionActionBar` | `components/SelectionActionBar.ets` | 多选底部操作栏：悬浮胶囊 + 图标在上文字在下的「下载」项。**自身不设背景**，材质由 `MainScreen.TitleBar` 的浮岛层提供 |
 | `DownloadProgressBar` | `components/DownloadProgressBar.ets` | 下载进度浮岛：**竖条**（60vp 宽）贴握持手一侧，**环心显示「第几张/共几张」**（百分比看弧长就够；**≥1000 张时自动拆成两行**；完成态是**同一个环满格 + 环心换成一个品牌蓝的勾**，不要换成绿色实心圆盘）+ 环下状态词 + 取消圆钮；不显文件名。**自身不设背景**，材质由 `MainScreen.TitleBar` 的浮岛层提供 |
+| `GpsTrackMap` | `components/GpsTrackMap.ets` | 定位记录卡片的预览地图：禁用手势、折线抽稀 1200 点、按坐标缓存 GCJ02；失败/超时/未签名自动降级为 `GpsTrackSketch`，点击进全屏 |
+| `GpsTrackSketch` | `components/GpsTrackSketch.ets` | Canvas 轨迹示意图：按可见区域（`topInset` / `bottomInset`）归一化，画起终点、选中红点；监听 `bottomInset` 重绘；不能用 `Shape`/`Path`，其 viewPort 会二次缩放 |
 
 ## 服务
 
@@ -493,6 +529,32 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 ### GpsRecorder（`services/GpsRecorder.ets`）
 连续定位记录。三种模式（精确 11 秒 / 日常 61 秒 / 省电 121 秒）对应 `TRANSPORT` 与 `DAILY_LIFE_SERVICE` 场景。启动时申请位置权限与后台长时任务（`backgroundMode: location`）。记录写入 `gps_records.json`，模式与运行状态写入 `gps_settings.json`，下次启动由 `autoStart()` 恢复。`findClosest(captureDate)` 用二分查找找时间最接近的记录，默认容忍 30 分钟。
 
+- 每条定位先交给 `GpsTrack.append`：移动 < 5 米且距本轮静止起点 < 10 分钟就合并，否则新增；`runStart` 保存本轮静止起点，静止一整天也会每 10 分钟留一个心跳点。
+- `GpsTrack.isImplausibleJump` 过滤 > 300 m/s 的跳点；`loadRecords` 用 `GpsTrack.compact` 整理旧版 31 秒重复点。
+- `recordsVersion` 是 UI 依赖的计数；`getDailyStats` / `getGroupForDay` 内部按这个版本缓存按天聚合，页面不必每次遍历全部记录。
+- `getDayRecords` 返回当天升序数组；`ensureDailyCache` 已把按天记录数组一起缓存，直接复用，不要在每个卡片的 build 里重复 filter+sort。轨迹聚合交给 `GpsTrackCache`，不要重复算距离。
+- 调试包的模拟轨迹只放内存：`createMockTrack()` 生成 31 个 `mock: true` 的点，`getDayRecords`/`getDailyStats` 用它们覆盖当天显示；`clearMockTrack()` 恢复。真实记录不写盘、不参与 `findClosest`，应用重启时 `loadRecords` 会清掉。
+- `displayRecordCount()` = 真实总数 − 当天真实数 + 模拟点数；页头和设置页的「已记录 N 条定位记录」都用它。模拟日的 `GpsDailyGroup.mock` 驱动「模拟」徽标。
+
+### GpsTrack（`utils/GpsTrack.ets`）与 GpsTrackCache（`services/GpsTrackCache.ets`）
+- `buildDayTrack(day, records)` 产出 `GpsDayTrack`：点集、`sketchPoints`（最多 160 点抽稀）、距离、时长、包围盒、首尾时间。首条时间用 `runStart` 并裁到当天 0 点。
+- `GpsTrackCache.getDayTrack(day, records)` 用首尾时间/坐标指纹命中缓存，LRU 最多 32 天；删除某天要 `invalidate(day)`。
+- 地图折线用 `map.convertCoordinateSync` 转 GCJ02，并按坐标（6 位小数）缓存结果：新增一个定位只多转一个点，不要每 11 秒重转 1200（预览）/4000（全屏）个点。转换逻辑不放进纯逻辑层，Local Test 不依赖 Map Kit。
+
+### GpsMockTrack（`utils/GpsMockTrack.ets`）
+- 调试包的模拟轨迹生成器：以当前位置为原点，生成约 300m × 210m 的相机图案（取景器 + 机身 + 镜头 + 快门），31 个点，时间铺在最近 4 分钟。
+- 点带 `mock: true`、`runStart = timestamp`；只用 `GpsRecord`，不依赖设备/地图，Local Test 可验证点数、时间范围和包围盒。
+- 获取当前位置优先 `geoLocationManager.getCurrentLocation`（ACCURACY / TRAJECTORY_TRACKING / 10s）；失败时用 5 分钟内的 `lastFix` 兜底；开关在 SettingsPage 的「调试」区，仅 debug 包可见。
+
+### GpsGeocoder（`services/GpsGeocoder.ets`）
+- 按坐标缓存中文地址（最多 400 条），`cachedText` 读 `@Trace version` 让列表行自动刷新；`resolve` 对同一坐标并发去重。
+- 全屏页给可视分组标题和选中点按需解析（分组标题由 `prefetchGroupAnchors` 触发），地址缓存跨页面复用；失败/无网络返回 null，不阻塞列表。
+- 逆地理编码需要 `SystemCapability.Location.Location.Geocoder`，没有能力时静默跳过。
+
+### MapCapability（`utils/MapCapability.ets`）
+- 用 `bundleManager.getBundleInfoForSelfSync(GET_BUNDLE_INFO_WITH_SIGNATURE_INFO)` 的 `signatureInfo.fingerprint` 判断 HAP 是否签名。
+- **模拟器只装 unsigned HAP，没有 Profile 的 `com.huawei.service.mapkit` 能力，Map Kit 能初始化但瓦片请求 403**；此时代码自动降级为 Canvas 轨迹示意图。真机 signed HAP 的 Profile 已包含该能力，地图可正常加载。
+
 ### HandednessService（`services/HandednessService.ets`）
 握持手感知，决定下载进度浮岛贴左还是贴右。`@ObservedV2` 单例，只暴露一个 `leftHanded` 布尔（默认 `false`，即右侧）。
 
@@ -502,6 +564,14 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 - 机型支持面窄：握持手识别自 API 20 起提供，只有系统设置里带「智感握姿」开关的机型可用，否则订阅抛 **801**。本项目全部走「失败即保持默认右侧」
 - **模拟器一定返回 801**（`subscribe failed code=801`），只能验降级路径；握持切换必须真机验证
 - 浮岛距屏幕边固定 12vp，不能更贴：官方写明「屏幕四周边缘 8mm 范围内不支持触控响应」，再贴边取消按钮会点不动
+
+### Map Kit（`@kit.MapKit`）
+- `MapComponent({ mapOptions, mapCallback })` 初始化后拿 `map.MapComponentController`；折线/标记/相机都从这里走。
+- `mapOptions` 的 `position.target` 必须是 GCJ02；`geoLocationManager` 给的是 WGS84，必须 `map.convertCoordinateSync(WGS84, GCJ02, p)` 转换。用 `map.newLatLngBounds(bounds, paddingPx)` + `moveCamera` 适配全程。
+- `setPadding` / `setLogoPadding` / `newLatLngBounds` 的 padding 单位都是**像素**，用 `getUIContext().vp2px()` 换算；`setPadding` 要把顶部标题栏和底部面板算进去，`setLogoPadding` 的 bottom 要抬到面板上方。
+- **`mapLoad` 事件可能早于 `mapCallback`**：回调里先把 `mapLoaded` 置 true 并立即 `moveCamera`，不要只等 `mapLoad`，否则相机永远停在初始 zoom。
+- 地图需要 `ohos.permission.INTERNET`；AGC 的「地图服务」开关会写进 Profile 的 `app-services-capabilities.com.huawei.service.mapkit`。签名 HAP 才有瓦片权限，unsigned 模拟器包只会拿到 403。
+- 预览图 `setAllGesturesEnabled(false)`，全屏图打开手势；地图加载失败/超时/未签名时切 Canvas 示意图，不做空白兜底。
 
 ### ExifGeotagger（`services/ExifGeotagger.ets`）用 `modifyImagePropertiesEnhanced` 一次性写入 `GPSLatitudeRef`、`GPSLatitude`、`GPSLongitudeRef`、`GPSLongitude`（有海拔时还有 `GPSAltitudeRef`、`GPSAltitude`），写完读回验证。经纬度写成逗号分隔的度分秒，例如 `43,49,23.16`；官方把这两个字段定义为三个 RATIONAL 值，典型写法是 `dd/1,mm/1,ss/1`，改动格式之前先在真机确认读回结果。
 
@@ -619,6 +689,8 @@ interface PhotoEntry {
 - 批量下载到系统相册，下载注册表校验
 - EXIF 方向纠正（1–8 全部支持），缩略图与原图都按方向解码
 - GPS 连续定位、后台长时任务、按天管理、反地理编码
+- 定位记录按天展开轨迹（Map Kit，预览 + 全屏），全屏底部明细列表、选中点定位、地址按需解析；地图不可用时 Canvas 示意图兜底
+- 调试包「模拟 GPS 轨迹」开关：以当前定位为原点注入相机图案，覆盖当天显示，不改真实记录
 - 导出时把 GPS 信息写入 JPEG 的 EXIF
 - 深色模式、缓存管理页
 - 状态管理全部迁移到 V2
@@ -662,6 +734,8 @@ interface PhotoEntry {
 `bash deploy.sh run` 只做签名、安装、启动。代码有改动时用 `bash deploy.sh full`，否则安装的还是旧 HAP。这个坑已经造成过多次“bug 没有修复”的误判。
 
 ### 只截应用窗口（不含系统浮层）
+
+**真机验收一律用内部截屏；系统截屏只用于模拟器，或确实需要确认状态栏/手势条的场景。** 真机上的视频通话、录屏控件等悬浮窗会被系统截屏带进来，内部截屏只渲染本应用窗口。
 
 `hdc shell snapshot_display` 和 `uitest screenCap` 都只能截**整屏**，会把其它应用的悬浮窗（视频通话、录屏控件等）一起截进来。应用侧 `window.Window.snapshot()` 只渲染本应用窗口，调试包已内置触发器（`utils/WindowShot.ets` + `EntryAbility.onNewWant`）：
 
@@ -838,6 +912,8 @@ $HDC -t 127.0.0.1:5555 file recv /data/local/tmp/s.jpeg /tmp/s.jpeg
 ```
 
 能验证：布局、V2 状态管理、导航与转场、设置持久化、深色模式、空态与错误分支、崩溃排查、**沉浸光感材质**（悬浮页签的磨砂/折射在模拟器上与真机一致）。不能验证：USB PTP（模拟器无 USB 主机，`搜索相机` 必然搜不到）、相机通信、EXIF 方向与 GPS 写入、保存到系统相册、真实性能与手势手感。
+
+**地图在模拟器上一定没有瓦片**：模拟器只接受 unsigned HAP，Profile 里的 `com.huawei.service.mapkit` 不生效，Map Kit 初始化成功但每个瓦片请求都返回 `403 no map permission`。代码会通过 `MapCapability.isSignedPackage()` 自动切到 Canvas 轨迹示意图（预览和全屏都可用）。地图瓦片、marker、相机 fit 必须用 signed HAP 在真机确认；不要因为模拟器上看到灰底就怀疑 Map Kit 代码。
 
 ### 需要设备、登录或尚未验证
 

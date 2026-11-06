@@ -10,7 +10,10 @@ import { WindowUtils } from '../utils/WindowUtils';
 export struct PageHeader {
   @Param title: string = '';
   @Param subtitle: string = '';
+  /** 右侧文字操作（如「选择」/「取消」）；空串表示不显示。 */
+  @Param actionText: string = '';
   @Event onBack: () => void = () => {};
+  @Event onAction: () => void = () => {};
 
   /** 状态栏高度（vp）。 */
   private statusBarVp(): number {
@@ -47,6 +50,17 @@ export struct PageHeader {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+
+      if (this.actionText.length > 0) {
+        Button(this.actionText)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary'))
+          .height(40)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor(Color.Transparent)
+          .onClick(() => { this.onAction(); })
+      }
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)

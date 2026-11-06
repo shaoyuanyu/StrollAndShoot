@@ -55,6 +55,9 @@ export struct SettingsPage {
   @Local gpsOn: boolean = false;
   @Local versionName: string = '';
   @Local debugBuild: boolean = false;
+  /** 调试包的模拟 GPS 轨迹开关；真实轨迹记录不受影响。 */
+  @Local mockGpsOn: boolean = false;
+  @Local mockGpsBusy: boolean = false;
   @Local svc: CameraService = CameraService.getInstance();
 
   aboutToAppear(): void {
@@ -66,6 +69,7 @@ export struct SettingsPage {
     }
     this.debugBuild = MockPtpDevice.isDebugBuild();
     this.gpsOn = this.gps.running;
+    this.mockGpsOn = this.gps.hasMockTrack();
   }
 
   /** 服务侧状态变化（自动恢复、启动失败回滚）时跟上开关显示。 */
@@ -73,6 +77,14 @@ export struct SettingsPage {
   onGpsRunningChanged(monitor: IMonitor): void {
     const now = monitor.value('gps.running')?.now as boolean;
     this.gpsOn = now === true;
+  }
+
+  /** 模拟轨迹在 GPS 页被删除/清除后，回到设置页时同步开关状态。 */
+  @Monitor('gps.recordsVersion')
+  onGpsRecordsChanged(): void {
+    if (!this.mockGpsBusy) {
+      this.mockGpsOn = this.gps.hasMockTrack();
+    }
   }
 
   /** 开关的意图交给服务执行；服务拒绝（如位置服务未开）时弹提示并回弹滑块。 */
@@ -101,28 +113,40 @@ export struct SettingsPage {
     }
   }
 
-  private clearGpsRecords(): void {
-    this.getUIContext().showAlertDialog({
-      title: '清除定位记录',
-      message: `将删除全部 ${this.gps.recordCount} 条定位记录，已导出照片里的定位信息不受影响。`,
-      autoCancel: true,
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: {
-        value: '清除',
-        fontColor: $r('app.color.button_danger'),
-        action: () => {
-          this.gps.clearRecords();
-          this.toast('定位记录已清除');
-        }
-      }
-    });
-  }
-
   /** 开关下面那行说明：还要区分「已启动但还没拿到定位」。 */
   private gpsStatusText(): string {
     if (!this.gps.running) return '关闭时不会记录位置';
     if (this.gps.lastFix === null) return '正在等待定位…';
     return '正在记录位置';
+  }
+
+  private async onToggleMockGps(on: boolean): Promise<void> {
+    if (this.mockGpsBusy) return;
+    if (!on) {
+      this.gps.clearMockTrack();
+      this.mockGpsOn = false;
+      this.toast('模拟轨迹已清除');
+      return;
+    }
+
+    this.mockGpsBusy = true;
+    const ok = await this.gps.createMockTrack();
+    this.mockGpsBusy = false;
+    this.mockGpsOn = this.gps.hasMockTrack();
+    if (!ok) {
+      this.mockGpsOn = false;
+      this.toast(this.gps.lastError === '' ? '模拟轨迹生成失败' : this.gps.lastError);
+    } else {
+      this.toast(`已注入相机图案轨迹（${this.gps.mockCount()} 条模拟定位记录）`);
+    }
+  }
+
+  private mockGpsStatusText(): string {
+    if (this.mockGpsBusy) return '正在获取当前位置…';
+    if (this.gps.hasMockTrack()) {
+      return `模拟中 · ${this.gps.mockCount()} 条模拟定位记录（仅今日显示，不改真实记录）`;
+    }
+    return '以当前位置为起点注入一个相机图案，仅影响今日显示，不改真实记录';
   }
 
   onToggleMockCamera(enabled: boolean): void {
@@ -253,11 +277,11 @@ export struct SettingsPage {
 
           Row({ space: 8 }) {
             Column({ space: 2 }) {
-              Text('位置点管理')
+              Text('定位记录管理')
                 .fontSize(16)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
-              Text(`已记录 ${this.gps.recordCount} 个位置点`)
+              Text(`已记录 ${this.gps.displayRecordCount()} 条定位记录`)
                 .fontSize(11)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)
@@ -270,16 +294,7 @@ export struct SettingsPage {
               .fontColor([$r('app.color.text_tertiary')])
           }
           .width('100%').height(60)
-          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
           .onClick(() => { this.gotoManage(); })
-
-          Row() {
-            Text('清除定位记录')
-              .fontSize(16)
-              .fontColor($r('app.color.button_danger'))
-          }
-          .width('100%').height(56)
-          .onClick(() => { this.clearGpsRecords(); })
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
@@ -320,6 +335,28 @@ export struct SettingsPage {
         if (this.debugBuild) {
           this.GroupTitle('调试')
           Column({ space: 12 }) {
+            Row({ space: 12 }) {
+              Column({ space: 3 }) {
+                Text('模拟 GPS 轨迹')
+                  .fontSize(16)
+                  .fontColor($r('app.color.text_primary'))
+                  .alignSelf(ItemAlign.Start)
+                Text(this.mockGpsStatusText())
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .alignSelf(ItemAlign.Start)
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Toggle({ type: ToggleType.Switch, isOn: this.mockGpsOn })
+                .enabled(!this.mockGpsBusy)
+                .onChange((isOn: boolean) => { this.onToggleMockGps(isOn); })
+            }
+            .width('100%')
+
+            Divider().color($r('app.color.divider'))
+
             Row({ space: 12 }) {
               Column({ space: 3 }) {
                 Text('模拟相机设备')
