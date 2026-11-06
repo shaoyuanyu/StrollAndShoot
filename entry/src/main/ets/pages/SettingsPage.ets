@@ -1,16 +1,43 @@
 import { ConfigurationConstant, bundleManager } from '@kit.AbilityKit';
+import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 import { SettingsStore } from '../model/SettingsStore';
 import { CameraService } from '../services/CameraService';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 
-const COLUMN_OPTIONS: number[] = [-1, 3, 4, 5, 6];
+/** 深色模式下拉的取值顺序，与 DARK_OPTIONS 一一对应。 */
+const DARK_VALUES: number[] = [
+  ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET,
+  ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT,
+  ConfigurationConstant.ColorMode.COLOR_MODE_DARK
+];
+const DARK_OPTIONS: SelectOption[] = [
+  { value: '跟随系统' },
+  { value: '浅色' },
+  { value: '深色' }
+];
 
-function formatColumn(n: number): string {
-  if (n <= 0) return '自动';
-  return `${n} 列`;
-}
+const COLUMN_VALUES: number[] = [-1, 3, 4, 5, 6];
+const COLUMN_OPTIONS: SelectOption[] = [
+  { value: '自动' },
+  { value: '3 列' },
+  { value: '4 列' },
+  { value: '5 列' },
+  { value: '6 列' }
+];
+
+const DISPLAY_VALUES: string[] = ['content_first', 'file_first'];
+const DISPLAY_OPTIONS: SelectOption[] = [
+  { value: '内容优先' },
+  { value: '文件优先' }
+];
+
+const GPS_MODE_OPTIONS: SelectOption[] = [
+  { value: '精确' },
+  { value: '日常' },
+  { value: '省电' }
+];
 
 @ComponentV2
 export struct SettingsPage {
@@ -52,13 +79,28 @@ export struct SettingsPage {
     this.onOpenGpsManagement();
   }
 
+  /** 当前深色模式在 DARK_VALUES 里的下标。 */
+  private darkIndex(): number {
+    const i = DARK_VALUES.indexOf(this.settings.darkMode);
+    return i < 0 ? 0 : i;
+  }
+
+  private columnIndex(): number {
+    const i = COLUMN_VALUES.indexOf(this.settings.galleryColumnCount);
+    return i < 0 ? 0 : i;
+  }
+
+  private displayIndex(): number {
+    return this.settings.displayMode === 'content_first' ? 0 : 1;
+  }
+
   @Builder
   GroupTitle(title: string) {
     Text(title)
       .fontSize(13)
       .fontColor($r('app.color.text_secondary'))
       .width('100%')
-      .padding({ left: 4, top: 4 })
+      .padding({ left: 4, top: 6 })
   }
 
   build() {
@@ -67,149 +109,64 @@ export struct SettingsPage {
 
         // ---- 外观 ----
         this.GroupTitle('外观')
-        Column({ space: 12 }) {
-          Text('深色模式')
-            .fontSize(15)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          Row() {
-            Text('跟随系统')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.darkMode = ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET; })
-            Text('浅色')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.darkMode = ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT; })
-            Text('深色')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.darkMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.darkMode = ConfigurationConstant.ColorMode.COLOR_MODE_DARK; })
-          }
-          .width('100%').padding(3)
-          .backgroundColor($r('app.color.filter_chip_bg'))
-          .borderRadius(19)
+        Column() {
+          // 选项类控件用 Select：它属于官方「选择类」沉浸光感组件，
+          // 内容区也能拿到真材质（自制的分段按钮拿不到）。
+          SettingSelectRow({
+            label: '深色模式',
+            options: DARK_OPTIONS,
+            selectedIndex: this.darkIndex(),
+            last: true,
+            onSelect: (index: number) => {
+              const v = DARK_VALUES[index];
+              if (v !== undefined) {
+                this.settings.darkMode = v;
+              }
+            }
+          })
         }
-        .width('100%').padding(16)
+        .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(16)
-        .border({ width: 1, color: $r('app.color.card_border') })
+        .borderRadius(24)
 
         // ---- 画廊 ----
         this.GroupTitle('画廊')
-        Column({ space: 12 }) {
-          Text('默认列数')
-            .fontSize(15)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          Row() {
-            Text('自动')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.galleryColumnCount === -1 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.galleryColumnCount === -1
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.galleryColumnCount === -1
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.galleryColumnCount = -1; })
-            Text('3 列')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.galleryColumnCount === 3 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.galleryColumnCount === 3
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.galleryColumnCount === 3
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.galleryColumnCount = 3; })
-            Text('4 列')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.galleryColumnCount === 4 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.galleryColumnCount === 4
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.galleryColumnCount === 4
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.galleryColumnCount = 4; })
-            Text('5 列')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.galleryColumnCount === 5 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.galleryColumnCount === 5
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.galleryColumnCount === 5
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.galleryColumnCount = 5; })
-            Text('6 列')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.galleryColumnCount === 6 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.galleryColumnCount === 6
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.galleryColumnCount === 6
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.galleryColumnCount = 6; })
-          }
-          .width('100%').padding(3)
-          .backgroundColor($r('app.color.filter_chip_bg'))
-          .borderRadius(19)
-
-          Divider().color($r('app.color.divider'))
-
-          Text('显示模式')
-            .fontSize(15)
-            .fontColor($r('app.color.text_primary'))
-            .width('100%')
-          Row() {
-            Text('内容优先')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.displayMode === 'content_first' ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.displayMode === 'content_first'
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.displayMode === 'content_first'
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.displayMode = 'content_first'; })
-            Text('文件优先')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.settings.displayMode === 'file_first' ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.settings.displayMode === 'file_first'
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.settings.displayMode === 'file_first'
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.settings.displayMode = 'file_first'; })
-          }
-          .width('100%').padding(3)
-          .backgroundColor($r('app.color.filter_chip_bg'))
-          .borderRadius(19)
+        Column() {
+          SettingSelectRow({
+            label: '默认列数',
+            options: COLUMN_OPTIONS,
+            selectedIndex: this.columnIndex(),
+            onSelect: (index: number) => {
+              const v = COLUMN_VALUES[index];
+              if (v !== undefined) {
+                this.settings.galleryColumnCount = v;
+              }
+            }
+          })
+          SettingSelectRow({
+            label: '显示模式',
+            options: DISPLAY_OPTIONS,
+            selectedIndex: this.displayIndex(),
+            last: true,
+            onSelect: (index: number) => {
+              const v = DISPLAY_VALUES[index];
+              if (v !== undefined) {
+                this.settings.displayMode = v;
+              }
+            }
+          })
         }
-        .width('100%').padding(16)
+        .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(16)
-        .border({ width: 1, color: $r('app.color.card_border') })
+        .borderRadius(24)
 
         // ---- 定位 ----
         this.GroupTitle('定位记录')
-        Column({ space: 14 }) {
+        Column() {
           Row() {
             Column({ space: 2 }) {
               Text('定位记录')
-                .fontSize(15)
+                .fontSize(16)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
               Text(this.gpsRunning ? '正在记录位置' : '关闭时不会记录位置')
@@ -220,75 +177,60 @@ export struct SettingsPage {
             .layoutWeight(1)
             .alignItems(HorizontalAlign.Start)
 
+            // 不设 selectedColor：应用级沉浸光感开启后，Toggle 的开关样式
+            // 由系统预设材质接管，自己添颜色会把手感改回去。
             Toggle({ type: ToggleType.Switch, isOn: this.gpsRunning })
-              .selectedColor($r('app.color.primary'))
               .onChange((_on: boolean) => { this.onGpsToggle(); })
           }
-          .width('100%')
+          .width('100%').height(64)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
 
-          Row() {
-            Text('精确')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.gpsMode === 0 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.gpsMode === 0
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.gpsMode === 0
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.onGpsModeChange(0); })
-            Text('日常')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.gpsMode === 1 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.gpsMode === 1
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.gpsMode === 1
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.onGpsModeChange(1); })
-            Text('省电')
-              .fontSize(13).textAlign(TextAlign.Center)
-              .fontWeight(this.gpsMode === 2 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor(this.gpsMode === 2
-                ? $r('app.color.text_on_primary') : $r('app.color.text_primary'))
-              .height(36).borderRadius(16).layoutWeight(1)
-              .backgroundColor(this.gpsMode === 2
-                ? $r('app.color.primary') : Color.Transparent)
-              .onClick(() => { this.onGpsModeChange(2); })
-          }
-          .width('100%').padding(3)
-          .backgroundColor($r('app.color.filter_chip_bg'))
-          .borderRadius(19)
+          SettingSelectRow({
+            label: '记录频率',
+            options: GPS_MODE_OPTIONS,
+            selectedIndex: this.gpsMode,
+            onSelect: (index: number) => { this.onGpsModeChange(index); }
+          })
 
           Row({ space: 8 }) {
-            Text(`已记录 ${this.gpsRecordCount} 个位置点`)
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'))
-              .layoutWeight(1)
-            Button('管理')
-              .height(32)
-              .fontSize(13)
-              .fontColor($r('app.color.primary'))
-              .backgroundColor($r('app.color.primary_soft'))
-              .onClick(() => { this.gotoManage(); })
-            Button('清除')
-              .height(32)
-              .fontSize(13)
-              .fontColor($r('app.color.button_danger'))
-              .backgroundColor($r('app.color.primary_soft'))
-              .onClick(() => { this.onGpsClear(); })
+            Column({ space: 2 }) {
+              Text('位置点管理')
+                .fontSize(16)
+                .fontColor($r('app.color.text_primary'))
+                .alignSelf(ItemAlign.Start)
+              Text(`已记录 ${this.gpsRecordCount} 个位置点`)
+                .fontSize(11)
+                .fontColor($r('app.color.text_tertiary'))
+                .alignSelf(ItemAlign.Start)
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(16)
+              .fontColor([$r('app.color.text_tertiary')])
           }
-          .width('100%')
+          .width('100%').height(60)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+          .onClick(() => { this.gotoManage(); })
+
+          Row() {
+            Text('清除定位记录')
+              .fontSize(16)
+              .fontColor($r('app.color.button_danger'))
+          }
+          .width('100%').height(56)
+          .onClick(() => { this.onGpsClear(); })
         }
-        .width('100%').padding(16)
+        .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(16)
-        .border({ width: 1, color: $r('app.color.card_border') })
+        .borderRadius(24)
 
         // ---- 存储 ----
         this.GroupTitle('存储')
         Row({ space: 8 }) {
           Text('缩略图缓存')
-            .fontSize(15)
+            .fontSize(16)
             .fontColor($r('app.color.text_primary'))
             .layoutWeight(1)
           SymbolGlyph($r('sys.symbol.chevron_right'))
@@ -297,25 +239,23 @@ export struct SettingsPage {
         }
         .width('100%').height(56).padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(16)
-        .border({ width: 1, color: $r('app.color.card_border') })
+        .borderRadius(24)
         .onClick(() => { this.onOpenCacheManagement(); })
 
         // ---- 关于 ----
         this.GroupTitle('关于')
         Row() {
           Text('版本')
-            .fontSize(15)
+            .fontSize(16)
             .fontColor($r('app.color.text_primary'))
           Blank()
           Text(this.versionName)
-            .fontSize(14)
+            .fontSize(15)
             .fontColor($r('app.color.text_secondary'))
         }
         .width('100%').height(56).padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(16)
-        .border({ width: 1, color: $r('app.color.card_border') })
+        .borderRadius(24)
 
         // ---- 调试 ----
         if (this.debugBuild) {
@@ -324,12 +264,12 @@ export struct SettingsPage {
             Row({ space: 12 }) {
               Column({ space: 3 }) {
                 Text('模拟相机设备')
-                  .fontSize(15)
+                  .fontSize(16)
                   .fontColor($r('app.color.text_primary'))
                   .alignSelf(ItemAlign.Start)
                 Text(this.svc.photoCount > 0
                   ? `已连接虚拟相机，共 ${this.svc.photoCount} 张`
-                  : '开启后到「相机」页点「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片')
+                  : '开启后到「相机」页点右上角的「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片')
                   .fontSize(11)
                   .fontColor($r('app.color.text_tertiary'))
                   .alignSelf(ItemAlign.Start)
@@ -338,7 +278,6 @@ export struct SettingsPage {
               .alignItems(HorizontalAlign.Start)
 
               Toggle({ type: ToggleType.Switch, isOn: this.settings.mockCameraEnabled })
-                .selectedColor($r('app.color.primary'))
                 .onChange((isOn: boolean) => { this.onToggleMockCamera(isOn); })
             }
             .width('100%')
@@ -381,8 +320,7 @@ export struct SettingsPage {
           }
           .width('100%').padding(16)
           .backgroundColor($r('app.color.bg_surface'))
-          .borderRadius(16)
-          .border({ width: 1, color: $r('app.color.card_border') })
+          .borderRadius(24)
         }
       }
       .width('100%')
@@ -393,5 +331,61 @@ export struct SettingsPage {
     .align(Alignment.Top)
     // 标题栏浮在内容之上，首屏内容按其高度内缩；滚动时从标题栏下方穿过
     .contentStartOffset(titleBarTotalVp())
+  }
+}
+
+/**
+ * 设置行：左侧标题 + 右侧 Select 玻璃胶囊。
+ *
+ * 必须是独立组件：@Builder 的形参不会刷新，把 selectedIndex 传给 @Builder 后
+ * 选项变了界面不会跟着变。Select 属于官方「选择类」沉浸光感组件，内容区也能
+ * 拿到真材质。
+ */
+@ComponentV2
+struct SettingSelectRow {
+  @Param label: string = '';
+  @Param options: SelectOption[] = [];
+  @Param selectedIndex: number = 0;
+  @Param last: boolean = false;
+  @Event onSelect: (index: number) => void = (_i: number) => {};
+
+  /** Select 的按钮文字由 value() 决定，selected() 只负责菜单里的选中态。 */
+  private selectedLabel(): string {
+    const i = this.selectedIndex;
+    if (i < 0 || i >= this.options.length) return '';
+    const v = this.options[i].value;
+    return typeof v === 'string' ? v : '';
+  }
+
+  build() {
+    Row() {
+      Text(this.label)
+        .fontSize(16)
+        .fontColor($r('app.color.text_primary'))
+        .layoutWeight(1)
+      Select(this.options)
+        .selected(this.selectedIndex)
+        .value(this.selectedLabel())
+        .font({ size: 15, weight: FontWeight.Medium })
+        .fontColor($r('app.color.text_secondary'))
+        .selectedOptionFont({ size: 15, weight: FontWeight.Medium })
+        .selectedOptionFontColor($r('app.color.primary'))
+        .optionFont({ size: 15 })
+        .optionFontColor($r('app.color.text_primary'))
+        .height(40)
+        .borderRadius(20)
+        .backgroundColor(Color.Transparent)
+        .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
+          .fontColor([$r('app.color.text_secondary')]))
+        .systemMaterial(new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+          interactive: true
+        }))
+        .accessibilityText(`${this.label}，当前${this.selectedLabel()}`)
+        .onSelect((index: number) => { this.onSelect(index); })
+    }
+    .width('100%')
+    .height(56)
+    .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
   }
 }

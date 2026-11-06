@@ -1,6 +1,6 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
-import { uiMaterial } from '@kit.ArkUI';
+import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
@@ -335,6 +335,8 @@ export struct MainScreen {
             .backgroundColor(Color.Transparent)
             .margin({ right: 8 })
             .accessibilityText('格式筛选，当前' + this.filterLabel())
+            .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
+              .fontColor([$r('app.color.text_primary')]))
             .systemMaterial(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true
@@ -356,6 +358,40 @@ export struct MainScreen {
           interactive: true
         }))
         .onClick(() => { this.toggleSelectVersion++; })
+      }
+
+      if (this.currentTab === 1) {
+        // 相机页的主操作放在标题栏里：真·沉浸光感只在标题栏内生效，
+        // 内容区的大按钮拿不到材质。不设 backgroundColor、不设 materialColor
+        // 时材质取 Button 主题色（蓝），正好当主操作。
+        if (this.svc.scanning) {
+          Button('扫描中')
+            .height(40)
+            .padding({ left: 18, right: 18 })
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_on_primary'))
+            .borderRadius(20)
+            .opacity(0.6)
+            .systemMaterial(new uiMaterial.ImmersiveMaterial({
+              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+              interactive: true
+            }))
+        } else {
+          Button(this.svc.connected ? '快速扫描' : '搜索相机')
+            .height(40)
+            .padding({ left: 18, right: 18 })
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_on_primary'))
+            .borderRadius(20)
+            .accessibilityText(this.svc.connected ? '快速扫描相机' : '搜索相机')
+            .systemMaterial(new uiMaterial.ImmersiveMaterial({
+              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+              interactive: true
+            }))
+            .onClick(() => { this.svc.scanForCamera(true); })
+        }
       }
     }
     .width('100%')

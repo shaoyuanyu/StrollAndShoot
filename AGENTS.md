@@ -16,7 +16,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.15.2 / 1015002 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.16.0 / 1016000 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署）。见“macOS 开发环境” |
 
 ## macOS 开发环境
@@ -372,6 +372,8 @@ $HDC -t $T shell "bm dump -a" | grep stroll
   3. 玻璃控件用 `uiMaterial.ImmersiveMaterial`（`ULTRA_THIN` + `interactive: true`），与底部页签同一套材质，且与滚动无关、常驻。
   - 实现：`MainScreen.TitleBar` = `Stack` 里「一整块 `linearGradient` 渐隐层」+「底部 56vp 的一行：28fp 大标题 + 右���两颗玻璃胶囊」，`.title({ builder, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })`。
 - **材质只在「Navigation/NavDestination 标题栏」或「横向 Tabs 且 barPosition: End 的底部 TabBar」里生效**（官方《组件适配沉浸光感》）。写在内容区不生效——所以胶囊必须画在 `title({ builder })` 里，不能挪到页面内容里。
+  - 例外是官方「按钮与选择类」里明确列出全页面生效的 `Select` / `Toggle` / `Slider`：`Select`、`Toggle(Switch)`、`Slider` 在内容区也能拿到真材质（应用级开关已开时默认生效）。`Button`、`ChipGroup`、`SegmentButton` **不行**，内容区里只能写成普通胶囊。所以设置页的选项控件用 `Select` + `Toggle`，相机页的主操作用标题栏胶囊。
+  - `Select` 的按钮文字只认 `value()`，`selected()` 只控制菜单里的选中态；只给 `selected()` 会渲染成一个**只有箭头、没有文字**的空胶囊。设置页的 `SettingSelectRow` 就是因此才单独取了 `selectedLabel()`。
 - **内容区的浮动卡片拿真材质：挂进标题栏 builder，再用 `position` 画到目标位置**（2026-11-06 突破）。这是目前唯一同时满足「真材质 + 不挡交互」的做法，下载进度浮岛与多选底部操作栏都这么干：
   - 在 `MainScreen.TitleBar` 的 `Stack` 里加一层「浮岛层」，把组件写成它的子节点；
   - 外面包一层 `Column` 承载 `.position({ top, left/right })` 与 `.systemMaterial(this.floatMaterial)` —— **自定义组件不能直接链式挂通用属性**（会报 `does not meet UI component syntax`），必须包容器；
@@ -432,10 +434,16 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - `List` 用 `.contentStartOffset(this.listTopInset())` 让首行避开 HDS 标题栏，并设 `.clip(false)` + `.cachedCount(6, true)` 让滚动中的照片能穿到标题栏下方被模糊；扫描横幅显示时它自己就在内容顶部，此时 `listTopInset()` 归零（原因见「沉浸光感 > 顶部标题栏」）
 
 ### CameraPage.ets
-未连接时只有一个“搜索相机”按钮；已连接时显示“快速扫描”、“全量扫描”、“断开连接”，以及设备信息卡（品牌、型号、PTP 序列号、固件版本、USB 识别码、USB 序列号、缓存标识、照片数量）。根节点 `Scroll` 用 `.contentStartOffset(TITLE_BAR_HEIGHT)` 避让标题栏。
+- 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `currentTab === 1` 分支）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
+- 内容区只有三张 24vp 圆角白卡：状态卡（连接状态、相机名、扫描进度与统计）、设备信息卡（9 行 52vp）、操作卡（全量扫描 + 红色断开连接）。未连接时状态卡换成空态卡（图标 + 说明 + 指向右上角「搜索相机」）。
+- 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
 
 ### SettingsPage.ets
-深色模式（跟随系统 / 浅色 / 深色）、画廊默认列数、显示模式（内容优先 / 文件优先）、GPS 定位开关、定位模式（精确 31 秒 / 日常 61 秒 / 省电 121 秒）、版本号、缩略图缓存入口、调试日志面板（清除 / 复制，等宽字体，高 300vp）。
+- 分组卡片统一 24vp 圆角、无描边、行高 56vp；分组标题 13fp 次级色。
+- 选项类（深色模式 / 默认列数 / 显示模式 / 记录频率）全是**右侧 `Select` 玻璃胶囊**（`SettingSelectRow`），不要再用自制的「灰底 + 蓝胶囊」分段按钮——那东西在内容区拿不到材质。
+- 开关（GPS 记录、模拟相机）用 `Toggle(Switch)`，**不要设 `selectedColor`**，否则会覆盖系统预设的沉浸光感样式。
+- 导航类行带 `chevron_right`（位置点管理、缩略图缓存）；危险行（清除定位记录）用 `button_danger` 红字。
+- 调试日志面板仍是等宽字体、高 240vp，只在调试包里渲染。
 
 ### PhotoViewer.ets
 预览器，一个文件里有四个结构：
