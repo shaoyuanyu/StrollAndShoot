@@ -900,7 +900,7 @@ export class CameraService {
       keys.push(key);
     });
     const stale: string[] = [];
-    let skipped = 0;
+    const skippedCodes: string[] = [];
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       const record = this.downloadRegistry.get(key);
@@ -911,10 +911,17 @@ export class CameraService {
       } catch (err) {
         const code = (err as BusinessError).code;
         // 13900002 = No such file or directory
-        if (code === 13900002) {
+        // 13900001 = Operation not permitted
+        // 13900012 / 201 = Permission denied
+        // 系统图库删除后图片会进“最近删除”，此时 media URI 往往返回 13900001
+        // 而不是 ENOENT；只对 media URI 把 EPERM/权限拒绝也判为失效。
+        const isMediaUri = record.localPath.startsWith('file://media/');
+        const mediaGone = isMediaUri &&
+          (code === 13900001 || code === 13900012 || code === 201);
+        if (code === 13900002 || mediaGone) {
           stale.push(key);
         } else {
-          skipped++;
+          skippedCodes.push(String(code));
         }
       }
     }
@@ -925,8 +932,8 @@ export class CameraService {
       this.log.add(`下载记录清理: 移除 ${stale.length} 条失效记录`);
       await this.compactRegistry();
     }
-    if (skipped > 0) {
-      this.log.add(`下载记录校验跳过 ${skipped} 条（非“文件不存在”错误）`);
+    if (skippedCodes.length > 0) {
+      this.log.add(`下载记录校验跳过 ${skippedCodes.length} 条，错误码=${skippedCodes.join(',')}`);
     }
   }
 
