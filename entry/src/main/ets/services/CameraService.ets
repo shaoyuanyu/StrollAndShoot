@@ -19,6 +19,15 @@ import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } fro
 const DOMAIN = 0x0000;
 const TAG = 'CameraService';
 
+/**
+ * 全尺寸解码的最长边上限（px）。
+ *
+ * 预览器最大 5x 捏合，而手机屏幕长边约 2700px：3072px 的源图已经够用。
+ * 不限制时 24MP 原图是 96MB/张，预览器「当前 + 前后各 3 张」同时驻留会把
+ * 内存和纹理带宽打满，捏合、翻页都会发涩。
+ */
+const FULL_DECODE_MAX_EDGE = 3072;
+
 // ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
 
 class OrientationTransform {
@@ -93,8 +102,18 @@ export class CameraService {
   private cacheMaxBytes: number = 200 * 1048576;
   private detailIndex: number = -1;
   private prevDetailIndex: number = -1;
-  private preloadRadius: number = 5;
+  /**
+   * 邻近照片预加载半径。
+   *
+   * 以前是 5（前后各 5 张），每翻一张照片就排队下载最多 10 张原图。真机上
+   * USB 是串行管道，这些下载会和「用户正在等的那一张」抢带宽；预览器自己也
+   * 有一套 ±3 的加载队列，所以 5 纯属重复劳动。收到 2 之后，预览器打开期间
+   * 还会整体挂起（`suspendNeighborPreload`），把管道让给当前照片。
+   */
+  private preloadRadius: number = 2;
   private preloading: boolean = false;
+  /** 预览器打开时挂起邻近预加载，避免与预览器自己的加载队列抢 USB。 */
+  private neighborPreloadSuspended: boolean = false;
 
   // Scan progress
   @Trace scanProgress: number = 0;
@@ -1481,18 +1500,24 @@ export class CameraService {
         this.addToCache(handle, data);
       }
 
+      // 取图结束（含等待邻近预加载的时间）
+      const tData = Date.now();
+
       // 读取 EXIF 方向（主线程读取元数据，很快）
       const orient = await this.getPhotoOrientation(handle, data.buffer as ArrayBuffer);
+      const tOrient = Date.now();
 
       // 为 TaskPool 克隆一份 ArrayBuffer，主线程保留原始数据用于缓存
       const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      const tCopy = Date.now();
 
       const task = new taskpool.Task(
         decodeFullPhotoTask,
         decodeBuf,
         orient.rotate,
         orient.flipH,
-        orient.flipV
+        orient.flipV,
+        FULL_DECODE_MAX_EDGE
       );
 
       let pixelMap: image.PixelMap;
@@ -1505,7 +1530,11 @@ export class CameraService {
 
       const t2 = Date.now();
       const tag = hit ? '缓存命中' : '下载完成';
-      this.log.add(`${tag}: ${((t2 - t0) / 1000).toFixed(1)}s`);
+      // 分开记「取图 / 方向 / 拷贝 / 解码」四段：真机上这几段里哪一段占大头，
+      // 直接决定「第一次打开照片卡一下」该从哪下手（USB 串行管道 vs 主线程拷贝）。
+      this.log.add(`${tag}: ${((t2 - t0) / 1000).toFixed(1)}s` +
+        ` (取图 ${tData - t0}ms / 方向 ${tOrient - tData}ms` +
+        ` / 拷贝 ${tCopy - tOrient}ms / 解码 ${t2 - tCopy}ms)`);
 
       // 读取旋转后的实际尺寸
       const info = await pixelMap.getImageInfo();
@@ -1609,6 +1638,9 @@ export class CameraService {
 
   private async preloadAdjacent(total: number): Promise<void> {
     if (this.preloading) return;
+    // 预览器打开时整体让路：它自己的队列会按需取图，两边同时下载只会
+    // 在串行的 USB 管道上互相插队，把「正在看的这张」拖慢。
+    if (this.neighborPreloadSuspended) return;
     this.preloading = true;
 
     const direction = this.detectSwipeDirection();
@@ -1623,6 +1655,7 @@ export class CameraService {
 
     for (const qi of queue) {
       if (!this.preloading) break;
+      if (this.neighborPreloadSuspended) break;
       const photo = this.preloadPhotos[qi];
       if (!photo) continue;
       if (this.compressedCache.has(photo.handle)) continue;
@@ -1649,7 +1682,29 @@ export class CameraService {
       this.preloadTimer = -1;
     }
     this.preloading = false;
-    this.preloadingSet.clear();
+    // 刻意不清 `preloadingSet`：里面可能有正在传的 handle，清掉会让别的路径
+    // 误以为它没在传，从而在串行的 USB 管道上再开一个并发传输。
+    // 循环自己会在每张结束后 delete。
+  }
+
+  /**
+   * 挂起邻近照片的字节预加载（预览器打开时调用）。
+   * 只阻止「开始新的下载」，已经在传的那一张会正常结束，不会打断 USB 事务。
+   */
+  suspendNeighborPreload(): void {
+    this.neighborPreloadSuspended = true;
+    if (this.preloadTimer >= 0) {
+      clearTimeout(this.preloadTimer);
+      this.preloadTimer = -1;
+    }
+  }
+
+  /** 恢复邻近预加载（预览器关闭时调用）。 */
+  resumeNeighborPreload(): void {
+    this.neighborPreloadSuspended = false;
+    if (this.preloadPhotos.length > 0) {
+      this.schedulePreload(this.preloadPhotos.length);
+    }
   }
 
   clearFullCache(): void {

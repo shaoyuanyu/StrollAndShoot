@@ -17,8 +17,6 @@ import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
-import { createMyNode, getMyNode } from '../NodeContainer/CustomComponent';
-import type { MyNodeController } from '../NodeContainer/CustomComponent';
 
 @Builder
 export function MainScreenBuilder() {
@@ -42,6 +40,13 @@ export struct MainScreen {
   @Local toggleSelectVersion: number = 0;
   /** 多选态：已选数量与可选项总数，由 GalleryPage 上报。 */
   @Local gallerySelectedCount: number = 0;
+  /**
+   * 预览器返回时，若目标格子不在列表可视区（虚拟化没渲染、或渲染在屏幕外），
+   * 先让画廊滚到那一行再收回，官方图库也是先把网格对齐到当前张。
+   * 走计数版本 + handle 的既有约定（同 selectAllVersion），不跨组件调方法。
+   */
+  @Local galleryScrollVersion: number = 0;
+  private galleryScrollHandle: number = -1;
   @Local gallerySelectableCount: number = 0;
   /** 点标题栏「全选 / 取消全选」时递增，GalleryPage 监听后执行。 */
   @Local selectAllVersion: number = 0;
@@ -416,6 +421,12 @@ export struct MainScreen {
     .justifyContent(FlexAlign.Center)
   }
 
+  /** 请求画廊把列表滚到某张照片（预览器返回转场对齐用）。 */
+  private requestGalleryScroll(handle: number): void {
+    this.galleryScrollHandle = handle;
+    this.galleryScrollVersion++;
+  }
+
   build() {
     NavDestination() {
       Tabs({ index: this.currentTab, controller: this.tabsController, barPosition: BarPosition.End }) {
@@ -434,6 +445,8 @@ export struct MainScreen {
             },
             exitSelectModeVersion: this.exitSelectModeVersion,
             toggleSelectVersion: this.toggleSelectVersion,
+            galleryScrollVersion: this.galleryScrollVersion,
+            galleryScrollHandle: this.galleryScrollHandle,
             selectAllVersion: this.selectAllVersion,
             downloadVersion: this.downloadVersion,
             onThumbClick: (_displayGroups: DisplayGroup[], index: number) => {
@@ -455,16 +468,7 @@ export struct MainScreen {
                 this.svc.getLog().add(`thumbPos MISS handle=${handle}`);
               }
 
-              // 2. Populate the global BuilderNode with this thumbnail
-              const pm = this.svc.thumbnailPixelMapMap.get(handle);
-              if (pm) {
-                const node = getMyNode();
-                if (node) {
-                  node.setPixelMap(this.getUIContext(), pm);
-                }
-              }
-
-              // 3. Cache positions around the tapped item so the pop animation can
+              // 2. Cache positions around the tapped item so the pop animation can
               //    restore the shared element from a known rect. Only a window is
               //    cached — any handle outside it falls back to a live query below,
               //    so correctness is kept without an O(n) scan on every tap.
@@ -480,29 +484,25 @@ export struct MainScreen {
                 }
               }
 
-              // 4. Push PhotoViewer via Navigation (not router)
+              // 3. Push PhotoViewer via Navigation (not router)
               const pushParam: Record<string, Object> = {};
               pushParam['handle'] = handle;
               pushParam['handles'] = handles;
               pushParam['startIndex'] = index;
               pushParam['cardItemInfo'] = cardItemInfoStr;
               pushParam['posCache'] = JSON.stringify(posCache);
-              pushParam['doDefaultTransition'] = (_controller: MyNodeController) => {
-                // Gallery uses regular Image components — nothing to restore
-              };
+              // 实时矩形优先（画廊可能已经被滚过，push 时缓存的位置会过期）
               pushParam['positionLookup'] = (targetHandle: number): string => {
-                // Fallback: use cached position if available
-                const cached = posCache[String(targetHandle)];
-                if (cached) return cached;
                 const r = ComponentAttrUtils.getRectInfoById(
                   this.getUIContext(), `thumb_${targetHandle}`);
                 if (r) {
-                  const s = JSON.stringify(r);
-                  this.svc.getLog().add(`posLookup handle=${targetHandle} rect=${s}`);
-                  return s;
+                  return JSON.stringify(r);
                 }
                 this.svc.getLog().add(`posLookup MISS handle=${targetHandle}`);
                 return '';
+              };
+              pushParam['requestGalleryScroll'] = (targetHandle: number): void => {
+                this.requestGalleryScroll(targetHandle);
               };
               this.pageInfos.pushPath({ name: 'PhotoViewerScreen', param: pushParam });
             },

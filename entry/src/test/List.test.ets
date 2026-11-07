@@ -3,6 +3,7 @@ import photoGroupUtilTest from './PhotoGroupUtil.test';
 import gpsTrackTest from './GpsTrack.test';
 import gpsFormatTest from './GpsFormat.test';
 import gpsMockTrackTest from './GpsMockTrack.test';
+import galleryZoomTest from './GalleryZoom.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -10,4 +11,5 @@ export default function testsuite() {
   gpsTrackTest();
   gpsFormatTest();
   gpsMockTrackTest();
+  galleryZoomTest();
 }

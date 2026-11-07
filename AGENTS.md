@@ -97,10 +97,9 @@ StrollAndShoot/
 │   │   │   ├── components/         # 复用组件
 │   │   │   ├── services/           # 单例服务
 │   │   │   ├── model/              # 数据结构与持久化设置
-│   │   │   ├── utils/              # 分组、组件坐标、窗口信息、标题栏尺寸
+│   │   │   ├── utils/              # 分组、画廊缩放的列数换算、组件坐标、窗口信息、标题栏尺寸
 │   │   │   ├── workers/            # ImageDecoder：TaskPool 并发函数（不是 Worker 线程）
-│   │   │   ├── CustomTransition/   # 一镜到底转场的动画参数与注册表
-│   │   │   └── NodeContainer/      # BuilderNode 单例，承载共享元素
+│   │   │   └── CustomTransition/   # 一镜到底转场：注册表 + PhotoMorph（共享照片层与几何换算）
 │   │   ├── debug/                  # 仅调试包生效的虚拟 PTP 相机（MockPtpDevice / MockPtpSession）
 │   │   ├── cpp/                    # NAPI 代码与 libentry.so 的类型声明
 │   │   └── resources/              # base 为浅色，dark 为深色
@@ -151,6 +150,8 @@ hvigorw test -p module=entry -p coverage=true
 |---|---|
 | `debug/MockPtpDevice.ets` | 虚拟相机的“硬件”：USB 描述符、DeviceInfo、1 个 storage、`DCIM → 100MOCK / 101MOCK` 两层目录树、38 张照片的元数据，以及按 handle 现场编码出的 JPEG（缩略图 180×120，原图 1200×800） |
 | `debug/MockPtpSession.ets` | `PtpTransport` 的第二个实现：`connect` / `getDeviceInfo` / `getStorageIDs` / `getObjectHandles` / `getObjectInfo` / `getThumb` / `getObject` / `getPartialObject`，每个调用带少量延迟让进度条可见。**`getObject` 固定 520ms/张**（靠近真实 USB 单张原图耗时）：之前 120ms 时 38 张几秒就传完，进度浮岛的下载中 / 保存中 / 完成三种状态根本来不及看 |
+
+**`makeJpeg` 必须保持「一行渐变 + 逐行 memcpy」的写法**（2026-11-07 实测）：原先是 1200×800 逐像素写 RGBA，96 万次 JS 循环、每次 4 次写入，`hilog` 实测 **fill 就要 127–167ms，整张 130–175ms**，而且跑在 UI 线程上；打开一张照片会连续生成「当前 + 邻近预加载」好几张，真机上表现就是「一开图 / 一传输就卡」。改成先算一行（水平渐变）再 `u8.set(row, offset)` 复制后，fill 降到 **1–2ms**、整张 10–17ms（余下是原生的 `createPixelMap` + `packToData`）。日志里每次生成会打一行 `MockPtp: jpeg 1200x800 10ms (fill 1ms)`，改这块时先看这个数。
 
 `PtpHost.ets` 里 `PtpSession` 与 `MockPtpSession` 共用 `PtpTransport` 接口，`CameraService.session` 声明为该接口，`scanForCamera()` 开头用 `syncSessionMode()` 按调试开关选实现。于是：
 
@@ -434,16 +435,18 @@ $HDC -t $T shell "bm dump -a" | grep stroll
 导航根与初始化。设置日志路径与下载目录、初始化 `GpsRecorder`、把 `AppLog` 交给 `PtpHost` 与 `ExifGeotagger`、监听深色模式设置并调用 `setColorMode`，最后把 `MainScreen` 作为首个目的地压入 `NavPathStack`。
 
 ### MainScreen.ets
-NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时收集该缩略图的屏幕坐标与 PixelMap 交给 BuilderNode，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。
+NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时取该缩略图的屏幕矩形（`getRectangleById('thumb_<handle>')`，px）与附近 81 个单元格的位置缓存，连同 `positionLookup` 回调一起作为 NavPathStack 参数传给预览器，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。缩略图位图不必传：预览器自己从 `svc.thumbnailPixelMapMap` 取。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。
 
 ### GalleryPage.ets
 - 网格对齐官方图库：**默认 3 列**（设置里可改 4/5/6）、**贴边无页边距**、间距 2vp、**直角无圆角**、缩略图上**不叠时刻角标**。两指缩放（0.4x–6.0x）时列数随之重算
+- **捏合缩放只允许改「列数」，且只在跨档时改**：单元格是 `layoutWeight(1)` + `aspectRatio(1)`，视觉尺寸只由列数决定，倍数在同一档内连续变化不产生任何视觉差异。所以 `pinchScale` 是**普通字段**（逐帧更新不触发重建），只有列数跨档才写 `@Local appliedColumns`。**不要**把缩放倍数写成 `@Local`——那会让每个捏合事件都重建整页，实测 728 次事件只该换列十几次（日志 `PERF pinch: updates=…, columnChanges=…`）。列数/间距的换算在 `utils/GalleryZoom.ets`，有 Local Test（`GalleryZoom.test.ets`）
+- 行模型**不依赖 `thumbnailVersion`**：缩略图到达时只有 `ThumbImage` 自己重建。以前把 `thumbnailVersion` 编进 `buildFlatItems()` 的缓存键，扫描时每 4 张缩略图就重排一次全量行模型，纯浪费
 - 按拍摄日期分组，标题文案对齐官方：`今天` / `昨天` / `11月6日` / `2025年11月6日`，没有拍摄日期的归入「未知日期」。分组键是 `YYYYMMDD` 原始串，显示文案由 `dateHeaderLabel()` 换算
 - 日期标题：左侧 16fp 粗体、上下各 24vp 留白、左右 16vp；多选态右侧多一个整组勾选圆圈（三态，见「多选模式」）
 - 格式筛选是标题栏右侧的 `Select` 下拉（选项 = 全部 + 照片里出现过的扩展名，只在“文件优先”模式下出现）。**不要**再做成「点一下轮换到下一个格式」的循环按钮 —— 用户猜不到下一下会到哪，设计很差
 - 长按进入多选（或点标题栏的「选择」胶囊）。多选态标题栏左叉 + 左对齐「已选择 N 项」+ 全选胶囊，底部悬浮胶囊操作栏只有「下载」一项。详见「多选模式」
 - 缩略图按整行显示：一行（当前列数）全部解码完成才同时出现，否则该行显示占位
-- `buildFlatItems()` 把日期标题与行拍平成一个数组交给 `Repeat` + `.virtualScroll()`，结果按 `photosVersion`、`thumbnailVersion`、显示模式、筛选值、缩放比例、列数、宽度做缓存
+- `buildFlatItems()` 把日期标题与行拍平成一个数组交给 `Repeat` + `.virtualScroll()`，按 `photosVersion`、显示模式、筛选值、**当前列数**、宽度做缓存。日期分组另外缓存在 `ensureGrouping()` 里（只依赖照片与筛选）：捏合换列只需要重新分行，不要再扫一遍全量照片
 - 缩略图单元格抽成独立 `@ComponentV2 ThumbImage`，内部调 `svc.thumbForRender(handle)` 建立 V2 依赖（原因见「状态管理」里的两个刷新坑）
 - 末尾有 `FlatItem.tail()` 占位项（104vp），给悬浮页签留滚动空间；`ListItem` 的 `key` 必须保持稳定，把「行是否加载完成」编进 `key` 会让 `virtualScroll` 的复用项失效、整行渲染成空白
 - `List` 用 `.contentStartOffset(this.listTopInset())` 让首行避开 HDS 标题栏，并设 `.clip(false)` + `.cachedCount(6, true)` 让滚动中的照片能穿到标题栏下方被模糊；扫描横幅显示时它自己就在内容顶部，此时 `listTopInset()` 归零（原因见「沉浸光感 > 顶部标题栏」）
@@ -462,12 +465,38 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 调试区新增「模拟 GPS 轨迹」开关：以当前定位为起点生成相机图案，覆盖今天的地图/列表显示；真实 `gps_records.json` 不变，关掉开关立即恢复。仅 debug 包可见。
 
 ### PhotoViewer.ets
-预览器，一个文件里有四个结构：
+预览器，一个文件里有五个结构：`ZoomState`、`ZoomLayer`、`ZoomableImage`、`MainImageView`、`ThumbCellView`、`PhotoViewerScreen`。
 
-- `ZoomableImage`：单张图片的缩放与拖动。捏合用 `pinchCenterX/Y`（屏幕绝对坐标）计算锚点；拖动位移要乘 `scaleVal` 换算回屏幕空间；捏合期间 `PanGesture` 会持续累计位移，必须记录并在捏合结束后扣除，否则松手时会跳变。缩放范围 1x–5x，双击在 1x 与 2.5x 之间切换。
-- `MainImageView`：主图容器，叠加加载指示与扫描进度横幅。
+- `ZoomableImage`：单张图片的缩放与拖动。捏合用 `pinchCenterX/Y`（屏幕绝对坐标）计算锚点；拖动位移要乘缩放倍数换算回屏幕空间；捏合期间 `PanGesture` 会持续累计位移，必须记录并在捏合结束后扣除，否则松手时会跳变。缩放范围 1x–5x，双击在 1x 与 2.5x 之间切换。捏合与拖动都要接 `onActionCancel`（来电、三指会取消手势），否则页面会永远停在「捏合中」。
+- **逐帧变化的缩放值必须放在 `ZoomState`（`@ObservedV2` 的 `@Trace scale/x/y`）里，由叶子组件 `ZoomLayer` 订阅，`ZoomableImage` 自己不许再持有 `@Local scaleVal/offX/offY`**：一旦把这三个值写成 `ZoomableImage` 的 `@Local`，每个捏合事件都会重跑它的 `build()`，`GestureGroup` + 3 个手势连同 `PanGesture` 的触发距离每帧重建并重新绑定——这是预览器缩放卡顿的根因（2026-11-07）。`ZoomableImage` 里只保留一个 `@Local zoomed`，它只在 1x 边界翻转时才变，用来切换 `PanGesture` 的 `distance`（1x 时 80vp，让主 Swiper 先接管滑动；放大后 3vp）。
+- `MainImageView`：主图容器，叠加加载指示与扫描进度横幅。**每张照片的状态是 `PhotoRenderState`（`@ObservedV2`，`@Trace fullPm/loading/photoW/photoH`），页面通过一张普通 `Map` 拿到它再传进来，页面自己绝不能在 `build()` 里读这些字段**：否则任何一张图解码完成都会重建整页（标题栏 + 两个 Swiper + Repeat 全量 diff）。后台每解完一张邻近照片就卡一下，就是这么来的。
+- `fullResMap`、`loadingHandle` 必须是**普通字段/普通 Map**，`thumbnailPixelMapMap` 也是普通 Map；界面刷新靠 `PhotoRenderState` 和 `MainImageView` 内部读 `svc.thumbnailVersion`。
+- 缩放/翻页期间主图每帧都在动，标题栏与缩略图条的 `backgroundBlurStyle` 会跟着每帧重算（渲染成本高）。`chromeMotion` 为真时换成半透明纯色（`chromeBg()` / `chromeBlur()`），静止时恢复模糊。捏合、`onGestureSwipe`、缩略图条滑动都要切换它，且只在状态翻转时写 `@Local`。
+- `updateScales()` 只在值真的变化时写 `scaleArr/offsetArr`，并且**不要再引入逐帧变化的 `thumbFrac`**：`@Local` 数组每次赋值都会通知订阅者，逐帧全写会让窗口内 11 个缩略图单元格反复重算并重启自身的 150ms 动画。中间项的选中高亮由 `scaleArr[i] >= MAX_S` 判定。
 - `ThumbCellView`：底部缩略图条的单元。
-- `PhotoViewerScreen`：NavDestination。主 `Swiper` 与缩略图 `Swiper` 双向联动（`startFakeDrag` / `fakeDragBy` 同步），主图滑动带惯性，缩略图中心项放大到 1.3x。原图按“当前照片优先，前后各 3 张”排队串行加载，手势期间暂停。返回时用当前照片的缩略图更新共享元素，保证转场起点正确。
+- `PhotoViewerScreen`：**打开时调用 `svc.suspendNeighborPreload()`，关闭时 `resumeNeighborPreload()`**（并把 `loadingPaused` 置真）：预览器自己有一套「当前优先、前后各 3 张」的串行加载队列，后台再跑一套邻近预加载只会在串行的 USB 管道上插队，把用户正在等的那张拖慢——2026-11-07 实测手机上预览期间每秒都有 `预加载[N]` 时，第一次开图要 1.0–1.4s，挂起后回到 0.5s（mock 的固定 520ms）。
+- `PhotoViewerScreen`：NavDestination。主 `Swiper` 与缩略图 `Swiper` 双向联动（`startFakeDrag` / `fakeDragBy` 同步），主图滑动带惯性，缩略图中心项放大到 1.3x。原图按“当前照片优先，前后各 3 张”排队串行加载，手势期间暂停；预加载结果只写普通 Map，等翻到那张时再由 `presentCached()` 挂到渲染状态上。淘汰时 `PixelMap.release()` 要 `setTimeout(0)` 延后，不要正好压在手势中间。返回时用当前照片的缩略图更新共享元素，保证转场起点正确。
+- 一次捏合结束会打两行性能日志：`ViewerPerf pinch updates=…, frames=…, fps=…, lateFrames=…, gapMax=…ms, workMax=…ms`（hilog，tag `ViewerPerf`）与 `PERF viewer pinch: swiperScrolls=…`（AppLog）。fps 掉 / gapMax 大 = UI 线程被拖住；fps 正常但不跟手 = 渲染侧。
+
+#### 一镜到底转场（2026-11-07 重写，对齐官方图库）
+官方图库的观感是三条独立的动作，**不是**「整页从缩略图放大」：
+1. **只有照片在动**：起于被点缩略图单元格的矩形（方图、`Cover` 居中裁切），终于照片在预览器里的实际显示矩形（`Contain` 等比放入图片区域）。因为一直用 `Cover` 画，矩形从方图长到照片比例的过程天然就是「从中心裁切逐渐露出全图」，落位时矩形比例 == 照片比例，`Cover` 与 `Contain` 完全重合，可以无缝交还给页面内容。
+2. **背景 180ms 压到纯黑**；3. **标题栏与缩略图条在照片快落位时才淡入**（220ms 起、200ms 淡完），返回时反过来先淡出 140ms，再收照片。
+
+层级（都在 `PhotoViewerScreen` 的根 `Stack` 里，从下到上）：`MorphBackdrop`（黑底，`@Trace backdrop` 逐帧变）→ 内容 `Column`（主图 `Swiper` 挂 `.opacity(photoAlpha)`、标题栏与缩略图条各挂 `.opacity(chromeAlpha)`）→ `PhotoMorphLayer`（共享照片层，仅 `morph.visible` 时挂载）。
+
+- **禁止再对整个 NavDestination 做 scale / translate / clip**（旧做法）：那会把标题栏、缩略图条一起从一个小方块里缩放着长出来，观感是「一个迷你版预览器在放大」，和官方差得很远。曾同时用 `showDetailContent` 布尔量做内容显隐，而它在 `animateTo` 里被翻转，`if` 立刻读到新值 → 共享层在动画第 0 帧就被拆掉，等于什么都没做。
+- **`animateTo` 不会插值「本帧才创建」的节点的 `width/height/position`**（2026-11-07 实测：`onAppear` 里拿到的就是终点矩形）。共享层是转场开始那一刻才创建的，所以矩形必须用 `displaySync` 帧回调逐帧写 `PhotoMorphState`，缓动值取 `curve.interpolate(t)`（与引擎同一条曲线）。背景与标题栏的 `opacity` 作用在常驻节点上，可以继续用 `animateTo`。
+- 矩形换算在 `CustomTransition/PhotoMorph.ets`：`containRect(aspect)` = 图片显示区域（窗口高 − 状态栏 − 56vp 标题栏 − 手势条）× 照片比例居中；起点由 `getRectangleById('thumb_<handle>')` 给的 px 直接 `px2vp`。**图片显示区域必须和 `TitleBar`/`padding` 的实际布局同源**，改标题栏高度要同步 `VIEWER_TITLE_BAR_HEIGHT`。
+- 预览器页的 `NavDestination` 背景必须透明、内容区也**不许铺纯黑底**（否则下层画廊从第一帧就被挡住，只剩共享层在动）；黑底只由 `MorphBackdrop` 提供，它同时负责「透过它看到画廊」。
+- 返回起点取「当前屏幕上的照片矩形」：未放大就是 `Contain` 矩形；放大过则用 `ZoomableImage.onTransform` 在**手势结束时**汇报的 `scale/offX/offY` 换算（`rect × s` 绕同一中心缩放再平移），这样放大状态下按返回也从当前画面收回，不会先跳回等比显示。`offX/offY` 是屏幕空间位移（`applyTransform` 的注释已经写明 finger 位移要乘 scale 换回屏幕空间，说明 `.translate` 在 `.scale` 之后应用）。
+- **返回终点 = 当前照片的缩略图矩形；格子在可视区外就先把画廊滚过去再收**（对齐官方图库「回家时网格已经在当前张」）：
+  - 目标格子可能①没被 `virtualScroll` 渲染（视口外）②渲染了但在屏幕外（`cachedCount` 缓存窗口），两种都拿不到可用的屏幕矩形，收回会收进看不见的地方。
+  - `popRectFor()` 用 `positionLookup`（`getRectangleById('thumb_<handle>')` 实时查，push 时缓存的位置**只作兜底**，因为它可能已过期）判断「至少一半在窗口内」；否则通过 `requestGalleryScroll` → `MainScreen.galleryScrollVersion` 计数 → `GalleryPage` 的 `@Monitor` → `scroller.scrollToIndex(row, false, ScrollAlign.CENTER)` 滚过去。
+  - 预览器按帧重试目标矩形（`POP_TARGET_RETRY_MS` × `POP_TARGET_RETRIES`），拿到才开始收回；**背景透出也挪到这一刻**，所以网格的跳变发生在完全不透明的背景下，用户看不到；请求过滚动还要多等 `POP_SCROLL_SETTLE_FRAMES` 一帧让新布局上屏。
+  - 最终兜底顺序：实时矩形 → push 时缓存 → 最初点击的格子（`pop: 目标矩形兜底 …`）。日志里 `pop: 目标格子不在可视区，请求画廊滚动` / `viewer pop: scrollToIndex N` / `pop: 收回目标 …` 三行就能定位这类问题。
+- 打开照片时**不立刻弹转圈**：`PhotoRenderState.spinnerOn` 在加载超过 `SPINNER_DELAY_MS`（420ms）才置真，否则照片落位瞬间会盖一个菊花，和「糊图先出现再变清晰」的官方观感冲突。
+- 转场日志：`push morph <l,t> <w>x<h> pm=…` 与 `pop: handle=… pm=… rect=… -> …`（AppLog），排查时先看这两行矩形是否等于缩略图格子 / `Contain` 矩形。
 
 ### CacheManagementPage.ets
 - 列出每个相机的缓存体积、条目数、开关、删除、清空全部。
@@ -520,7 +549,8 @@ PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
 - `scanForCamera(quickMode)`：搜索相机 → 连接 → 取设备信息 → 判断缓存设置 → Phase 0 缓存快照 → Phase 1 目录遍历 → Phase 2a 元数据 → Phase 2b 缩略图
 - `collectPhotoHandles()`：递归遍历目录，用 `GetObjectHandles` 的格式筛选（`0x0000` 与 `0x3001`）区分文件与目录，不使用启发式判断
 - `loadThumbnailsRowByRow()`：每 4 张为一组加载，整组完成才递增 `thumbnailVersion`
-- `loadFullPhoto(handle)`：优先读 `compressedCache`，未命中走 USB，解码在 TaskPool 里执行，返回 `DecodedPhotoResult`（PixelMap + 旋转后的尺寸）
+- `loadFullPhoto(handle)`：优先读 `compressedCache`，未命中走 USB，解码在 TaskPool 里执行，返回 `DecodedPhotoResult`（PixelMap + 旋转后的尺寸）。完成时打一行四段耗时 `下载完成: 1.0s (取图 …ms / 方向 …ms / 拷贝 …ms / 解码 …ms)`：**「第一次打开照片卡一下」先看这行**——取图占大头是 USB/排队，拷贝占大头是主线程 30MB `ArrayBuffer.slice`，解码占大头才是 TaskPool。
+- **邻近预加载半径是 2，且预览器打开期间整体挂起**（`suspendNeighborPreload` / `resumeNeighborPreload`）。以前是 5 且每翻一张就重新排队 10 张，与预览器自己的队列抢 USB。**解码按最长边降采样到 `FULL_DECODE_MAX_EDGE`（3072px）**：手机屏幕长边约 2700px、预览器最多 5x 捏合，3072 已够用；24MP 原图全尺寸是 96MB/张，预览器同时驻留 6-7 张会把内存与纹理带宽打满。降采样用 `DecodingOptions.desiredSize`（2026-11-07 在模拟器把上限压到 600 验证过，日志 `full decode done 600x400 scale=0.500`）。
 - `downloadPhotos(handles, onProgress, ctx)`：批量下载到沙箱，按拍摄时间匹配 GPS 并写入 EXIF，最后经 `showAssetsCreationDialog` 保存到系统相册，同时维护 `download_registry.json`
 - `disconnect()`：关闭会话，清空全部内存缓存
 

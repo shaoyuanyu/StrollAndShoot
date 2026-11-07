@@ -122,10 +122,15 @@ export async function decodeThumbnailTask(
  * 在 TaskPool 工作线程中解码全分辨率照片。
  * 应用 EXIF 旋转/翻转，不裁剪。
  *
+ * 解码尺寸按最长边限制（`maxEdge`，0 表示不限制）：手机屏幕长边约 2700px，
+ * 预览器最多 5x 捏合，3072px 已经够用；而 24MP 原图（6000×4000）全尺寸解码
+ * 是 96MB/张，预览器同时驻留 6-7 张会把内存和显存带宽打满。
+ *
  * @param data      - 原始全分辨率照片数据 (ArrayBuffer)
  * @param rotate    - EXIF 旋转角度 (0/90/180/270)
  * @param flipH     - EXIF 水平翻转
  * @param flipV     - EXIF 垂直翻转
+ * @param maxEdge   - 解码后最长边上限（px），0 = 不限制
  * @returns 解码后的 PixelMap（已 setTransferDetached）
  */
 @Concurrent
@@ -133,7 +138,8 @@ export async function decodeFullPhotoTask(
   data: ArrayBuffer,
   rotate: number,
   flipH: boolean,
-  flipV: boolean
+  flipV: boolean,
+  maxEdge: number
 ): Promise<image.PixelMap> {
   const TAG = 'ImageDecoder';
   const DOMAIN = 0x0000;
@@ -145,7 +151,20 @@ export async function decodeFullPhotoTask(
 
   try {
     imageSource = image.createImageSource(data);
-    const pm = await imageSource.createPixelMap({ editable: needsFlip || needsRotate });
+    const options: image.DecodingOptions = { editable: needsFlip || needsRotate };
+    let decodeScale = 1;
+    if (maxEdge > 0) {
+      const srcInfo = await imageSource.getImageInfo();
+      const longEdge = Math.max(srcInfo.size.width, srcInfo.size.height);
+      if (longEdge > maxEdge) {
+        decodeScale = maxEdge / longEdge;
+        options.desiredSize = {
+          width: Math.max(1, Math.round(srcInfo.size.width * decodeScale)),
+          height: Math.max(1, Math.round(srcInfo.size.height * decodeScale))
+        };
+      }
+    }
+    const pm = await imageSource.createPixelMap(options);
     pixelMap = pm;
 
     if (needsRotate) {
@@ -159,7 +178,7 @@ export async function decodeFullPhotoTask(
 
     const t1 = Date.now();
     const info = await pm.getImageInfo();
-    hilog.info(DOMAIN, TAG, `full decode done ${info.size.width}x${info.size.height} in ${t1 - t0}ms`);
+    hilog.info(DOMAIN, TAG, `full decode done ${info.size.width}x${info.size.height} in ${t1 - t0}ms scale=${decodeScale.toFixed(3)}`);
     return pm;
   } catch (err) {
     if (pixelMap) {

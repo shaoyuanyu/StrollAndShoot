@@ -1,5 +1,6 @@
 import usbManager from '@ohos.usbManager';
 import { image } from '@kit.ImageKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { bundleManager } from '@kit.AbilityKit';
 import { SettingsStore } from '../model/SettingsStore';
 import type { DeviceInfo, ObjectInfo } from '../pages/PtpHost';
@@ -51,19 +52,30 @@ function ptpDate(daysAgo: number, idx: number): string {
 }
 
 async function makeJpeg(w: number, h: number, rgb: number[]): Promise<Uint8Array> {
-  const buf = new ArrayBuffer(w * h * 4);
-  const u8 = new Uint8Array(buf);
-  const total = w + h;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      const shade = 0.55 + 0.45 * ((x + y) / total);
-      u8[i] = Math.round(rgb[0] * shade);
-      u8[i + 1] = Math.round(rgb[1] * shade);
-      u8[i + 2] = Math.round(rgb[2] * shade);
-      u8[i + 3] = 255;
-    }
+  const t0 = Date.now();
+  const tFill0 = Date.now();
+  const rowLen = w * 4;
+  // 只算一行（水平渐变），再逐行 memcpy 复制。
+  //
+  // 以前是按 w×h 逐像素写 RGBA：1200×800 就是 96 万次 JS 循环、每次 4 次写入，
+  // 实测在模拟器上一次生成阻塞 UI 线程 130–175ms（fill 就占 127–167ms）。而
+  // 打开一张照片会连续生成「当前 + 邻近预加载」好几张，界面上就是一顿一顿的
+  // 「开图/传输时卡」。渐变改成水平方向后视觉几乎一样，填充成本降到毫秒级。
+  const row = new Uint8Array(rowLen);
+  for (let x = 0; x < w; x++) {
+    const shade = 0.55 + 0.45 * (x / w);
+    const i = x * 4;
+    row[i] = Math.round(rgb[0] * shade);
+    row[i + 1] = Math.round(rgb[1] * shade);
+    row[i + 2] = Math.round(rgb[2] * shade);
+    row[i + 3] = 255;
   }
+  const buf = new ArrayBuffer(rowLen * h);
+  const u8 = new Uint8Array(buf);
+  for (let y = 0; y < h; y++) {
+    u8.set(row, y * rowLen);
+  }
+  const tFill = Date.now() - tFill0;
   const initOpts: image.InitializationOptions = {
     size: { width: w, height: h },
     srcPixelFormat: image.PixelMapFormat.RGBA_8888,
@@ -86,6 +98,8 @@ async function makeJpeg(w: number, h: number, rgb: number[]): Promise<Uint8Array
       pixelMap.release();
     } catch (_e) { /* best effort */ }
   }
+  hilog.info(0x0000, 'MockPtp', 'jpeg %{public}dx%{public}d %{public}dms (fill %{public}dms)',
+    w, h, Date.now() - t0, tFill);
   return new Uint8Array(encoded);
 }
 

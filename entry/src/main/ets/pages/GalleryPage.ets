@@ -2,6 +2,7 @@ import display from '@ohos.display';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
 import { getExt, buildDisplayGroups } from '../utils/PhotoGroupUtil';
+import { GalleryZoom } from '../utils/GalleryZoom';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 
 class FlatItem {
@@ -45,7 +46,18 @@ export struct GalleryPage {
   @Local svc: CameraService = CameraService.getInstance();
   @Local selectMode: boolean = false;
   @Local selectedHandles: Set<number> = new Set();
-  @Local galleryScale: number = 1.0;
+  /**
+   * 捏合累计倍数（1.0 = 默认列数）。**故意不做响应式**：它在捏合过程中逐帧变化，
+   * 若写成 @Local 会触发整页重建，见下面的 appliedColumns。
+   */
+  private pinchScale: number = 1.0;
+  /**
+   * 当前实际生效的列数，0 表示还没捏合过、用默认列数。
+   * 这是缩放里唯一会触发重建的状态：网格的视觉尺寸只取决于列数（单元格是
+   * layoutWeight(1) + aspectRatio(1)），倍数在一段区间内的连续变化不产生任何
+   * 视觉差异，所以只在列数跨档时才更新，否则捏合会逐帧重建整个行模型。
+   */
+  @Local appliedColumns: number = 0;
   @Event onThumbClick: (displayGroups: DisplayGroup[], index: number) => void = (_g: DisplayGroup[], _i: number) => {};
   @Event onDownloadSelected: (handles: number[]) => void = (_h: number[]) => {};
   @Event onCancelDownload: () => void = () => {};
@@ -59,11 +71,56 @@ export struct GalleryPage {
   @Param selectAllVersion: number = 0;
   /** 标题栏底部操作栏「下载」的触发计数（浮岛已搬到标题栏，入口也在那里）。 */
   @Param downloadVersion: number = 0;
+  /** 预览器返回转场要求把列表滚到某张照片（计数 + handle 的既有约定）。 */
+  @Param galleryScrollVersion: number = 0;
+  @Param galleryScrollHandle: number = -1;
   private pinchBaseScale: number = 1.0;
+  /** 一次捏合里的事件数 / 换列次数，捏合结束后打一行日志用于核性能。 */
+  private pinchUpdateCount: number = 0;
+  private pinchColumnChanges: number = 0;
+
+  @Monitor('galleryColumnCount')
+  onColumnSettingChanged(): void {
+    // 设置里改了默认列数：作废捏合结果，回到新的默认列数。
+    this.pinchScale = 1.0;
+    this.appliedColumns = 0;
+  }
 
   @Monitor('toggleSelectVersion')
   onToggleSelectRequest(): void {
     this.toggleSelectMode();
+  }
+
+  @Monitor('galleryScrollVersion')
+  onGalleryScrollRequest(): void {
+    if (this.galleryScrollHandle >= 0) {
+      this.scrollToHandle(this.galleryScrollHandle);
+    }
+  }
+
+  /**
+   * 把列表滚到某张照片所在的行（立即跳转，不带动画）。
+   *
+   * 从预览器返回时，目标格子可能①根本没被列表渲染（虚拟化在视口外）；
+   * ②渲染了但落在屏幕外（`cachedCount` 缓存窗口）。两种情况都拿不到可用的
+   * 屏幕矩形，收回动画会收进看不见的地方。官方图库的做法是先把网格对齐到
+   * 当前张，这里同样处理：滚过去 → 预览器下一帧再查矩形 → 再开始收回。
+   */
+  private scrollToHandle(handle: number): void {
+    const items = this.buildFlatItems();
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind !== 'row') continue;
+      for (const g of it.rowPhotos) {
+        if (g !== null && g.displayPhoto.handle === handle) {
+          // CENTER：让目标行落在舒适区，不要贴着底部悬浮页签
+          this.scroller.scrollToIndex(i, false, ScrollAlign.CENTER);
+          this.svc.getLog().add(`viewer pop: scrollToIndex ${i} handle=${handle}`);
+          return;
+        }
+      }
+    }
+    this.svc.getLog().add(`viewer pop: handle=${handle} 不在列表里`);
   }
 
   @Monitor('selectAllVersion')
@@ -107,12 +164,21 @@ export struct GalleryPage {
   // buildFlatItems cache (version-based, avoids V2 @Local reference instability)
   private _flatItemsCache: FlatItem[] | null = null;
   private _flatCachePhotosVer: number = -1;
-  private _flatCacheThumbVer: number = -1;
   private _flatCacheMode: string = '';
   private _flatCacheFilter: string = '';
-  private _flatCacheScale: number = -1;
   private _flatCacheColumns: number = -1;
   private _flatCacheWidth: number = -1;
+  // 按日期分组后的结果缓存：换列只需要重新分行，不必再扫一遍全部照片。
+  private _groupKeys: string[] = [];
+  private _groupMap: Map<string, DisplayGroup[]> = new Map();
+  private _groupPhotosVer: number = -1;
+  private _groupMode: string = '';
+  private _groupFilter: string = '';
+  // 格式筛选后的数组缓存：dateSelectState 等每帧都会遍历它。
+  private _filteredGroupsCache: DisplayGroup[] | null = null;
+  private _filteredPhotosVer: number = -1;
+  private _filteredMode: string = '';
+  private _filteredFilter: string = '';
 
   /** Width of the gallery content area in vp (0 before first layout). */
   @Local _viewWidthVp: number = 0;
@@ -130,33 +196,26 @@ export struct GalleryPage {
     return this._displayWidthVp;
   }
 
-  private columnCount(): number {
-    // 网格贴边（与官方图库一致，没有左右页边距）
-    const avail = this.getDisplayWidthVp();
-    const itemW = this.baseItemW() * this.galleryScale;
-    const gap = this.itemGapPx();
-    const cols = Math.floor((avail + gap) / (itemW + gap));
-    if (cols < 1) return 1;
-    if (cols > 8) return 8;
-    return cols;
+  /** 当前生效的列数（捏合跨档后由 appliedColumns 接管）。 */
+  private activeColumns(): number {
+    if (this.appliedColumns > 0) return this.appliedColumns;
+    return GalleryZoom.columnsForScale(this.getDisplayWidthVp(), this.galleryColumnCount, 1.0);
   }
 
-  private baseItemW(): number {
-    const w = this.getDisplayWidthVp();
-    const gap = this.itemGapPx();
-    if (this.galleryColumnCount > 0) {
-      return (w - (this.galleryColumnCount - 1) * gap) / this.galleryColumnCount;
-    }
-    // 官方图库在手机上是 3 列
-    return (w - 2 * gap) / 3;
+  /** 当前生效的网格间距（vp）。只随列数变化，捏合过程中不会单独变动。 */
+  private activeGap(): number {
+    return GalleryZoom.gapForColumns(this.activeColumns());
   }
 
-  private itemGapPx(): number {
-    const s = this.galleryScale;
-    if (s <= 0.7) return 1.5;
-    if (s <= 1.2) return 2;
-    if (s <= 1.8) return 3;
-    return 4;
+  /**
+   * 一次捏合结束后打一行日志：事件数远大于换列次数才正常。
+   * 如果换列次数接近事件数，说明列数在边界上来回跳，需要加迟滞。
+   */
+  private logPinchSummary(): void {
+    if (this.pinchUpdateCount === 0) return;
+    this.svc.getLog().add(
+      `PERF pinch: updates=${this.pinchUpdateCount}, columnChanges=${this.pinchColumnChanges}, ` +
+      `scale=${this.pinchScale.toFixed(2)}, cols=${this.activeColumns()}`);
   }
 
   /** 日期分组键：YYYYMMDD；没有拍摄日期时为空串。 */
@@ -215,78 +274,107 @@ export struct GalleryPage {
   }
 
   private getFilteredDisplayGroups(): DisplayGroup[] {
-    const all = this.allDisplayGroups();
-    if (this.displayMode === 'content_first' || this.filterValue === '') return all;
-    const result: DisplayGroup[] = [];
-    for (const g of all) {
-      if (getExt(g.displayPhoto.filename) === this.filterValue) result.push(g);
+    if (this._filteredGroupsCache !== null &&
+        this._filteredPhotosVer === this.svc.photosVersion &&
+        this._filteredMode === this.displayMode &&
+        this._filteredFilter === this.filterValue) {
+      return this._filteredGroupsCache;
     }
+    const all = this.allDisplayGroups();
+    let result: DisplayGroup[] = all;
+    if (this.displayMode !== 'content_first' && this.filterValue !== '') {
+      result = [];
+      for (const g of all) {
+        if (getExt(g.displayPhoto.filename) === this.filterValue) result.push(g);
+      }
+    }
+    this._filteredGroupsCache = result;
+    this._filteredPhotosVer = this.svc.photosVersion;
+    this._filteredMode = this.displayMode;
+    this._filteredFilter = this.filterValue;
     return result;
   }
 
-  private buildFlatItems(): FlatItem[] {
-    if (this._flatItemsCache !== null &&
-        this._flatCachePhotosVer === this.svc.photosVersion &&
-        this._flatCacheThumbVer === this.svc.thumbnailVersion &&
-        this._flatCacheMode === this.displayMode &&
-        this._flatCacheFilter === this.filterValue &&
-        this._flatCacheScale === this.galleryScale &&
-        this._flatCacheColumns === this.galleryColumnCount &&
-        this._flatCacheWidth === this.getDisplayWidthVp()) {
-      return this._flatItemsCache;
+  /**
+   * 按拍摄日期分组（只依赖照片与筛选，与列数无关）。
+   * 捏合换列时列的只是重新分行，不必再扫全量照片；分组内顺序沿用
+   * getFilteredDisplayGroups() 的输出（已按 captureDate 降序），不要再逐组排序。
+   */
+  private ensureGrouping(): void {
+    if (this._groupPhotosVer === this.svc.photosVersion &&
+        this._groupMode === this.displayMode &&
+        this._groupFilter === this.filterValue) {
+      return;
     }
-    const t0 = Date.now();
-    this.svc.getLog().add('PERF buildFlatItems cache MISS, rebuilding...');
     const filtered = this.getFilteredDisplayGroups();
     const map = new Map<string, DisplayGroup[]>();
-    let noDate: DisplayGroup[] = [];
+    const noDate: DisplayGroup[] = [];
     for (const g of filtered) {
       const d = this.dateKeyOf(g.displayPhoto.captureDate ?? '');
-      if (d) {
-        const arr = map.get(d);
-        if (arr) arr.push(g);
-        else map.set(d, [g]);
-      } else {
+      if (!d) {
         noDate.push(g);
+        continue;
       }
+      const arr = map.get(d);
+      if (arr) arr.push(g);
+      else map.set(d, [g]);
     }
-    const sortFn = (a: DisplayGroup, b: DisplayGroup) =>
-      (b.displayPhoto.captureDate ?? '').localeCompare(a.displayPhoto.captureDate ?? '');
     const keys: string[] = [];
-    map.forEach((_v: DisplayGroup[], k: string) => {
-      map.get(k)!.sort(sortFn);
-      keys.push(k);
-    });
+    map.forEach((_v: DisplayGroup[], k: string) => { keys.push(k); });
     keys.sort((a: string, b: string) => b.localeCompare(a));
     if (noDate.length > 0) {
-      noDate.sort(sortFn);
       keys.push('');
       map.set('', noDate);
     }
+    this._groupKeys = keys;
+    this._groupMap = map;
+    this._groupPhotosVer = this.svc.photosVersion;
+    this._groupMode = this.displayMode;
+    this._groupFilter = this.filterValue;
+  }
 
-    const cols = this.columnCount();
+  /** 把日期标题与行拍平成 Repeat 的数据源。 */
+  private chunkRows(cols: number): FlatItem[] {
+    const safeCols = cols > 0 ? cols : 1;
     const items: FlatItem[] = [];
-    for (const k of keys) {
+    for (const k of this._groupKeys) {
       items.push(FlatItem.header(k));
-      const photos = map.get(k)!;
-      for (let i = 0; i < photos.length; i += cols) {
+      const photos = this._groupMap.get(k)!;
+      for (let i = 0; i < photos.length; i += safeCols) {
         const row: (DisplayGroup | null)[] = [];
-        for (let j = 0; j < cols; j++) {
+        for (let j = 0; j < safeCols; j++) {
           row.push(i + j < photos.length ? photos[i + j] : null);
         }
         items.push(FlatItem.row(row));
       }
     }
     items.push(FlatItem.tail());
+    return items;
+  }
+
+  private buildFlatItems(): FlatItem[] {
+    const cols = this.activeColumns();
+    if (this._flatItemsCache !== null &&
+        this._flatCachePhotosVer === this.svc.photosVersion &&
+        this._flatCacheMode === this.displayMode &&
+        this._flatCacheFilter === this.filterValue &&
+        this._flatCacheColumns === cols &&
+        this._flatCacheWidth === this.getDisplayWidthVp()) {
+      return this._flatItemsCache;
+    }
+    const t0 = Date.now();
+    this.ensureGrouping();
+    const items = this.chunkRows(cols);
     this._flatItemsCache = items;
     this._flatCachePhotosVer = this.svc.photosVersion;
-    this._flatCacheThumbVer = this.svc.thumbnailVersion;
     this._flatCacheMode = this.displayMode;
     this._flatCacheFilter = this.filterValue;
-    this._flatCacheScale = this.galleryScale;
-    this._flatCacheColumns = this.galleryColumnCount;
+    this._flatCacheColumns = cols;
     this._flatCacheWidth = this.getDisplayWidthVp();
-    this.svc.getLog().add(`PERF buildFlatItems done in ${Date.now() - t0}ms (${items.length} items)`);
+    // 现在只在照片/筛选/列数真正变化时才会重建，日志不会落在捏合热路径上。
+    // 缩略图到达不再重建行模型：每个单元格由 ThumbImage 自己订阅 thumbnailVersion。
+    this.svc.getLog().add(
+      `PERF buildFlatItems ${Date.now() - t0}ms, ${items.length} items, cols=${cols}`);
     return items;
   }
 
@@ -524,7 +612,7 @@ export struct GalleryPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Column() {
-          List({ scroller: this.scroller, space: this.itemGapPx() }) {
+          List({ scroller: this.scroller, space: this.activeGap() }) {
             Repeat<FlatItem>(this.buildFlatItems())
               .each((ri: RepeatItem<FlatItem>) => {
                 if (ri.item.kind === 'tail') {
@@ -574,7 +662,7 @@ export struct GalleryPage {
                   }
                 } else {
                   ListItem() {
-                    Row({ space: this.itemGapPx() }) {
+                    Row({ space: this.activeGap() }) {
                       Repeat<DisplayGroup | null>(ri.item.rowPhotos)
                         .each((cellRi: RepeatItem<DisplayGroup | null>) => {
                           this.PhotoCell(cellRi)
@@ -598,7 +686,6 @@ export struct GalleryPage {
               })
               .virtualScroll()
           }
-          .cachedCount(5)
           .width('100%')
           .layoutWeight(1)
           .scrollBar(BarState.Off)
@@ -614,12 +701,26 @@ export struct GalleryPage {
         }
         .layoutWeight(1)
         .parallelGesture(
+          // 捏合只更新普通字段 pinchScale，不碰任何响应式状态：
+          // 网格尺寸只由列数决定，列数没跨档时这一帧不需要重绘。
           PinchGesture({ fingers: 2 })
-            .onActionStart(() => { this.pinchBaseScale = this.galleryScale; })
-            .onActionUpdate((event: GestureEvent) => {
-              const s = this.pinchBaseScale * event.scale;
-              this.galleryScale = Math.max(0.4, Math.min(6.0, s));
+            .onActionStart(() => {
+              this.pinchBaseScale = this.pinchScale;
+              this.pinchUpdateCount = 0;
+              this.pinchColumnChanges = 0;
             })
+            .onActionUpdate((event: GestureEvent) => {
+              this.pinchUpdateCount++;
+              this.pinchScale = GalleryZoom.clampScale(this.pinchBaseScale * event.scale);
+              const cols = GalleryZoom.columnsForScale(
+                this.getDisplayWidthVp(), this.galleryColumnCount, this.pinchScale);
+              if (cols !== this.activeColumns()) {
+                this.appliedColumns = cols;
+                this.pinchColumnChanges++;
+              }
+            })
+            .onActionEnd(() => { this.logPinchSummary(); })
+            .onActionCancel(() => { this.logPinchSummary(); })
         )
       }
 
@@ -632,6 +733,9 @@ export struct GalleryPage {
       const w = n.width as number;
       if (w > 0 && w !== this._viewWidthVp) {
         this._viewWidthVp = w;
+        // 宽度变了（分屏 / 折叠展开），捏合结果失效，按新宽度重新算默认列数
+        this.pinchScale = 1.0;
+        this.appliedColumns = 0;
       }
     })
   }

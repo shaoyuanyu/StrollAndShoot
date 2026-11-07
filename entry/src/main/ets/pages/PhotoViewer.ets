@@ -1,16 +1,193 @@
 import { image } from '@kit.ImageKit';
+import { curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { display } from '@kit.ArkUI';
+import { displaySync } from '@kit.ArkGraphics2D';
 import { CameraService } from '../services/CameraService';
 import type { PhotoEntry } from '../model/PhotoEntry';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
-import { AnimationProperties } from '../CustomTransition/AnimationProperties';
-import { getMyNode, MyNodeController } from '../NodeContainer/CustomComponent';
+import {
+  MorphGeometry,
+  MorphRect,
+  MorphBackdrop,
+  PhotoMorphLayer,
+  PhotoMorphState
+} from '../CustomTransition/PhotoMorph';
 import { RectInfoInPx } from '../utils/ComponentAttrUtils';
 import { WindowUtils } from '../utils/WindowUtils';
 
 const TAG = 'PhotoViewer';
 const DOMAIN = 0x0001;
+
+/**
+ * 预览器捏合性能探针。
+ *
+ * 捏合时每帧只更新 Image 的 scale/translate，JS 侧工作量极小；如果手感仍然卡，
+ * 原因通常不是「缩放计算慢」，而是下面三类之一：
+ *   1. 每帧有背景模糊（`backgroundBlurStyle`）要重算 —— 渲染侧，fps 会掉；
+ *   2. 有整页重建（标题栏 + 两个 Swiper + Repeat 全量 diff）被别的状态触发；
+ *   3. 后台预加载（USB 下载 + TaskPool 解码）把 UI 线程挤住。
+ *
+ * 一次捏合结束时输出一行，用来把「UI 线程节奏」和「渲染成本」分开：
+ *   - fps 掉、gapMax 变大 → UI 线程被拖住（重建、GC、解码回调）
+ *   - fps 正常但不跟手   → 渲染侧（模糊、图层、大位图）
+ * 只在手势结束时打一行，不落在逐帧热路径上。
+ */
+class PinchPerf {
+  private frames: number = 0;
+  private lastFrameNs: number = 0;
+  private maxFrameGapMs: number = 0;
+  private lateFrames: number = 0;
+  private updates: number = 0;
+  private workMaxMs: number = 0;
+  private startMs: number = 0;
+  private sync: displaySync.DisplaySync | null = null;
+
+  begin(): void {
+    this.frames = 0;
+    this.lastFrameNs = 0;
+    this.maxFrameGapMs = 0;
+    this.lateFrames = 0;
+    this.updates = 0;
+    this.workMaxMs = 0;
+    this.startMs = Date.now();
+    try {
+      if (this.sync === null) {
+        this.sync = displaySync.create();
+        this.sync.setExpectedFrameRateRange({ expected: 60, min: 30, max: 120 });
+        this.sync.on('frame', (info: displaySync.IntervalInfo) => { this.onFrame(info); });
+      }
+      this.sync.start();
+    } catch (_e) {
+      // 拿不到帧回调也不影响手势，只是少了 fps 数据
+      this.sync = null;
+    }
+  }
+
+  private onFrame(info: displaySync.IntervalInfo): void {
+    this.frames++;
+    if (this.lastFrameNs > 0) {
+      const gapMs = (info.timestamp - this.lastFrameNs) / 1000000;
+      if (gapMs > this.maxFrameGapMs) { this.maxFrameGapMs = gapMs; }
+      if (gapMs > 20) { this.lateFrames++; }
+    }
+    this.lastFrameNs = info.timestamp;
+  }
+
+  /** 记录一次 onActionUpdate 的处理耗时（ms）。 */
+  update(workMs: number): void {
+    this.updates++;
+    if (workMs > this.workMaxMs) { this.workMaxMs = workMs; }
+  }
+
+  /** 结束一次捏合，返回一行摘要；没收到捏合事件时返回空串。 */
+  end(): string {
+    if (this.sync !== null) {
+      try { this.sync.stop(); } catch (_e) { /* ignore */ }
+    }
+    if (this.updates === 0) { return ''; }
+    const ms = Math.max(1, Date.now() - this.startMs);
+    const fps = this.frames > 0 ? this.frames * 1000 / ms : 0;
+    return `updates=${this.updates}, frames=${this.frames}, fps=${fps.toFixed(0)}, ` +
+      `lateFrames=${this.lateFrames}, gapMax=${this.maxFrameGapMs.toFixed(0)}ms, ` +
+      `workMax=${this.workMaxMs}ms`;
+  }
+}
+
+// ---- 一镜到底转场参数 ----
+/** 照片长到位的时长。官方图库观感是「起步快、尾巴长」，用缓出贝塞尔而不是弹簧。 */
+const PUSH_MS = 380;
+/** 返回时收回缩略图的时长。比展开略短，松手即走的观感。 */
+const POP_MS = 320;
+/** 统一曲线：快速起步、缓慢收尾（照片不弹跳）。 */
+const MORPH_CURVE = curves.cubicBezierCurve(0.2, 0.0, 0.0, 1.0);
+/** 黑色背板压暗 / 恢复的时长。展开时压得快一点，避免背景长时间跟照片抢注意力。 */
+const BACKDROP_IN_MS = 180;
+const BACKDROP_OUT_MS = 260;
+/** 加载超过这个时长才显示转圈（避免转圈在照片落地的瞬间闪一下）。 */
+const SPINNER_DELAY_MS = 420;
+/**
+ * 收回动画的「目标格子矩形」可能因为列表虚拟化而暂时查不到：`handleBack` 会让
+ * 画廊先滚到那一行，这里按帧重试，拿到就立刻开始收回。
+ */
+const POP_TARGET_RETRY_MS = 16;
+const POP_TARGET_RETRIES = 8;
+/**
+ * 请求过画廊滚动后，先让列表把新布局画出一帧再透出背景：否则背景一淡，
+ * 用户会看到网格「跳一下」（官方图库的网格是跟当前张同步的，回家时本来就
+ * 在那个位置，所以看不到跳）。
+ */
+const POP_SCROLL_SETTLE_FRAMES = 1;
+/** 标题栏与缩略图条：展开尾声淡入，返回开始淡出。 */
+const CHROME_IN_DELAY_MS = 220;
+const CHROME_IN_MS = 200;
+const CHROME_OUT_MS = 140;
+
+/**
+ * 单张照片的可渲染状态。
+ *
+ * 预览器每进入一张照片会触发三类更新：开始加载、全尺寸解码完成、缩略图到达。
+ * 这些状态以前放在页面级的 `@Local`（`fullResMap`、`loadingHandle`）上，任何
+ * 一次更新都会重建整页（标题栏 + 主 Swiper + 缩略图 Swiper + Repeat 全量 diff）。
+ * 后台预加载邻近照片时尤其明显：每解完一张就卡一下，捏合/拖动过程中也会撞上。
+ *
+ * 把状态挂到「每张照片一个对象」上之后，更新只重建对应的那一个 MainImageView。
+ */
+@ObservedV2
+class PhotoRenderState {
+  /** 已解码的全尺寸位图；null 表示还在显示缩略图或占位。 */
+  @Trace fullPm: image.PixelMap | null = null;
+  @Trace loading: boolean = false;
+  /**
+   * 是否显示「加载中」转圈。
+   * 与 `loading` 分开：打开照片时已经有缩略图在显示，立刻盖个转圈会打断
+   * 一镜到底落地的观感（官方图库也是先给糊图、不弹菊花）。加载超过
+   * SPINNER_DELAY_MS 才显示，慢速真机照样有反馈。
+   */
+  @Trace spinnerOn: boolean = false;
+  /** 该照片的显示宽高（vp 无关，仅用于算缩放比）。 */
+  @Trace photoW: number = 1;
+  @Trace photoH: number = 1;
+
+  constructor(w: number = 1, h: number = 1) {
+    this.photoW = w;
+    this.photoH = h;
+  }
+}
+
+// ---- Zoom transform state ----
+/**
+ * 缩放 / 位移状态。
+ *
+ * 为什么要单独抽一个 `@ObservedV2` 对象：如果把 scale/offset 写成
+ * ZoomableImage 自己的 `@Local`，每个捏合事件都会重跑它的 build()，于是
+ * `GestureGroup(...)` 连同 3 个手势每帧重建、每帧重新绑定到节点上（ArkUI 会把
+ * 识别器整套换掉）。这里把逐帧变化的值交给叶子组件 ZoomLayer 订阅，手势树就
+ * 只在「缩放是否越过 1x」时重建一次。
+ */
+@ObservedV2
+class ZoomState {
+  @Trace scale: number = 1.0;
+  @Trace x: number = 0;
+  @Trace y: number = 0;
+}
+
+/** 只负责把 transform 画出来的叶子组件：每帧重建的只有这一个 Image。 */
+@ComponentV2
+struct ZoomLayer {
+  @Param pixelMap: image.PixelMap | null = null;
+  @Param zoom: ZoomState = new ZoomState();
+
+  build() {
+    if (this.pixelMap !== null) {
+      Image(this.pixelMap)
+        .draggable(false)
+        .objectFit(ImageFit.Contain)
+        .width('100%').height('100%')
+        .scale({ x: this.zoom.scale, y: this.zoom.scale })
+        .translate({ x: this.zoom.x, y: this.zoom.y })
+    }
+  }
+}
 
 // ---- ZoomableImage ----
 @ComponentV2
@@ -22,9 +199,18 @@ struct ZoomableImage {
   @Event onZoomChange: (zoomed: boolean) => void = () => {};
   @Event onGestureStart: () => void = () => {};
   @Event onGestureEnd: () => void = () => {};
-  @Local scaleVal: number = 1.0;
-  @Local offX: number = 0;
-  @Local offY: number = 0;
+  /** 捏合真正的开始/结束（含取消）：页面据此关闭背景模糊。 */
+  @Event onPinchState: (active: boolean) => void = () => {};
+  /** 缩放/位移。逐帧变化，但刻意不在本组件的 build 里读（见 ZoomState 注释）。 */
+  private zoom: ZoomState = new ZoomState();
+  /**
+   * 手势结束时汇报当前变换（scale + 平移，单位 vp，相对照片居中位置）。
+   * 返回转场要靠它把「放大后的画面」当成收回动画的起点，否则放大状态一按返回
+   * 画面会先跳回等比显示，再缩回缩略图。
+   */
+  @Event onTransform: (scale: number, offX: number, offY: number) => void = () => {};
+  /** 是否已放大到 1x 以上：只用于切换 PanGesture 的触发距离。 */
+  @Local zoomed: boolean = false;
   private lastScale: number = 1.0;
   private lastOffX: number = 0;
   private lastOffY: number = 0;
@@ -42,6 +228,7 @@ struct ZoomableImage {
   private accumPanOffX: number = 0;
   private accumPanOffY: number = 0;
   private panActive: boolean = false;
+  private perf: PinchPerf = new PinchPerf();
 
   @Monitor('pageKey')
   onPageChange(): void {
@@ -55,19 +242,7 @@ struct ZoomableImage {
   }
 
   aboutToAppear(): void {
-    this.initContainerDims();
     this.updateImgCache();
-  }
-
-  private initContainerDims(): void {
-    try {
-      const d = display.getDefaultDisplaySync();
-      if (d) {
-        this.compW = d.width;
-        this.compH = d.height;
-        hilog.info(0x0001, 'ZoomClamp', 'display=%{public}dx%{public}d', d.width, d.height);
-      }
-    } catch (_e) { /* fallback to onAreaChange */ }
   }
 
   private updateImgCache(): void {
@@ -75,14 +250,23 @@ struct ZoomableImage {
       this.compH > 0 ? this.compH / this.photoH : 1);
     this.imgW = this.photoW * s;
     this.imgH = this.photoH * s;
-    hilog.info(0x0001, 'ZoomClamp', 'cache photo=%{public}dx%{public}d comp=%{public}dx%{public}d img=%{public}dx%{public}d s=%{public}f',
-      this.photoW, this.photoH, this.compW, this.compH, this.imgW, this.imgH, s);
+  }
+
+  /** 让 PanGesture 的触发距离跟随缩放状态；只在 1x 边界翻转时重建一次手势树。 */
+  private syncZoomed(): void {
+    const z = this.zoom.scale > 1.0;
+    if (this.zoomed !== z) { this.zoomed = z; }
+  }
+
+  /** 汇报一次当前变换（只在手势/动画结束时调用，不在逐帧热路径上）。 */
+  private reportTransform(): void {
+    this.onTransform(this.zoom.scale, this.zoom.x, this.zoom.y);
   }
 
   private reset(): void {
-    this.scaleVal = 1.0;
-    this.offX = 0;
-    this.offY = 0;
+    this.zoom.scale = 1.0;
+    this.zoom.x = 0;
+    this.zoom.y = 0;
     this.lastScale = 1.0;
     this.lastOffX = 0;
     this.lastOffY = 0;
@@ -92,44 +276,48 @@ struct ZoomableImage {
     this.panActive = false;
     this.accumPanOffX = 0;
     this.accumPanOffY = 0;
+    this.syncZoomed();
   }
 
   private applyTransform(scale: number, panOffX: number, panOffY: number): void {
     const ns = Math.max(1.0, Math.min(5.0, this.lastScale * scale));
-    this.scaleVal = ns;
+    this.zoom.scale = ns;
     // Zoom compensation: keep the zoomCenter point fixed on screen
     // Formula: offX = (lastOffX + panOffX) + (zoomCenterX - 0.5) * imgW * lastScale * (1 - scale)
-    this.offX = (this.lastOffX + panOffX) +
+    this.zoom.x = (this.lastOffX + panOffX) +
       (this.zoomCenterX - 0.5) * this.imgW * (1 - scale) * this.lastScale;
-    this.offY = (this.lastOffY + panOffY) +
+    this.zoom.y = (this.lastOffY + panOffY) +
       (this.zoomCenterY - 0.5) * this.imgH * (1 - scale) * this.lastScale;
     this.clampAndCheckEdge();
+    this.syncZoomed();
   }
 
   private clampAndCheckEdge(): void {
-    const iw = this.imgW * this.scaleVal;
-    const ih = this.imgH * this.scaleVal;
+    const iw = this.imgW * this.zoom.scale;
+    const ih = this.imgH * this.zoom.scale;
     const mx = iw > this.compW ? (iw - this.compW) / 2 : 0;
     const my = ih > this.compH ? (ih - this.compH) / 2 : 0;
     if (iw > this.compW) {
-      this.offX = Math.max(-mx, Math.min(mx, this.offX));
+      this.zoom.x = Math.max(-mx, Math.min(mx, this.zoom.x));
     } else {
-      this.offX = 0;
+      this.zoom.x = 0;
     }
     if (ih > this.compH) {
-      this.offY = Math.max(-my, Math.min(my, this.offY));
+      this.zoom.y = Math.max(-my, Math.min(my, this.zoom.y));
     } else {
-      this.offY = 0;
+      this.zoom.y = 0;
     }
   }
 
   private onPinchStart(e: GestureEvent): void {
     if (!e) return;
     this.onGestureStart();
+    this.onPinchState(true);
+    this.perf.begin();
     this.pinching = true;
-    this.lastScale = this.scaleVal;
-    this.lastOffX = this.offX;
-    this.lastOffY = this.offY;
+    this.lastScale = this.zoom.scale;
+    this.lastOffX = this.zoom.x;
+    this.lastOffY = this.zoom.y;
     const iw = this.imgW * this.lastScale;
     const ih = this.imgH * this.lastScale;
     const il = (this.compW - iw) / 2 + this.lastOffX;
@@ -140,9 +328,10 @@ struct ZoomableImage {
 
   private onPinchUpdate(e: GestureEvent): void {
     if (!e) return;
+    const t0 = Date.now();
     // Compute new scale
     const ns = Math.max(1.0, Math.min(5.0, this.lastScale * e.scale));
-    this.scaleVal = ns;
+    this.zoom.scale = ns;
     // Compute offset directly from pinchCenter (screen-space absolute position)
     // This follows the official HarmonyOS example pattern:
     //   pointX = (compW - newDisplayW) / 2 + newDisplayW * centerX
@@ -152,25 +341,55 @@ struct ZoomableImage {
     const newH = this.imgH * ns;
     const pointX = (this.compW - newW) / 2 + newW * this.zoomCenterX;
     const pointY = (this.compH - newH) / 2 + newH * this.zoomCenterY;
-    this.offX = e.pinchCenterX - pointX;
-    this.offY = e.pinchCenterY - pointY;
+    this.zoom.x = e.pinchCenterX - pointX;
+    this.zoom.y = e.pinchCenterY - pointY;
     this.clampAndCheckEdge();
+    this.syncZoomed();
+    this.perf.update(Date.now() - t0);
   }
 
   private onPinchEnd(_e: GestureEvent): void {
     if (!this.pinching) return;
     this.pinching = false;
-    if (this.scaleVal < 1.05) {
+    this.onPinchState(false);
+    this.logPinchPerf();
+    if (this.zoom.scale < 1.05) {
       this.onZoomChange(false);
       this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
+      this.reportTransform();
       this.onGestureEnd();
       return;
     }
-    this.lastScale = this.scaleVal;
-    this.lastOffX = this.offX;
-    this.lastOffY = this.offY;
+    this.lastScale = this.zoom.scale;
+    this.lastOffX = this.zoom.x;
+    this.lastOffY = this.zoom.y;
     this.onZoomChange(true);
+    this.reportTransform();
     this.onGestureEnd();
+  }
+
+  /**
+   * 捏合被系统取消（来电、三指、手势冲突）时也要收尾。
+   * 少了这一步，页面会永远停在「捏合中」：标题栏没有模糊。
+   */
+  private onPinchCancel(): void {
+    if (!this.pinching) return;
+    this.pinching = false;
+    this.onPinchState(false);
+    this.logPinchPerf();
+    this.lastScale = this.zoom.scale;
+    this.lastOffX = this.zoom.x;
+    this.lastOffY = this.zoom.y;
+    this.onZoomChange(this.zoom.scale > 1.0);
+    this.reportTransform();
+    this.onGestureEnd();
+  }
+
+  private logPinchPerf(): void {
+    const summary = this.perf.end();
+    if (summary) {
+      hilog.info(DOMAIN, 'ViewerPerf', 'pinch %{public}s', summary);
+    }
   }
 
   private onPanStart(_e: GestureEvent): void {
@@ -179,12 +398,12 @@ struct ZoomableImage {
     this.accumPanOffY = 0;
     if (this.pinching) return;
     this.onGestureStart();
-    this.lastOffX = this.offX;
-    this.lastOffY = this.offY;
+    this.lastOffX = this.zoom.x;
+    this.lastOffY = this.zoom.y;
   }
 
   private onPanUpdate(e: GestureEvent): void {
-    if (!e || this.scaleVal <= 1.0) return;
+    if (!e || this.zoom.scale <= 1.0) return;
     if (this.pinching) {
       // While pinch is active, PanGesture keeps accumulating offset for the tracked finger.
       // Save this offset so we can subtract it when the pinch ends,
@@ -200,16 +419,26 @@ struct ZoomableImage {
     const effectiveOffY = e.offsetY - this.accumPanOffY;
     // Compensate for the scaled local coordinate system:
     // .scale() shrinks the component's local coordinate space, so GestureEvent.offsetX
-    // reports a smaller value. Multiply by scaleVal to restore the screen-space delta.
-    this.applyTransform(1, effectiveOffX * this.scaleVal, effectiveOffY * this.scaleVal);
+    // reports a smaller value. Multiply by scale to restore the screen-space delta.
+    this.applyTransform(1, effectiveOffX * this.zoom.scale, effectiveOffY * this.zoom.scale);
   }
 
   private onPanEnd(_e: GestureEvent): void {
     this.panActive = false;
     if (this.pinching) return;
-    this.lastOffX = this.offX;
-    this.lastOffY = this.offY;
+    this.lastOffX = this.zoom.x;
+    this.lastOffY = this.zoom.y;
     this.panEndAt = Date.now();
+    this.reportTransform();
+    this.onGestureEnd();
+  }
+
+  private onPanCancel(): void {
+    this.panActive = false;
+    if (this.pinching) return;
+    this.lastOffX = this.zoom.x;
+    this.lastOffY = this.zoom.y;
+    this.reportTransform();
     this.onGestureEnd();
   }
 
@@ -218,7 +447,7 @@ struct ZoomableImage {
     if (Date.now() - this.panEndAt < this.PAN_DBLTAP_DEBOUNCE_MS) {
       return;
     }
-    if (this.scaleVal > 1.0) {
+    if (this.zoom.scale > 1.0) {
       this.onZoomChange(false);
       this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.reset(); });
       return;
@@ -238,95 +467,120 @@ struct ZoomableImage {
     this.onZoomChange(true);
     this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseOut }, () => {
       this.applyTransform(2.5, 0, 0);
-      this.lastScale = this.scaleVal;
-      this.lastOffX = this.offX;
-      this.lastOffY = this.offY;
+      this.lastScale = this.zoom.scale;
+      this.lastOffX = this.zoom.x;
+      this.lastOffY = this.zoom.y;
+      this.reportTransform();
     });
     this.onGestureEnd();
   }
 
   build() {
-    if (this.pixelMap !== null) {
-      Image(this.pixelMap)
-        .draggable(false)
-        .objectFit(ImageFit.Contain)
-        .width('100%').height('100%')
-        .scale({ x: this.scaleVal, y: this.scaleVal })
-        .translate({ x: this.offX, y: this.offY })
-        .gesture(
-          GestureGroup(GestureMode.Parallel,
-            PinchGesture({ fingers: 2, distance: 1 })
-              .onActionStart((e: GestureEvent) => { this.onPinchStart(e); })
-              .onActionUpdate((e: GestureEvent) => { this.onPinchUpdate(e); })
-              .onActionEnd((e: GestureEvent) => { this.onPinchEnd(e); }),
-            PanGesture({ fingers: 1, direction: PanDirection.All, distance: this.scaleVal > 1.0 ? 3 : 80 })
-              .onActionStart((e: GestureEvent) => { this.onPanStart(e); })
-              .onActionUpdate((e: GestureEvent) => { this.onPanUpdate(e); })
-              .onActionEnd((e: GestureEvent) => { this.onPanEnd(e); }),
-            TapGesture({ count: 2 })
-              .onAction((e: GestureEvent) => { this.onDblTap(e); })
-          )
-        )
-        .onAreaChange((_o: Area, n: Area) => {
-          this.compW = n.width as number;
-          this.compH = n.height as number;
-          this.updateImgCache();
-        })
+    Stack() {
+      ZoomLayer({ pixelMap: this.pixelMap, zoom: this.zoom })
     }
+    .width('100%').height('100%')
+    .gesture(
+      GestureGroup(GestureMode.Parallel,
+        PinchGesture({ fingers: 2, distance: 1 })
+          .onActionStart((e: GestureEvent) => { this.onPinchStart(e); })
+          .onActionUpdate((e: GestureEvent) => { this.onPinchUpdate(e); })
+          .onActionEnd((e: GestureEvent) => { this.onPinchEnd(e); })
+          .onActionCancel(() => { this.onPinchCancel(); }),
+        PanGesture({ fingers: 1, direction: PanDirection.All, distance: this.zoomed ? 3 : 80 })
+          .onActionStart((e: GestureEvent) => { this.onPanStart(e); })
+          .onActionUpdate((e: GestureEvent) => { this.onPanUpdate(e); })
+          .onActionEnd((e: GestureEvent) => { this.onPanEnd(e); })
+          .onActionCancel(() => { this.onPanCancel(); }),
+        TapGesture({ count: 2 })
+          .onAction((e: GestureEvent) => { this.onDblTap(e); })
+      )
+    )
+    .onAreaChange((_o: Area, n: Area) => {
+      this.compW = n.width as number;
+      this.compH = n.height as number;
+      this.updateImgCache();
+    })
   }
 }
 
 // ---- MainImageView (top-level @ComponentV2 for Repeat+virtualScroll recycling) ----
 @ComponentV2
 struct MainImageView {
-  @Param pixelMap: image.PixelMap | null = null;
-  @Param photoW: number = 1;
-  @Param photoH: number = 1;
+  @Param photo: PhotoEntry | null = null;
   @Param pageKey: number = 0;
-  @Param isLoading: boolean = false;
-  @Param hasThumb: boolean = false;
-  @Param hasFullRes: boolean = false;
-  @Param scanning: boolean = false;
-  @Param scanRefreshKey: number = 0;
-  @Param scanProgressText: string = '';
-  @Param filename: string = '';
+  /**
+   * 该照片的渲染状态（全尺寸位图 / 加载中）。
+   * 这些字段只能在本组件里读；页面读它们会让整页跟着每次解码重建。
+   */
+  @Param state: PhotoRenderState | null = null;
+  /** 缩略图缓存：普通 Map，不可观测，靠 thumbnailVersion 建立订阅。 */
+  @Param thumbMap: Map<number, image.PixelMap> = new Map<number, image.PixelMap>();
+  @Param svc: CameraService = CameraService.getInstance();
   @Event onZoomChange: (zoomed: boolean) => void = () => {};
   @Event onGestureStart: () => void = () => {};
   @Event onGestureEnd: () => void = () => {};
+  @Event onPinchState: (active: boolean) => void = () => {};
   @Event onOverlayToggle: () => void = () => {};
+  /** 手势结束时的变换快照，转给页面做返回转场起点。 */
+  @Event onTransform: (scale: number, offX: number, offY: number) => void = () => {};
+
+  /**
+   * 当前应显示的位图：全尺寸优先，否则用缩略图。
+   *
+   * `thumbnailPixelMapMap` 是普通 Map，不参与自动追踪；这里读一下
+   * `thumbnailVersion`（每 4 张缩略图递增一次）建立订阅，占位图才会在解码
+   * 完成后被替换。这个读只让本组件订阅，不会波及页面。
+   */
+  private bitmapFor(handle: number): image.PixelMap | null {
+    const st = this.state;
+    if (st !== null && st.fullPm !== null) { return st.fullPm; }
+    if (this.svc.thumbnailVersion < 0) { return null; }
+    return this.thumbMap.get(handle) ?? null;
+  }
+
+  private hasFullRes(): boolean {
+    return this.state !== null && this.state.fullPm !== null;
+  }
+
+  private scanText(): string {
+    if (this.svc.scanTotal <= 0) { return ''; }
+    return `更新中 ${this.svc.scanProgress}/${this.svc.scanTotal}`;
+  }
 
   build() {
     Stack() {
-      if (this.hasThumb) {
-        ZoomableImage({
-          pixelMap: this.pixelMap,
-          photoW: this.photoW,
-          photoH: this.photoH,
-          pageKey: this.pageKey,
-          onZoomChange: this.onZoomChange,
-          onGestureStart: this.onGestureStart,
-          onGestureEnd: this.onGestureEnd
-        })
-      } else {
-        Column() {
-          Text(this.filename)
-            .fontSize(14).fontColor('#aaa')
-            .maxLines(2).textAlign(TextAlign.Center)
-          // Reading scanRefreshKey keeps this component subscribed to the
-          // decode counter: the PixelMap map itself is not observable, so
-          // without it a thumbnail decoded mid-scan never replaces this placeholder.
-          if (this.scanning) {
-            Text(this.scanRefreshKey > 0 ? '正在解码缩略图…' : '等待扫描…')
-              .fontSize(12).fontColor('#888').margin({ top: 8 })
+      if (this.photo !== null && this.state !== null) {
+        if (this.bitmapFor(this.photo.handle) !== null) {
+          ZoomableImage({
+            pixelMap: this.bitmapFor(this.photo.handle),
+            photoW: this.state.photoW,
+            photoH: this.state.photoH,
+            pageKey: this.pageKey,
+            onZoomChange: this.onZoomChange,
+            onGestureStart: this.onGestureStart,
+            onGestureEnd: this.onGestureEnd,
+            onPinchState: this.onPinchState,
+            onTransform: this.onTransform
+          })
+        } else {
+          Column() {
+            Text(this.photo.filename)
+              .fontSize(14).fontColor('#aaa')
+              .maxLines(2).textAlign(TextAlign.Center)
+            if (this.svc.scanning) {
+              Text(this.svc.lastDecodedHandle >= 0 ? '正在解码缩略图…' : '等待扫描…')
+                .fontSize(12).fontColor('#888').margin({ top: 8 })
+            }
           }
+          .width('100%').height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#222')
+          .onClick(() => { this.onOverlayToggle(); })
         }
-        .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor('#222')
-        .onClick(() => { this.onOverlayToggle(); })
       }
 
-      if (this.isLoading) {
+      if (this.state !== null && this.state.spinnerOn) {
         Column() {
           LoadingProgress()
             .color(Color.White)
@@ -339,8 +593,8 @@ struct MainImageView {
       }
 
       // Scanning banner — shown when scanning and no full-res loaded yet
-      if (this.scanning && !this.hasFullRes && this.scanProgressText) {
-        Text(this.scanProgressText)
+      if (this.svc.scanning && !this.hasFullRes() && this.svc.scanTotal > 0) {
+        Text(this.scanText())
           .fontSize(12)
           .fontColor('rgba(255,255,255,0.8)')
           .textAlign(TextAlign.Center)
@@ -455,14 +709,54 @@ export struct PhotoViewerScreen {
   private pageInfos: NavPathStack = new NavPathStack();
   private pageId: number = -1;
 
-  // Shared element transition
+  // ---- 一镜到底转场 ----
+  /** 被点缩略图的屏幕矩形（px），也是返回动画的兜底终点。 */
   private cardItemInfo: RectInfoInPx = new RectInfoInPx();
-  @Local animationProperties: AnimationProperties | null = null;
-  @Local myNodeController: MyNodeController | undefined = undefined;
-  private prePageDoFinishTransition: () => void = () => {};
-  private shouldDoDefaultTransition: boolean = false;
+  /**
+   * 转场位移状态。刻意用普通字段 + `@ObservedV2` 对象：页面 `build()` 不读
+   * `left/top/width/height`，逐帧变化的只有叶子组件 `PhotoMorphLayer`，
+   * 转场期间不会重建整页（标题栏 + 两个 Swiper + Repeat）。
+   */
+  private morph: PhotoMorphState = new PhotoMorphState();
+  /** 转场期间共享层显示的照片（push 用缩略图；pop 用当前已解码的位图）。 */
+  private morphPm: image.PixelMap | null = null;
+  /** 返回动画的终点（当前照片在画廊里的矩形），由 handleBack / startPopRect 计算。 */
+  private popTargetRect: MorphRect | null = null;
+  /** 请求画廊把列表滚到某张照片（目标格子不在可视区时），由 MainScreen 提供。 */
+  private requestGalleryScroll: ((handle: number) => void) | undefined = undefined;
+  /**
+   * 目标矩形的重试：目标格子可能还没被列表渲染出来（虚拟化）或在屏幕外，
+   * `handleBack` 先请求画廊滚过去，这里等它一两帧再开始收回。
+   */
+  private popRetryId: number = -1;
+  private popRetryLeft: number = 0;
+  private popProxyRef: NavigationTransitionProxy | null = null;
+  private popScrollRequested: boolean = false;
+  private popScrollSettled: number = 0;
+  /** 主图区域不透明度：转场期间由共享层代替，结束时一次性给回。 */
+  @Local photoAlpha: number = 0;
+  /** 标题栏 / 缩略图条不透明度：照片到位后才淡入。 */
+  @Local chromeAlpha: number = 0;
+  private chromeTimerId: number = -1;
+  /** 当前照片的缩放快照（手势结束时更新），用于「放大状态下返回」的起点矩形。 */
+  private curZoomScale: number = 1;
+  private curZoomX: number = 0;
+  private curZoomY: number = 0;
   private positionLookup: ((handle: number) => string) | undefined = undefined;
   private posCache: Record<string, string> = {};
+  /**
+   * 矩形插值用帧回调驱动，**不要**改成 animateTo：
+   * 共享照片层是转场开始那一刻才创建的新节点，而 `animateTo` 只对「已经渲染过」
+   * 的属性做插值——新节点会直接以终值出现（实测 `appear` 里就是终点矩形），
+   * 整个一镜到底会变成硬切。帧回调逐帧写状态则与节点生命周期无关。
+   */
+  private morphSync: displaySync.DisplaySync | null = null;
+  private morphFrom: MorphRect = new MorphRect();
+  private morphTo: MorphRect = new MorphRect();
+  private morphCurve: ICurve = MORPH_CURVE;
+  private morphStartMs: number = -1;
+  private morphDurationMs: number = 0;
+  private morphDone: (() => void) | null = null;
 
   @Local svc: CameraService = CameraService.getInstance();
   @Local mainIdx: number = 0;
@@ -485,11 +779,28 @@ export struct PhotoViewerScreen {
   @Local displayIndices: number[] = [];
   @Local scaleArr: number[] = [];
   @Local offsetArr: number[] = [];
-  @Local thumbFrac: number = 0;
+  /** 捏合进行中：禁用主 Swiper 的滑动，避免两指同时被识别成翻页。 */
+  @Local pinchActive: boolean = false;
+  /**
+   * 有内容位移（捏合 / 翻页 / 惯性）时关掉标题栏与缩略图条的实时背景模糊。
+   * `backgroundBlurStyle` 会对背后正在移动的图片每帧重算一遍模糊，是预览器
+   * 缩放卡顿的主要渲染成本；静止时恢复模糊，静态观感不变。
+   */
+  @Local chromeMotion: boolean = false;
+  /** 一次捏合期间主 Swiper 触发的滚动回调次数（只用于性能日志）。 */
+  private pinchScrollEvents: number = 0;
 
   // ---- Full-resolution loading state ----
-  @Local fullResMap: Map<number, image.PixelMap> = new Map();
-  @Local loadingHandle: number = -1;
+  /**
+   * 已解码的全尺寸位图。刻意用普通 Map：后台预加载每解完一张都会写这里，
+   * 若做成 `@Local Map` 就会把整页重建一次（捏合/拖动中撞上就是一次掉帧）。
+   * 界面靠 `renderStates` 里那张照片自己的状态刷新。
+   */
+  private fullResMap: Map<number, image.PixelMap> = new Map();
+  /** 每张照片的渲染状态，更新只影响对应的 MainImageView。 */
+  private renderStates: Map<number, PhotoRenderState> = new Map();
+  private loadingHandle: number = -1;
+  private spinnerTimerId: number = -1;
   @Local isZoomed: boolean = false;
   private stableTimerId: number = -1;
   private preloadWindow: number = 3;
@@ -507,8 +818,6 @@ export struct PhotoViewerScreen {
   @Local photoList: PhotoEntry[] = [];
   // Stable cached copy of photos for Repeat data source (avoids reference changes)
   @Local mainPhotos: PhotoEntry[] = [];
-  /** Counter bumped when currently-displayed photo's thumbnail finishes loading during scan. */
-  @Local onScreenThumbReady: number = 0;
 
   private getPhotos(): PhotoEntry[] {
     return this.mainPhotos;
@@ -516,6 +825,10 @@ export struct PhotoViewerScreen {
 
   // ---- Scanning guards and auto-recovery ----
 
+  /**
+   * 扫描结束时恢复全尺寸加载。
+   * 缩略图到达不再需要额外通知：MainImageView 自己订阅了 `thumbnailVersion`。
+   */
   @Monitor('svc.scanning')
   onScanningChange(mon: IMonitor): void {
     const before = mon.value()?.before as boolean;
@@ -526,28 +839,27 @@ export struct PhotoViewerScreen {
     }
   }
 
-  /** On-screen thumbnail refresh: when the current photo's thumb finishes loading during scan. */
-  @Monitor('svc.lastDecodedHandle')
-  onThumbnailDecoded(): void {
-    if (!this.svc.scanning) return;
-    const handle = this.svc.lastDecodedHandle;
-    if (handle >= 0 && handle === this.currentHandle()) {
-      this.onScreenThumbReady++;
-    }
-  }
-
   aboutToAppear(): void {
-    // Initialize animation properties (params will be read in onReady)
-    this.animationProperties = new AnimationProperties(this.getUIContext());
-    // Pick up the BuilderNode shared from MainScreen/GalleryPage
-    this.myNodeController = getMyNode();
+    // 预览器自己有一套「当前优先、前后各 3 张」的加载队列；后台的邻近预加载
+    // 若同时跑，会在串行的 USB 管道上插队，把正在看的这张拖慢。
+    this.svc.suspendNeighborPreload();
     // The viewer is always dark: force light status/navigation bar icons.
     WindowUtils.applyViewerSystemBars();
   }
 
   aboutToDisappear(): void {
     this.cancelStableTimer();
-    this.svc.cancelPreload();
+    this.cancelChromeTimer();
+    this.stopRectAnimation();
+    this.cancelPopRetry();
+    if (this.spinnerTimerId >= 0) {
+      clearTimeout(this.spinnerTimerId);
+      this.spinnerTimerId = -1;
+    }
+    // 停掉预览器自己的解码队列，把后台预加载交还给服务层（回到画廊后下一次
+    // 打开照片才不会又从零开始下载）。
+    this.loadingPaused = true;
+    this.svc.resumeNeighborPreload();
     // Restore system bars to match the app theme.
     WindowUtils.applyThemeSystemBars(
       WindowUtils.isDarkMode(this.getUIContext().getHostContext()));
@@ -576,6 +888,12 @@ export struct PhotoViewerScreen {
     }
 
     this.rebuildDisplayArrays();
+    // 预先建好每张照片的渲染状态（不在 build 里创建观察对象）
+    this.renderStates.clear();
+    this.fullResMap.clear();
+    for (const p of this.mainPhotos) {
+      this.stateFor(p.handle);
+    }
     let initialIndex = 0;
     if (startIndex !== undefined && startIndex >= 0 && startIndex < this.mainPhotos.length) {
       initialIndex = startIndex;
@@ -592,6 +910,49 @@ export struct PhotoViewerScreen {
     this.updateScales(initialIndex);
     // Start loading full-res for initial photo after a short delay
     setTimeout(() => { this.scheduleFullResLoad(); }, 200);
+  }
+
+  /** 取（或懒建）某张照片的渲染状态。 */
+  private stateFor(handle: number): PhotoRenderState {
+    let st = this.renderStates.get(handle);
+    if (st === undefined) {
+      const sz = this.svc.orientedDisplaySizes.get(handle);
+      let w = 1;
+      let h = 1;
+      if (sz !== undefined && sz.w > 0 && sz.h > 0) {
+        w = sz.w;
+        h = sz.h;
+      } else {
+        const p = this.photoByHandle(handle);
+        if (p !== null) {
+          w = p.imagePixWidth ?? 1;
+          h = p.imagePixHeight ?? 1;
+        }
+      }
+      st = new PhotoRenderState(w, h);
+      this.renderStates.set(handle, st);
+    }
+    return st;
+  }
+
+  private photoByHandle(handle: number): PhotoEntry | null {
+    for (const p of this.mainPhotos) {
+      if (p.handle === handle) { return p; }
+    }
+    return null;
+  }
+
+  /**
+   * 把已缓存的全尺寸位图挂到该照片的渲染状态上（幂等）。
+   * 预加载刻意不碰渲染状态，只写普通 Map，等用户翻到这张时再补上。
+   */
+  private presentCached(handle: number): void {
+    const pm = this.fullResMap.get(handle);
+    if (pm === undefined) { return; }
+    const st = this.stateFor(handle);
+    if (st.fullPm !== pm) {
+      st.fullPm = pm;
+    }
   }
 
   private rebuildDisplayArrays(): void {
@@ -635,29 +996,56 @@ export struct PhotoViewerScreen {
   }
 
   private updateScales(realFrac: number): void {
-    this.thumbFrac = realFrac;
     const half = this._half;
     const dt = this._displayTotal;
-    const centerFrac = realFrac + half;
-    const centerIdx = Math.round(centerFrac);
+    const centerIdx = Math.round(realFrac + half);
     // 性能优化：仅遍历可见窗口内的 item，避免 O(n) 全量遍历
     const window = this._displayCount + 2; // 可见区域 + 余量
     const start = Math.max(0, centerIdx - window);
     const end = Math.min(dt - 1, centerIdx + window);
     for (let i = start; i <= end; i++) {
+      let s = MIN_S;
+      let o = CENTER_OFFSET;
       if (this.isPlaceholder(i)) {
-        this.scaleArr[i] = 0;
-        this.offsetArr[i] = 0;
+        s = 0;
+        o = 0;
+      } else if (i === centerIdx) {
+        s = MAX_S;
+        o = 0;
       } else {
-        const d = i - centerIdx;
-        if (d === 0) {
-          this.scaleArr[i] = MAX_S;
-          this.offsetArr[i] = 0;
-        } else {
-          this.scaleArr[i] = MIN_S;
-          this.offsetArr[i] = d > 0 ? CENTER_OFFSET : -CENTER_OFFSET;
-        }
+        o = i > centerIdx ? CENTER_OFFSET : -CENTER_OFFSET;
       }
+      // 只在值真的变化时写：`@Local` 数组每次赋值都会通知订阅者。拖动不足半格时
+      // 这些值本来就是不变的，逐帧全写会让窗口内 11 个缩略图单元格反复重算并
+      // 重启自身的 150ms 动画 —— 翻页时「有点卡」的一条隐性成本。
+      if (this.scaleArr[i] !== s) { this.scaleArr[i] = s; }
+      if (this.offsetArr[i] !== o) { this.offsetArr[i] = o; }
+    }
+  }
+
+  /** 只在状态真的翻转时写 `@Local`，避免逐帧重建页面。 */
+  private setChromeMotion(on: boolean): void {
+    if (this.chromeMotion !== on) { this.chromeMotion = on; }
+  }
+
+  /**
+   * 捏合开始 / 结束（含取消）。
+   *
+   * 捏合期间同时做两件事：
+   * 1. 关掉标题栏与缩略图条的实时背景模糊 —— 背后图片每帧在动，模糊也要每帧
+   *    重算，是缩放卡顿的主要渲染成本；
+   * 2. 让主 Swiper 不再滑动，两指手势完全归 ZoomableImage 处理，避免两指拖动
+   *    被 Swiper 同时识别成翻页（那样每帧还会额外触发一次缩略图条联动）。
+   */
+  private setPinchActive(active: boolean): void {
+    if (this.pinchActive !== active) { this.pinchActive = active; }
+    if (active) {
+      this.pinchScrollEvents = 0;
+      this.setChromeMotion(true);
+    } else {
+      this.setChromeMotion(this._isDragging || this._inertiaAnim);
+      this.svc.getLog().add(
+        `PERF viewer pinch: swiperScrolls=${this.pinchScrollEvents}`);
     }
   }
 
@@ -670,6 +1058,7 @@ export struct PhotoViewerScreen {
       this._inertiaAnim = false;
       this._lastMainFrac = this.mainIdx;
       this.thumbCtrl.startFakeDrag();
+      this.setChromeMotion(true);
     }
     if (!this._isDragging) return;
     const mainFrac = index - extraInfo.currentOffset / this._swiperWidth;
@@ -680,6 +1069,9 @@ export struct PhotoViewerScreen {
   }
 
   private onMainContentDidScroll(_sel: number, index: number, position: number): void {
+    // 捏合期间这条回调本该完全不触发（主 Swiper 已 disableSwipe）。记个数，
+    // 方便从日志确认「两指手势有没有被 Swiper 抢走」。
+    if (this.pinchActive) { this.pinchScrollEvents++; }
     const mainFrac = index - position;
     this.updateScales(mainFrac);
     if (!this._isDragging) return;
@@ -698,6 +1090,7 @@ export struct PhotoViewerScreen {
     }
     this._fromMain = false;
     this._inertiaAnim = false;
+    this.setChromeMotion(false);
     this.mainIdx = index;
     this.thumbIdx = index;
     this.thumbCtrl.changeIndex(index, false);
@@ -709,6 +1102,10 @@ export struct PhotoViewerScreen {
   private onMainChange(idx: number): void {
     hilog.info(DOMAIN, TAG, `onMainChange idx=${idx} mainIdx=${this.mainIdx} total=${this.mainPhotos.length}`);
     this.mainIdx = idx;
+    // 换了一张照片：缩放快照失效（ZoomableImage 切页时会自己复位）
+    this.curZoomScale = 1;
+    this.curZoomX = 0;
+    this.curZoomY = 0;
     if (this._fromMain && !this._inertiaAnim) {
       this._fromMain = false;
       if (this._isDragging) {
@@ -734,6 +1131,7 @@ export struct PhotoViewerScreen {
     const clamped = Math.max(0, Math.min(Math.round(centerReal), this._realTotal - 1));
     if (clamped !== this.mainIdx) { this.mainIdx = clamped; }
     this.updateScales(centerReal);
+    this.setChromeMotion(true);
   }
 
   private onThumbAnimationStart(_index: number, targetIndex: number): void {
@@ -748,6 +1146,7 @@ export struct PhotoViewerScreen {
     this.mainIdx = realIdx;
     this.thumbIdx = index;
     this.updateScales(realIdx);
+    this.setChromeMotion(false);
   }
 
   private onThumbChange(idx: number): void {
@@ -793,6 +1192,7 @@ export struct PhotoViewerScreen {
 
     // If already loaded, just ensure preload window is populated
     if (this.fullResMap.has(handle)) {
+      this.presentCached(handle);
       this.preloadNeighbors();
       return;
     }
@@ -828,11 +1228,25 @@ export struct PhotoViewerScreen {
     if (this.fullResMap.has(handle) || this.loadingHandle >= 0) return;
 
     this.loadingHandle = handle;
+    const startState = this.stateFor(handle);
+    startState.loading = true;
+    startState.spinnerOn = false;
+    if (this.spinnerTimerId >= 0) { clearTimeout(this.spinnerTimerId); }
+    this.spinnerTimerId = setTimeout(() => {
+      this.spinnerTimerId = -1;
+      if (this.loadingHandle === handle && this.stateFor(handle).loading) {
+        this.stateFor(handle).spinnerOn = true;
+      }
+    }, SPINNER_DELAY_MS);
     try {
       const result = await this.svc.loadFullPhoto(handle);
       if (result !== null) {
         const pixelMap = result.pixelMap;
         this.fullResMap.set(handle, pixelMap);
+        const st = this.stateFor(handle);
+        st.photoW = result.displayW;
+        st.photoH = result.displayH;
+        st.fullPm = pixelMap;
         // Only trigger preloads if this photo is still the current one
         if (handle === this.currentHandle()) {
           this.preloadNeighbors();
@@ -847,6 +1261,9 @@ export struct PhotoViewerScreen {
     } finally {
       if (this.loadingHandle === handle) {
         this.loadingHandle = -1;
+        const st = this.stateFor(handle);
+        st.loading = false;
+        st.spinnerOn = false;
         // If queue was waiting for current load to finish, resume now
         if (!this.loadingPaused && this.preloadQueue.length > 0 && !this.preloadActive) {
           setTimeout(() => { this.processPreloadQueue(); }, 50);
@@ -961,7 +1378,11 @@ export struct PhotoViewerScreen {
       try {
         const result = await this.svc.loadFullPhoto(task.handle);
         if (result !== null) {
+          // 只写普通 Map：预加载邻近照片不该重建任何界面。
           this.fullResMap.set(task.handle, result.pixelMap);
+          if (task.handle === this.currentHandle()) {
+            this.presentCached(task.handle);
+          }
         }
       } catch (_e) {
         // Silent
@@ -1030,11 +1451,23 @@ export struct PhotoViewerScreen {
         toEvict.push(handle);
       }
     });
+    const releasing: image.PixelMap[] = [];
     for (const h of toEvict) {
       const pm = this.fullResMap.get(h);
-      if (pm) { pm.release(); }
       this.fullResMap.delete(h);
       this.preloadedHandles.delete(h);
+      const st = this.renderStates.get(h);
+      if (st !== undefined && st.fullPm === pm) { st.fullPm = null; }
+      if (pm !== undefined) { releasing.push(pm); }
+    }
+    if (releasing.length > 0) {
+      // 释放大位图会占用 UI 线程，挪到当前任务之后再放，
+      // 避免正好压在一次捏合或翻页的中间。
+      setTimeout(() => {
+        for (const pm of releasing) {
+          try { pm.release(); } catch (_e) { /* ignore */ }
+        }
+      }, 0);
     }
   }
 
@@ -1103,52 +1536,358 @@ export struct PhotoViewerScreen {
     // The navigation content area already sits below the status bar,
     // so do not add the status-bar inset again here.
     .padding({ left: 12, right: 12, top: 12, bottom: 8 })
-    .backgroundColor('rgba(0,0,0,0.35)')
-    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.DARK })
+    .backgroundColor(this.chromeBg())
+    .backgroundBlurStyle(this.chromeBlur(), { colorMode: ThemeColorMode.DARK })
+    .opacity(this.chromeAlpha)
+  }
+
+  // ========== 一镜到底转场 ==========
+
+  // ---- 矩形插值（帧回调驱动）----
+
+  private static lerp(a: number, b: number, p: number): number {
+    return a + (b - a) * p;
+  }
+
+  private stopRectAnimation(): void {
+    if (this.morphSync !== null) {
+      try {
+        this.morphSync.off('frame');
+        this.morphSync.stop();
+      } catch (_e) { /* ignore */ }
+      this.morphSync = null;
+    }
+    this.morphStartMs = -1;
+    this.morphDone = null;
+  }
+
+  private onMorphFrame(info: displaySync.IntervalInfo): void {
+    const nowMs = info.timestamp / 1000000;
+    if (this.morphStartMs < 0) {
+      // 第一帧只作为计时起点，画面保持起始矩形，避免起步就跳一格
+      this.morphStartMs = nowMs;
+      return;
+    }
+    const raw = this.morphDurationMs > 0 ? (nowMs - this.morphStartMs) / this.morphDurationMs : 1;
+    const t = Math.max(0, Math.min(1, raw));
+    const p = this.morphCurve.interpolate(t);
+    this.morph.left = PhotoViewerScreen.lerp(this.morphFrom.left, this.morphTo.left, p);
+    this.morph.top = PhotoViewerScreen.lerp(this.morphFrom.top, this.morphTo.top, p);
+    this.morph.width = PhotoViewerScreen.lerp(this.morphFrom.width, this.morphTo.width, p);
+    this.morph.height = PhotoViewerScreen.lerp(this.morphFrom.height, this.morphTo.height, p);
+    if (t >= 1) {
+      const done = this.morphDone;
+      this.stopRectAnimation();
+      if (done !== null) { done(); }
+    }
   }
 
   /**
-   * Shared-element aware back navigation.
-   * Used by both the title-bar button and the hardware/gesture back.
+   * 从 `from` 插值到 `to`，结束后回调。取不到帧回调时直接落到终点，保证不卡住。
+   */
+  private startRectAnimation(from: MorphRect, to: MorphRect, duration: number,
+    curve: ICurve, onDone: () => void): void {
+    this.stopRectAnimation();
+    this.morphFrom = from;
+    this.morphTo = to;
+    this.morphCurve = curve;
+    this.morphDurationMs = duration;
+    this.morphDone = onDone;
+    this.morph.apply(from);
+    let sync: displaySync.DisplaySync | null = null;
+    try {
+      sync = displaySync.create();
+      sync.setExpectedFrameRateRange({ expected: 60, min: 30, max: 60 });
+      sync.on('frame', (info: displaySync.IntervalInfo) => { this.onMorphFrame(info); });
+    } catch (_e) {
+      sync = null;
+    }
+    if (sync === null) {
+      this.morph.apply(to);
+      this.stopRectAnimation();
+      onDone();
+      return;
+    }
+    this.morphSync = sync;
+    try {
+      sync.start();
+    } catch (_e) {
+      this.morph.apply(to);
+      this.stopRectAnimation();
+      onDone();
+    }
+  }
+
+  /** 转场矩形的一行日志文本（只用于排查，保持简短）。 */
+  private morphRectText(r: MorphRect | null): string {
+    if (r === null) {
+      return 'none';
+    }
+    return `${r.left.toFixed(1)},${r.top.toFixed(1)} ${r.width.toFixed(1)}x${r.height.toFixed(1)}`;
+  }
+
+  private currentMorphRect(): MorphRect {
+    return new MorphRect(this.morph.left, this.morph.top, this.morph.width, this.morph.height);
+  }
+
+  private cancelChromeTimer(): void {
+    if (this.chromeTimerId >= 0) {
+      clearTimeout(this.chromeTimerId);
+      this.chromeTimerId = -1;
+    }
+  }
+
+  /** 当前照片的显示宽高比（按已解码原图 / 缩略图的定向尺寸）。 */
+  private currentAspect(): number {
+    const h = this.currentHandle();
+    if (h < 0) {
+      return 1;
+    }
+    const st = this.stateFor(h);
+    return MorphGeometry.aspectOf(st.photoW, st.photoH);
+  }
+
+  /**
+   * 当前照片的中间层是否在场（已经在显示缩略图或原图）。
+   * 分享元素动画只对「已显示的画面」有意义；纯占位时不假装有照片。
+   */
+  private currentPixelMap(): image.PixelMap | null {
+    const h = this.currentHandle();
+    if (h < 0) {
+      return null;
+    }
+    const st = this.renderStates.get(h);
+    if (st !== undefined && st.fullPm !== null) {
+      return st.fullPm;
+    }
+    return this.svc.thumbnailPixelMapMap.get(h) ?? null;
+  }
+
+  /**
+   * 当前屏幕显示的照片矩形（vp）。未放大时就是 `Contain` 矩形；
+   * 放大/拖动过则按缩放快照换算，保证「放大后返回」也从当前画面收缩。
+   */
+  private currentDisplayRect(): MorphRect {
+    const base = MorphGeometry.containRect(this.currentAspect());
+    const s = this.curZoomScale;
+    if (s <= 1.001) {
+      return base;
+    }
+    const w = base.width * s;
+    const h = base.height * s;
+    const cx = base.left + base.width / 2 + this.curZoomX;
+    const cy = base.top + base.height / 2 + this.curZoomY;
+    return new MorphRect(cx - w / 2, cy - h / 2, w, h);
+  }
+
+  /**
+   * 展开：缩略图矩形 → 照片在预览器里的显示矩形。
+   * 照片落位的同时揭开主图与标题栏，共享层随即撤场。
+   */
+  private playPush(proxy: NavigationTransitionProxy | null): void {
+    if (!this.morph.visible) {
+      // 没有起点矩形（异常路径）：不做假动画，直接给内容
+      this.photoAlpha = 1;
+      this.chromeAlpha = 1;
+      if (proxy) { proxy.finishTransition(); }
+      return;
+    }
+    const ui = this.getUIContext();
+    const end: MorphRect = MorphGeometry.containRect(this.currentAspect());
+    this.startRectAnimation(this.currentMorphRect(), end, PUSH_MS, MORPH_CURVE, () => {
+      // 与共享层同一帧换手：矩形比例已等于照片比例，Cover/Contain 完全重合
+      this.morph.visible = false;
+      this.photoAlpha = 1;
+      if (proxy) { proxy.finishTransition(); }
+    });
+    ui.animateTo({ duration: BACKDROP_IN_MS, curve: Curve.EaseOut }, () => {
+      this.morph.backdrop = 1;
+    });
+    this.cancelChromeTimer();
+    this.chromeTimerId = setTimeout(() => {
+      this.chromeTimerId = -1;
+      this.getUIContext().animateTo({ duration: CHROME_IN_MS, curve: Curve.EaseOut }, () => {
+        this.chromeAlpha = 1;
+      });
+    }, CHROME_IN_DELAY_MS);
+  }
+
+  /** 收回：显示矩形 → 当前照片缩略图的矩形，背景同时透出画廊。 */
+  private playPop(proxy: NavigationTransitionProxy | null): void {
+    if (!this.morph.visible) {
+      if (proxy) { proxy.finishTransition(); }
+      return;
+    }
+    const ui = this.getUIContext();
+    ui.animateTo({ duration: CHROME_OUT_MS, curve: Curve.EaseOut }, () => {
+      this.chromeAlpha = 0;
+    });
+    this.popProxyRef = proxy;
+    this.popRetryLeft = POP_TARGET_RETRIES;
+    this.startPopRect();
+  }
+
+  private cancelPopRetry(): void {
+    if (this.popRetryId >= 0) {
+      clearTimeout(this.popRetryId);
+      this.popRetryId = -1;
+    }
+    this.popRetryLeft = 0;
+    this.popProxyRef = null;
+  }
+
+  /**
+   * 目标格子至少有一半在窗口内，收回动画才收得进眼睛看得见的地方。
+   * 列表有 `cachedCount`，目标格子可能已经渲染但落在屏幕外——这种也要滚。
+   */
+  private isPopRectUsable(r: RectInfoInPx): boolean {
+    if (!(r.width > 0) || !(r.height > 0)) {
+      return false;
+    }
+    const windowVp = WindowUtils.windowHeightPx > 0 ? px2vp(WindowUtils.windowHeightPx) : 0;
+    if (windowVp <= 0) {
+      return true;
+    }
+    const visible = Math.min(px2vp(r.bottom), windowVp) - Math.max(px2vp(r.top), 0);
+    return visible >= px2vp(r.height) * 0.5;
+  }
+
+  /**
+   * 查某张照片在画廊里的实时矩形。拿不到、或不在可视区时返回 null，
+   * 并（一次 pop 只请求一次）让画廊先滚到那一行。
+   */
+  private popRectFor(handle: number): MorphRect | null {
+    if (handle < 0) {
+      return null;
+    }
+    let rectStr: string = '';
+    if (this.positionLookup) {
+      try { rectStr = this.positionLookup(handle); } catch (_e) { rectStr = ''; }
+    }
+    let px: RectInfoInPx | null = null;
+    if (rectStr) {
+      try { px = JSON.parse(rectStr) as RectInfoInPx; } catch (_e) { px = null; }
+    }
+    if (px !== null && this.isPopRectUsable(px)) {
+      return MorphGeometry.fromPx(px);
+    }
+    if (!this.popScrollRequested && this.requestGalleryScroll) {
+      this.popScrollRequested = true;
+      this.svc.getLog().add('pop: 目标格子不在可视区，请求画廊滚动 handle=' + handle);
+      try { this.requestGalleryScroll(handle); } catch (_e) { /* ignore */ }
+    }
+    return null;
+  }
+
+  /**
+   * 收回动画的起点已摆好，等目标矩形就绪后开始。
+   *
+   * 目标格子可能因为列表虚拟化还没渲染、或渲染在屏幕外而暂时查不到：`handleBack`
+   * 已经请求画廊滚过去，这里按帧重试，拿到就立刻开始收回；超时仍拿不到才退回
+   * push 时缓存的位置。标题栏淡出与背景透出不等这里，所以用户看不到停顿。
+   */
+  private startPopRect(): void {
+    const handle = this.currentHandle();
+    if (this.popTargetRect === null) {
+      this.popTargetRect = this.popRectFor(handle);
+    }
+    if (this.popTargetRect === null && this.popRetryLeft > 0) {
+      this.popRetryLeft--;
+      this.popRetryId = setTimeout(() => {
+        this.popRetryId = -1;
+        this.startPopRect();
+      }, POP_TARGET_RETRY_MS);
+      return;
+    }
+    let target: MorphRect | null = this.popTargetRect;
+    if (this.popScrollRequested && this.popScrollSettled < POP_SCROLL_SETTLE_FRAMES) {
+      // 目标已经拿到，但列表刚被滚动过：多等一帧让新布局上屏，再开始透出+收回
+      this.popScrollSettled++;
+      this.popRetryId = setTimeout(() => {
+        this.popRetryId = -1;
+        this.startPopRect();
+      }, POP_TARGET_RETRY_MS);
+      return;
+    }
+    if (target === null) {
+      // 兜底：push 时缓存的位置 > 最初点的那张
+      const cachedStr = this.posCache[String(handle)] ?? '';
+      if (cachedStr) {
+        try {
+          const cachedRect = MorphGeometry.fromPx(JSON.parse(cachedStr) as RectInfoInPx);
+          if (MorphGeometry.isValid(cachedRect)) { target = cachedRect; }
+        } catch (_e) { /* ignore */ }
+      }
+      if (target === null) {
+        const fallback = MorphGeometry.fromPx(this.cardItemInfo);
+        target = MorphGeometry.isValid(fallback) ? fallback : null;
+      }
+      this.svc.getLog().add('pop: 目标矩形兜底 ' + this.morphRectText(target));
+    }
+    const proxy = this.popProxyRef;
+    this.cancelPopRetry();
+    if (target === null) {
+      this.morph.visible = false;
+      if (proxy) { proxy.finishTransition(); }
+      return;
+    }
+    this.svc.getLog().add('pop: 收回目标 ' + this.morphRectText(target));
+    // 背景透出与收回动画一起开始：目标格子可能要等画廊滚动（上面会重试几帧），
+    // 先滚好再透出，用户就不会看到「网格跳一下」。
+    this.getUIContext().animateTo({ duration: BACKDROP_OUT_MS, curve: Curve.EaseOut }, () => {
+      this.morph.backdrop = 0;
+    });
+    this.startRectAnimation(this.currentMorphRect(), target, POP_MS, MORPH_CURVE, () => {
+      this.morph.visible = false;
+      if (proxy) { proxy.finishTransition(); }
+    });
+  }
+
+  /**
+   * 共享元素式返回。标题栏返回键与系统返回键都走这里。
+   *
+   * 先把共享层摆到「当前画面」的位置再 pop：这样 pop 真正开始时页面上没有
+   * 任何一帧是空的，标题栏与缩略图条随后淡出、照片收回缩略图。
    */
   private handleBack(): void {
+    this.cancelPopRetry();
+    this.popScrollRequested = false;
+    this.popScrollSettled = 0;
     const curHandle = this.currentHandle();
-    if (curHandle >= 0) {
-      // 1. Update the shared element (BuilderNode) with the CURRENT photo's
-      //    thumbnail (not the originally-clicked one).
-      if (this.myNodeController) {
-        const pm = this.svc.thumbnailPixelMapMap.get(curHandle);
-        if (pm) {
-          this.myNodeController.setPixelMap(this.getUIContext(), pm);
-          this.svc.getLog().add('pop: updated BuilderNode pixelMap for handle=' + curHandle);
-        }
-      }
+    // 实时矩形优先；不在可视区（或还没被列表渲染）时，popRectFor 会让画廊滚过去，
+    // 真正的等待与重试在 startPopRect 里，不阻塞返回动作。
+    this.popTargetRect = this.popRectFor(curHandle);
 
-      // 2. Look up the current thumbnail's grid position for the return animation.
-      //    Priority: positionLookup (live) > posCache (cached at push time) > original cardItemInfo
-      let rectStr: string = '';
-      if (this.positionLookup) {
-        try { rectStr = this.positionLookup(curHandle); } catch (_e) { /* ignore */ }
-      }
-      if (!rectStr) {
-        rectStr = this.posCache[String(curHandle)] ?? '';
-        if (rectStr) {
-          this.svc.getLog().add('pop: used posCache for handle=' + curHandle);
-        }
-      }
-      if (rectStr) {
-        try {
-          this.cardItemInfo = JSON.parse(rectStr) as RectInfoInPx;
-          this.svc.getLog().add('pop: updated cardItemInfo for handle=' + curHandle);
-        } catch (_e) { /* ignore */ }
-      } else {
-        this.svc.getLog().add('pop: no position found for handle=' + curHandle + ', using original');
-      }
+    const pm = this.currentPixelMap();
+    const displayRect = this.currentDisplayRect();
+    this.svc.getLog().add('pop: handle=' + curHandle + ' pm=' + (pm !== null) +
+      ' rect=' + this.morphRectText(displayRect) + ' -> ' +
+      (this.popTargetRect !== null ? this.morphRectText(this.popTargetRect) : 'pending'));
+    if (pm !== null) {
+      this.morphPm = pm;
+      this.morph.apply(displayRect);
+      this.morph.visible = true;
+      this.photoAlpha = 0;
     }
     this.pageInfos.pop();
   }
 
   // ========== Builders ==========
+
+  /**
+   * 标题栏 / 缩略图条的底色与模糊。
+   *
+   * 静止时用真材质观感（半透明黑 + COMPONENT_THICK 模糊）；一旦内容开始位移
+   * （捏合、拖动、翻页、惯性），模糊会对背后每帧变化的图片重算一次，是预览器
+   * 缩放卡顿的主要渲染成本，此时退化为稍深的半透明纯色，观感差别只在运动瞬间。
+   */
+  private chromeBg(): ResourceColor {
+    return this.chromeMotion ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
+  }
+
+  private chromeBlur(): BlurStyle {
+    return this.chromeMotion ? BlurStyle.NONE : BlurStyle.COMPONENT_THICK;
+  }
 
   private getThumbPixelMap(realIdx: number): image.PixelMap | null {
     const photos = this.getPhotos();
@@ -1161,37 +1900,30 @@ export struct PhotoViewerScreen {
     return null;
   }
 
-  private orientedW(ri: RepeatItem<PhotoEntry>): number {
-    const s = this.svc.orientedDisplaySizes.get(ri.item.handle);
-    return s ? s.w : (ri.item.imagePixWidth ?? 1);
-  }
-
-  private orientedH(ri: RepeatItem<PhotoEntry>): number {
-    const s = this.svc.orientedDisplaySizes.get(ri.item.handle);
-    return s ? s.h : (ri.item.imagePixHeight ?? 1);
-  }
-
   @Builder
   buildMainImage(ri: RepeatItem<PhotoEntry>) {
     MainImageView({
-      pixelMap: this.fullResMap.has(ri.item.handle)
-        ? this.fullResMap.get(ri.item.handle)! : this.getThumbPixelMap(ri.index),
-      photoW: this.orientedW(ri),
-      photoH: this.orientedH(ri),
+      photo: ri.item,
       pageKey: ri.index,
-      isLoading: this.loadingHandle === ri.item.handle,
-      hasThumb: this.svc.thumbnailPixelMapMap.has(ri.item.handle),
-      hasFullRes: this.fullResMap.has(ri.item.handle),
-      filename: ri.item.filename,
-      scanning: this.svc.scanning,
-      scanRefreshKey: this.onScreenThumbReady,
-      scanProgressText: this.svc.scanTotal > 0
-        ? `更新中 ${this.svc.scanProgress}/${this.svc.scanTotal}`
-        : '',
+      state: this.stateFor(ri.item.handle),
+      thumbMap: this.svc.thumbnailPixelMapMap,
+      svc: this.svc,
       onZoomChange: (zoomed: boolean) => { this.isZoomed = zoomed; },
-      onGestureStart: () => { this.pausePreloading(); },
-      onGestureEnd: () => { this.scheduleResumePreloading(); },
-      onOverlayToggle: () => { this._overlayVisible = !this._overlayVisible; }
+      onGestureStart: () => {
+        this.pausePreloading();
+        this.setChromeMotion(true);
+      },
+      onGestureEnd: () => {
+        this.scheduleResumePreloading();
+        this.setChromeMotion(this._isDragging || this._inertiaAnim || this.pinchActive);
+      },
+      onPinchState: (active: boolean) => { this.setPinchActive(active); },
+      onOverlayToggle: () => { this._overlayVisible = !this._overlayVisible; },
+      onTransform: (s: number, x: number, y: number) => {
+        this.curZoomScale = s;
+        this.curZoomX = x;
+        this.curZoomY = y;
+      }
     })
   }
 
@@ -1202,8 +1934,7 @@ export struct PhotoViewerScreen {
       pixelMap: this.isPlaceholder(ri.item) ? null : this.getThumbPixelMap(this.toReal(ri.item)),
       s: this.scaleArr[ri.item] ?? MIN_S,
       ox: this.offsetArr[ri.item] ?? 0,
-      borderWeight: this.isPlaceholder(ri.item) ? 0 :
-        Math.max(0, 1 - Math.abs(this.toReal(ri.item) - this.thumbFrac)),
+      borderWeight: this.scaleArr[ri.item] >= MAX_S ? 1 : 0,
       onCellClick: (): void => {
         if (!this.isPlaceholder(ri.item)) { this.onThumbClick(this.toReal(ri.item)); }
       }
@@ -1225,19 +1956,11 @@ export struct PhotoViewerScreen {
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
-        // Shared element in positioned inner Stack so translateY aligns
-        // with window coordinates (see FAQ: expandSafeArea doesn't change
-        // layout origin).
-        Stack({ alignContent: Alignment.TopStart }) {
-          if (this.myNodeController && this.animationProperties && !this.animationProperties.showDetailContent) {
-            NodeContainer(this.myNodeController)
-              .width('100%')
-              .height('100%')
-          }
-        }
-        .position({ y: this.animationProperties?.positionValue ?? 0 })
+        // 转场背板：从画廊颜色压到纯黑（pop 时反向透出画廊）。
+        // 独立叶子组件，opacity 逐帧变化不会牵连本页 build()。
+        MorphBackdrop({ alpha: this.morph.backdrop })
 
-        // ===== Regular content (visible after transition completes) =====
+        // ===== Regular content (visible after the shared photo lands) =====
         Column() {
           // ===== Custom Title Bar =====
           if (this._overlayVisible) {
@@ -1272,6 +1995,8 @@ export struct PhotoViewerScreen {
             .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
             .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
             .width('100%').height('100%')
+            // 转场期间由共享照片层代表这张照片，落地后一次性交还
+            .opacity(this.photoAlpha)
 
             // ===== Thumb Swiper =====
             Column() {
@@ -1339,8 +2064,9 @@ export struct PhotoViewerScreen {
               // Reserved area for the gesture bar is already excluded from
               // the page, so the extra inset would be double-counted.
               .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-              .backgroundColor('rgba(0,0,0,0.35)')
-              .backgroundBlurStyle(BlurStyle.COMPONENT_THICK, { colorMode: ThemeColorMode.DARK })
+              .backgroundColor(this.chromeBg())
+              .backgroundBlurStyle(this.chromeBlur(), { colorMode: ThemeColorMode.DARK })
+              .opacity(this.chromeAlpha)
             }
             .width('100%').height('100%')
             .hitTestBehavior(HitTestMode.Transparent)
@@ -1348,26 +2074,25 @@ export struct PhotoViewerScreen {
             .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
           }
           .width('100%').height('100%')
-          .backgroundColor(Color.Black)
+          // 这里不能再铺纯黑：转场期间整页要透出下层画廊，
+          // 黑底由最底层的 MorphBackdrop 统一提供（它自己会渐入到纯黑）。
           .layoutWeight(1)
         }
         .width('100%').height('100%')
         // 窗口是全屏布局，预览器自己要避让状态栏与导航条
         .padding({ top: this.topInsetVp(), bottom: this.bottomInsetVp() })
-        .opacity(this.animationProperties?.showDetailContent ? 1.0 : 0.0)
-        .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
+
+        // ===== 共享照片层（转场期间唯一可见的照片，最后绘制在最上层）=====
+        if (this.morph.visible) {
+          PhotoMorphLayer({ pixelMap: this.morphPm, state: this.morph })
+        }
       }
-      // Animation transforms applied to the outer Stack:
-      .scale({ x: this.animationProperties?.scaleValue ?? 1, y: this.animationProperties?.scaleValue ?? 1 })
-      .translate({ x: this.animationProperties?.translateX ?? 0, y: this.animationProperties?.translateY ?? 0 })
-      .width(this.animationProperties?.clipWidth ?? '100%')
-      .height(this.animationProperties?.clipHeight ?? '100%')
-      .borderRadius(this.animationProperties?.radius ?? 0)
-      .clip(true)
+      .width('100%').height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM])
     }
     .hideTitleBar(true)
-    .backgroundColor(this.animationProperties?.navDestinationBgColor ?? Color.Black)
+    // 转场期间必须透明：下层画廊要靠它透出来；黑底由 MorphBackdrop 负责
+    .backgroundColor(Color.Transparent)
     .onReady((context: NavDestinationContext) => {
       this.pageInfos = context.pathStack;
       this.pageId = this.pageInfos.getAllPathName().length - 1;
@@ -1386,14 +2111,11 @@ export struct PhotoViewerScreen {
         } catch (_e) {}
       }
 
-      // Back-transition callback
-      this.prePageDoFinishTransition = param['doDefaultTransition'] as () => void;
-      if (!this.prePageDoFinishTransition) {
-        this.prePageDoFinishTransition = () => {};
-      }
-
       // Position lookup callback + cached positions (from push time)
       this.positionLookup = param['positionLookup'] as ((handle: number) => string) | undefined;
+      // 目标格子不在可视区时，请画廊先把列表滚到那一行（官方图库也是先对齐网格）
+      this.requestGalleryScroll = param['requestGalleryScroll'] as
+        ((handle: number) => void) | undefined;
       const posCacheStr = param['posCache'] as string | undefined;
       if (posCacheStr) {
         try { this.posCache = JSON.parse(posCacheStr) as Record<string, string>; } catch (_e) {}
@@ -1402,22 +2124,33 @@ export struct PhotoViewerScreen {
       // Initialize photo list and starting index
       this.initFromParams(handle, handles, startIndex);
 
-      // Set initial animation state to thumbnail position (BEFORE first render).
-      // This ensures the first frame shows the shared element at the correct starting
-      // position, then animateTo smoothly expands it to full screen.
-      if (this.animationProperties) {
-        this.animationProperties.setInitialState(this.cardItemInfo, 0);
-        this.svc.getLog().add('setInitialState called, cardInfo=' + JSON.stringify(this.cardItemInfo));
+      // 共享照片层的第一帧（在首次渲染之前设置，避免闪一下）：
+      // 起点 = 被点缩略图在画廊里的屏幕矩形，内容 = 那张缩略图。
+      const startRect: MorphRect = MorphGeometry.fromPx(this.cardItemInfo);
+      const startPm = this.svc.thumbnailPixelMapMap.get(handle);
+      if (startPm !== undefined && MorphGeometry.isValid(startRect)) {
+        this.morphPm = startPm;
+        this.morph.apply(startRect);
+        this.morph.visible = true;
+        this.photoAlpha = 0;
+        this.chromeAlpha = 0;
       } else {
-        this.svc.getLog().add('setInitialState SKIP: animationProperties is null');
+        // 没有缩略图 / 没有位置：退化成「直接出现」，不做假动画
+        this.morph.visible = false;
+        this.photoAlpha = 1;
+        this.chromeAlpha = 1;
       }
+      this.svc.getLog().add('push morph ' + this.morphRectText(startRect) + ' pm=' +
+        (startPm !== undefined));
 
       // Register custom transition animation callback
       CustomTransition.getInstance().registerNavParam(this.pageId,
         (isPush: boolean, isExit: boolean, transitionProxy: NavigationTransitionProxy) => {
-          this.animationProperties?.doAnimation(
-            this.cardItemInfo, isPush, isExit, transitionProxy, 0,
-            this.prePageDoFinishTransition, this.myNodeController);
+          if (isPush) {
+            this.playPush(transitionProxy);
+          } else {
+            this.playPop(transitionProxy);
+          }
         }, 500);
     })
     .onBackPressed(() => {
