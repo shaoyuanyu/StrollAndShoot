@@ -1,6 +1,7 @@
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
+import { GpsGeocoder } from '../services/GpsGeocoder';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { SettingsStore } from '../model/SettingsStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
@@ -32,6 +33,7 @@ struct Index {
       this.svc.initLogPath(ctx.filesDir);
       this.svc.initDownloadDir(ctx.filesDir);
       this.gpsRecorder.init(ctx.filesDir, this.svc.getLog(), ctx);
+      GpsGeocoder.getInstance().init(ctx.filesDir);
       ExifGeotagger.setLog(this.svc.getLog());
       this.gpsRecorder.autoStart();
     }

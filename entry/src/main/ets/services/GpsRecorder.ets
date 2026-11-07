@@ -1,11 +1,10 @@
 import geoLocationManager from '@ohos.geoLocationManager';
-import { fileIo } from '@kit.CoreFileKit';
-import { util } from '@kit.ArkTS';
 import { abilityAccessCtrl, common, Permissions, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { AppLog } from './AppLog';
 import { GpsTrack } from '../utils/GpsTrack';
 import { GpsMockTrack } from '../utils/GpsMockTrack';
+import { AtomicFile } from '../utils/AtomicFile';
 import type { GpsRecord, GpsDailyGroup } from '../model/PhotoEntry';
 
 const LOCATION_PERMS: Permissions[] = [
@@ -13,15 +12,19 @@ const LOCATION_PERMS: Permissions[] = [
   'ohos.permission.APPROXIMATELY_LOCATION'
 ];
 
-/** 记录总量上限，超出后丢弃最旧的 10%。 */
-const MAX_RECORDS = 20000;
 /**
- * 记录较多时降低整写频率。11 秒一条、2 万条上限的全量 JSON 很大，
- * 每来一个点都同步重写会长时间占用 UI 线程；2000 条以内仍逐点落盘，
- * 数据量上来后最多每 30 秒落一次，停止记录时强制 flush。
+ * 记录总量上限。精确档 11 秒一条，连续移动约 12 天；日常/省电档会更久。
+ * 超出后按“整天”丢弃最旧的一天，而不是一次砍掉 10% 的零散记录。
  */
-const DEFERRED_SAVE_THRESHOLD = 2000;
-const DEFERRED_SAVE_INTERVAL_MS = 30 * 1000;
+const MAX_RECORDS = 100000;
+/** 最长保留天数；超过后也按整天清理。 */
+const MAX_RETENTION_DAYS = 365;
+/**
+ * 内存里的数组最多每 5 分钟压缩重写一次；每个点本身已经追加到 JSONL，
+ * 所以即使进程被杀，也不会丢定位（最多留一些待压缩的追加行）。
+ * 压缩仍然是一次全量同步写，10 万条时不要把它设得太频繁。
+ */
+const COMPACT_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * 连续定位服务。状态直接暴露成 @Trace 字段，页面绑定后自动刷新，
@@ -43,9 +46,11 @@ export class GpsRecorder {
   @Trace lastError: string = '';
   /** 记录集变化计数。页面读它建立 V2 依赖（records 本身是普通数组）。 */
   @Trace recordsVersion: number = 0;
+  /** 因保留策略被清理的历史条数，设置页用来提示用户。 */
+  @Trace trimmedRecords: number = 0;
 
   private records: GpsRecord[] = [];
-  /** 调试包模拟轨迹：只在内存里覆盖当天的显示，不写 gps_records.json。 */
+  /** 调试包模拟轨迹：只在内存里覆盖当天的显示，不写 gps_records.jsonl。 */
   private mockDay: string = '';
   private mockRecords: GpsRecord[] = [];
   /** 按天聚合的缓存。recordsVersion 不变时直接复用，页面每帧取分组不再遍历全部记录。 */
@@ -62,10 +67,9 @@ export class GpsRecorder {
   private permissionsChecked: boolean = false;
   /** 正在启动中的启动流程，避免连点时重复订阅回调。 */
   private startPromise: Promise<boolean> | null = null;
-  /** 大记录集延迟落盘：定时器、脏标记、上次落盘时间。 */
+  /** 大记录集延迟压缩：定时器与脏标记。 */
   private saveTimerId: number = -1;
   private savePending: boolean = false;
-  private lastSaveAt: number = 0;
 
   static getInstance(): GpsRecorder {
     if (!GpsRecorder.instance) {
@@ -134,9 +138,10 @@ export class GpsRecorder {
     if (on) return this.start();
     // 启动过程中用户把开关拨回去：先等启动流程落定再停。否则 stop 会因为
     // running 还是 false 直接返回，随后 start 又把 running 置回 true，开关弹回去。
-    if (this.startPromise !== null) {
+    const pending = this.startPromise;
+    if (pending !== null) {
       try {
-        await this.startPromise;
+        await Promise.resolve(pending);
       } catch (_e) {
         // 启动失败也要继续走停止流程，把落盘状态清成 false
       }
@@ -275,20 +280,56 @@ export class GpsRecorder {
       this.records.sort((a: GpsRecord, b: GpsRecord) => a.timestamp - b.timestamp);
     }
     this.lastFix = merged ? this.records[this.records.length - 1] : record;
-    this.pruneIfNeeded();
+    const trimmed = this.pruneIfNeeded();
     this.recordCount = this.records.length;
     this.recordsVersion++;
+    // 每个点先追加到 JSONL：即使 30 秒压缩窗口内进程被杀，记录也已经落盘。
+    this.appendRecordToDisk(record);
     this.scheduleSaveRecords();
+    if (trimmed) {
+      this.saveRecords();
+    }
     const tag = merged ? '更新末点' : '新增';
     this.log.add(`GPS定位${tag}: ${record.latitude.toFixed(4)},${record.longitude.toFixed(4)} (共${this.records.length}条)`);
   }
 
-  private pruneIfNeeded(): void {
-    if (this.records.length <= MAX_RECORDS) return;
-    const drop = Math.floor(MAX_RECORDS / 10);
-    this.records.splice(0, drop);
+  /** 超出条数/天数上限时按整天丢弃；返回是否真的清理了。 */
+  private pruneIfNeeded(): boolean {
+    if (this.records.length === 0) return false;
+    const cutoffDayStart = GpsTrack.startOfDay(Date.now() - MAX_RETENTION_DAYS * 86400000);
+    let drop = 0;
+    while (drop < this.records.length) {
+      const dayStart = GpsTrack.startOfDay(this.records[drop].timestamp);
+      const overCap = this.records.length - drop > MAX_RECORDS;
+      const tooOld = dayStart < cutoffDayStart;
+      if (!overCap && !tooOld) break;
+      // 整天一起丢，避免把某一天切成半截；用当天 0 点做边界，不在循环里反复 new Date。
+      const nextDay = dayStart + 86400000;
+      while (drop < this.records.length &&
+             this.records[drop].timestamp < nextDay) {
+        drop++;
+      }
+    }
+    // 一天本身超过上限时，宁可保留当天也不要清空。
+    if (drop >= this.records.length) {
+      drop = 0;
+      const lastDayStart = GpsTrack.startOfDay(
+        this.records[this.records.length - 1].timestamp);
+      for (let i = this.records.length - 1; i >= 0; i--) {
+        if (this.records[i].timestamp < lastDayStart) {
+          drop = i + 1;
+          break;
+        }
+      }
+    }
+    if (drop <= 0) return false;
+    const removed = drop;
+    this.records = this.records.slice(drop);
     this.recordCount = this.records.length;
-    this.log.add(`GPS记录超过 ${MAX_RECORDS} 条，已清理最旧的 ${drop} 条`);
+    this.trimmedRecords += removed;
+    this.log.add(`GPS记录保留策略: 已清理 ${removed} 条旧记录` +
+      `（上限 ${MAX_RECORDS} 条 / ${MAX_RETENTION_DAYS} 天）`);
+    return true;
   }
 
   async stop(): Promise<void> {
@@ -308,14 +349,19 @@ export class GpsRecorder {
     this.running = false;
     this.lastFix = null;
     this.locationCallback = undefined;
-    // 延迟落盘的记录在停止时必须立即补齐，不能等定时器。
-    this.flushRecords();
+    // 停止时强制压缩一次，把待压缩的追加行收进快照。
+    this.saveRecords();
     // 即使本来就没在跑也要落盘：启动失败后用户把开关拨回去时，
     // 不写 wasRunning=false 的话下次启动还会自动重试。
     this.saveMode();
     if (wasRunning) {
       this.log.add(`GPS记录已停止 (共${this.records.length}条)`);
     }
+  }
+
+  /** 应用进入后台 / 退出前调用；只有存在待压缩记录时才重写快照。 */
+  flush(): void {
+    this.flushRecords();
   }
 
   /**
@@ -633,16 +679,12 @@ export class GpsRecorder {
   }
 
   private loadMode(): void {
+    const text = AtomicFile.readText(this.settingsPath());
+    if (text === null || text === '') return;
     try {
-      const f = fileIo.openSync(this.settingsPath(), fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(this.settingsPath());
-      const buf = new ArrayBuffer(stat.size);
-      fileIo.readSync(f.fd, buf);
-      fileIo.closeSync(f);
-      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
       const obj = JSON.parse(text) as Record<string, Object>;
       if (typeof obj.gpsMode === 'number') {
-        // Also migrate from old boolean precisionMode
+        // 新格式（带 version）与旧格式都兼容
         const mode = obj.gpsMode as number;
         this.gpsMode = mode >= 0 && mode <= 3 ? mode : 2;
       } else if (typeof obj.precisionMode === 'boolean') {
@@ -650,25 +692,6 @@ export class GpsRecorder {
       }
     } catch (_e) {
       // keep default
-    }
-  }
-
-  /** 小文件原子写：先写 .tmp，再 rename 覆盖，避免崩溃时留下半截 JSON。 */
-  private writeTextAtomic(path: string, text: string): void {
-    const tmp = path + '.tmp';
-    const f = fileIo.openSync(tmp,
-      fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-    try {
-      fileIo.writeSync(f.fd, text);
-    } finally {
-      fileIo.closeSync(f);
-    }
-    try {
-      fileIo.renameSync(tmp, path);
-    } catch (_e) {
-      // 少数文件系统不支持覆盖 rename：退回强制覆盖 copy，至少保证落盘。
-      fileIo.copyFileSync(tmp, path, 0);
-      fileIo.unlinkSync(tmp);
     }
   }
 
@@ -680,17 +703,12 @@ export class GpsRecorder {
   }
 
   private scheduleSaveRecords(): void {
-    if (this.records.length <= DEFERRED_SAVE_THRESHOLD) {
-      this.saveRecords();
-      return;
-    }
     this.savePending = true;
     if (this.saveTimerId >= 0) return;
-    const delay = Math.max(0, DEFERRED_SAVE_INTERVAL_MS - (Date.now() - this.lastSaveAt));
     this.saveTimerId = setTimeout(() => {
       this.saveTimerId = -1;
       this.flushRecords();
-    }, delay);
+    }, COMPACT_INTERVAL_MS);
   }
 
   private flushRecords(): void {
@@ -702,32 +720,40 @@ export class GpsRecorder {
   private saveMode(): void {
     if (!this.storageDir) return;
     try {
-      this.writeTextAtomic(this.settingsPath(), JSON.stringify({
+      AtomicFile.writeText(this.settingsPath(), JSON.stringify({
+        version: 1,
         gpsMode: this.gpsMode,
         wasRunning: this.running
       }));
-    } catch (_e) { /* ignore */ }
+    } catch (_e) {
+      // best effort
+    }
   }
 
   /** Resume GPS recording if it was active in the previous session. */
   async autoStart(): Promise<void> {
     let wasRunning = false;
-    try {
-      const f = fileIo.openSync(this.settingsPath(), fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(this.settingsPath());
-      const buf = new ArrayBuffer(stat.size);
-      fileIo.readSync(f.fd, buf);
-      fileIo.closeSync(f);
-      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-      const obj = JSON.parse(text) as Record<string, Object>;
-      wasRunning = obj.wasRunning === true;
-    } catch (_e) { /* ignore */ }
+    const text = AtomicFile.readText(this.settingsPath());
+    if (text !== null && text !== '') {
+      try {
+        const obj = JSON.parse(text) as Record<string, Object>;
+        wasRunning = obj.wasRunning === true;
+      } catch (_e) {
+        // ignore
+      }
+    }
     if (wasRunning) {
       await this.start();
     }
   }
 
+  /** 新格式：每行一条记录的 JSONL，追加即可保证单点落盘。 */
   private recordsPath(): string {
+    return this.storageDir + '/gps_records.jsonl';
+  }
+
+  /** 旧版单文件 JSON 数组，仅在首次启动时迁移。 */
+  private legacyRecordsPath(): string {
     return this.storageDir + '/gps_records.json';
   }
 
@@ -735,26 +761,44 @@ export class GpsRecorder {
     // 模拟轨迹只在本次进程内有效，启动时不要带出上次的假数据
     this.mockRecords = [];
     this.mockDay = '';
-    try {
-      const f = fileIo.openSync(this.recordsPath(), fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(this.recordsPath());
-      const buf = new ArrayBuffer(stat.size);
-      fileIo.readSync(f.fd, buf);
-      fileIo.closeSync(f);
-      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-      const parsed = JSON.parse(text) as Object;
-      this.records = Array.isArray(parsed) ? parsed as GpsRecord[] : [];
-    } catch (_e) {
-      this.records = [];
+    this.records = [];
+    let needsSave = false;
+
+    const text = AtomicFile.readText(this.recordsPath());
+    if (text !== null) {
+      const lines = text.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed === '') continue;
+        try {
+          this.records.push(JSON.parse(trimmed) as GpsRecord);
+        } catch (_e) {
+          // 崩溃可能留下半行，忽略并触发一次重写
+          needsSave = true;
+        }
+      }
+    } else {
+      // 迁移旧版 gps_records.json
+      const legacy = AtomicFile.readText(this.legacyRecordsPath());
+      if (legacy !== null && legacy !== '') {
+        try {
+          const parsed = JSON.parse(legacy) as Object;
+          this.records = Array.isArray(parsed) ? parsed as GpsRecord[] : [];
+          needsSave = true;
+        } catch (_e) {
+          this.records = [];
+        }
+      }
     }
+
     // 旧版本是「每隔几十秒堆一条」，同一位置会重复很多次，且时间顺序未必可靠。
     // 读入时先排序（findClosest 的二分查找依赖升序），再按新规则折叠历史重复点。
     this.records.sort((a: GpsRecord, b: GpsRecord) => a.timestamp - b.timestamp);
     const before = this.records.length;
-    let needsSave = false;
+    let needsRunStart = false;
     for (let i = 0; i < this.records.length; i++) {
       if (this.records[i].runStart === undefined) {
-        needsSave = true;
+        needsRunStart = true;
         break;
       }
     }
@@ -763,26 +807,50 @@ export class GpsRecorder {
       this.records = compacted;
       needsSave = true;
       this.log.add(`GPS历史记录已整理: ${before} 条 -> ${compacted.length} 条`);
-    } else if (needsSave) {
+    } else if (needsRunStart) {
       // 只是补齐 runStart，不改变条数
       this.records = compacted;
+      needsSave = true;
+    }
+    if (this.pruneIfNeeded()) {
+      needsSave = true;
     }
     if (needsSave) {
-      this.saveRecords();
+      // 只有新 JSONL 写成功才删除旧文件，避免磁盘异常时两头都没了。
+      if (this.saveRecords()) {
+        AtomicFile.delete(this.legacyRecordsPath());
+      }
     }
     this.recordCount = this.records.length;
     this.recordsVersion++;
   }
 
-  private saveRecords(): void {
-    if (!this.storageDir) return;
+  /** 把内存中的记录压缩成 JSONL 快照（不是普通 JSON 数组）。返回是否写成功。 */
+  private saveRecords(): boolean {
+    if (!this.storageDir) return false;
     this.cancelSaveTimer();
     try {
-      this.writeTextAtomic(this.recordsPath(), JSON.stringify(this.records));
+      const lines: string[] = [];
+      for (const record of this.records) {
+        lines.push(JSON.stringify(record));
+      }
+      const text = lines.length > 0 ? lines.join('\n') + '\n' : '';
+      AtomicFile.writeText(this.recordsPath(), text);
       this.savePending = false;
-      this.lastSaveAt = Date.now();
+      return true;
     } catch (err) {
       this.log.add(`GPS记录保存失败: ${JSON.stringify(err)}`);
+      return false;
+    }
+  }
+
+  /** 每个定位点立即追加一行，避免等待 30 秒压缩窗口。 */
+  private appendRecordToDisk(record: GpsRecord): void {
+    if (!this.storageDir) return;
+    try {
+      AtomicFile.appendText(this.recordsPath(), JSON.stringify(record) + '\n');
+    } catch (err) {
+      this.log.add(`GPS记录追加失败: ${JSON.stringify(err)}`);
     }
   }
 }

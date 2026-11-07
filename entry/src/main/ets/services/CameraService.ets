@@ -1,12 +1,14 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
-import { util, taskpool } from '@kit.ArkTS';
+import { taskpool } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
 import { PtpSession, setPtpLog, type DeviceInfo, type PtpTransport } from '../pages/PtpHost';
+import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
 import { ExifGeotagger } from './ExifGeotagger';
@@ -59,6 +61,21 @@ class DecodedPhotoResult {
     this.displayW = displayW;
     this.displayH = displayH;
   }
+}
+
+/** 下载注册表快照的 schema 信封。 */
+interface DownloadRegistryFile {
+  version: number;
+  records: Record<string, DownloadRecord>;
+}
+
+/** 注册表最多保留多少条，避免多年使用后无限增长。 */
+const MAX_DOWNLOAD_RECORDS = 50000;
+
+/** 每成功保存一张照片就追加一行，崩溃后可从 journal 恢复。 */
+interface DownloadJournalEntry {
+  key: string;
+  record: DownloadRecord;
 }
 
 @ObservedV2
@@ -393,8 +410,10 @@ export class CameraService {
   // Download registry — persisted across sessions
   private downloadRegistry: Map<string, DownloadRecord> = new Map();
   private downloadDir: string = '';
+  private downloadTempDir: string = '';
   private downloadAborted: boolean = false;
   private registryLoaded: boolean = false;
+  private registryLoading: Promise<void> | null = null;
 
   // Change tracking
   @Trace registryVersion: number = 0;
@@ -423,12 +442,49 @@ export class CameraService {
   initDownloadDir(dir: string): void {
     this.filesDir = dir;
     this.downloadDir = dir;
+    this.downloadTempDir = dir + '/download_temp';
+    // 上次中断留下的沙箱临时图片不再需要；先清空再建目录。
+    AtomicFile.deleteDirRecursive(this.downloadTempDir);
+    try {
+      fileIo.mkdirSync(this.downloadTempDir, true);
+    } catch (_e) {
+      // best effort
+    }
     this.cachePrefs.init(dir);
     this.loadRegistry();
   }
 
+  /** 应用进入后台时强制把待写缓存落盘。 */
+  async flushPersistence(): Promise<void> {
+    try {
+      if (this.cachingEnabled) {
+        await this.thumbCache.flush();
+        this.thumbCache.close();
+      }
+    } catch (_e) {
+      // best effort
+    }
+  }
+
   makeDownloadKey(filename: string, size: number): string {
+    return `${this.cameraIdentity}::${filename}::${size}`;
+  }
+
+  /** 旧版本的全局键：没有相机身份，只在没有新记录时兼容读取。 */
+  private makeLegacyDownloadKey(filename: string, size: number): string {
     return `${filename}::${size}`;
+  }
+
+  /** 先找当前相机的记录，再回退到旧版无相机字段的记录。 */
+  private findDownloadRecord(filename: string, size: number): DownloadRecord | null {
+    const current = this.downloadRegistry.get(this.makeDownloadKey(filename, size));
+    if (current !== undefined) return current;
+    const legacy = this.downloadRegistry.get(this.makeLegacyDownloadKey(filename, size));
+    if (legacy !== undefined &&
+        (legacy.cameraId === undefined || legacy.cameraId === '')) {
+      return legacy;
+    }
+    return null;
   }
 
   @Trace downloadedCount: number = 0;
@@ -436,9 +492,10 @@ export class CameraService {
   getDownloadedKeys(): string[] {
     const keys: string[] = [];
     for (const p of this.photos) {
-      const k = this.makeDownloadKey(p.filename, p.size);
-      if (this.downloadRegistry.has(k)) {
-        keys.push(k);
+      const record = this.findDownloadRecord(p.filename, p.size);
+      if (record !== null) {
+        // 返回当前相机键，GalleryPage 用 makeDownloadKey() 计算出的键才能命中。
+        keys.push(this.makeDownloadKey(p.filename, p.size));
       }
     }
     this.downloadedCount = keys.length;
@@ -501,8 +558,8 @@ export class CameraService {
       const photo = batch[i];
       const key = this.makeDownloadKey(photo.filename, photo.size);
 
-      if (this.downloadRegistry.has(key)) {
-        const existing = this.downloadRegistry.get(key)!;
+      const existing = this.findDownloadRecord(photo.filename, photo.size);
+      if (existing !== null) {
         results.push({ handle: photo.handle, key, success: true, localPath: existing.localPath });
         onProgress({
           phase: 'downloading', currentIndex: i, totalCount: batch.length,
@@ -552,10 +609,10 @@ export class CameraService {
       });
 
       const localFilename = this.sanitizeFilename(photo.filename);
-      const localPath = this.downloadDir + '/' + localFilename;
+      const localPath = this.downloadTempDir + '/' + localFilename;
       try {
         const f = await fileIo.open(localPath,
-          fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY);
+          fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
         await fileIo.write(f.fd, data.buffer as ArrayBuffer);
         await fileIo.close(f);
       } catch (err) {
@@ -599,35 +656,32 @@ export class CameraService {
         downloadedCount: sandboxSuccesses.length, totalBytes, downloadedBytes, errors
       });
 
-      let galleryUris: Map<string, string> = new Map();
-      try {
-        galleryUris = await this.moveToGallery(sandboxSuccesses, context);
-      } catch (err) {
-        this.log.add(`保存到相册失败: ${JSON.stringify(err)}`);
-      }
-
-      // Persist registry for photos successfully saved to Gallery
-      for (const r of sandboxSuccesses) {
-        if (this.downloadRegistry.has(r.key)) {
-          continue;
-        }
-        const galleryUri = galleryUris.get(r.key);
-        if (!galleryUri) {
-          this.log.add(`注册跳过(无Gallery URI): ${r.key}`);
-          continue;
-        }
-        const photo = batch.find((p: PhotoEntry) => p.handle === r.handle);
-        if (!photo) continue;
+      const onSaved = (result: DownloadResult, galleryUri: string): void => {
+        if (this.downloadRegistry.has(result.key)) return;
+        const photo = batch.find((p: PhotoEntry) => p.handle === result.handle);
+        if (!photo) return;
         const record: DownloadRecord = {
-          key: r.key,
+          key: result.key,
+          cameraId: this.cameraIdentity,
           filename: photo.filename,
           size: photo.size,
           localPath: galleryUri,
           downloadDate: new Date().toISOString()
         };
-        this.downloadRegistry.set(r.key, record);
+        // 每成功一张就写 journal；整批结束再压缩成快照。
+        this.addDownloadRecord(record);
+      };
+
+      let galleryUris: Map<string, string> = new Map();
+      try {
+        galleryUris = await this.moveToGallery(sandboxSuccesses, context, onSaved);
+      } catch (err) {
+        this.log.add(`保存到相册失败: ${JSON.stringify(err)}`);
       }
-      await this.saveRegistry();
+
+      if (galleryUris.size > 0) {
+        await this.compactRegistry();
+      }
     }
 
     onProgress({
@@ -652,7 +706,8 @@ export class CameraService {
    */
   private async moveToGallery(
     sandboxResults: DownloadResult[],
-    context: common.UIAbilityContext
+    context: common.UIAbilityContext,
+    onSaved?: (result: DownloadResult, galleryUri: string) => void
   ): Promise<Map<string, string>> {
     const galleryUris = new Map<string, string>();
     const srcFileUris: string[] = [];
@@ -701,6 +756,9 @@ export class CameraService {
         fileIo.closeSync(desFile);
         if (i < sandboxResults.length) {
           galleryUris.set(sandboxResults[i].key, desFileUris[i]);
+          if (onSaved !== undefined) {
+            onSaved(sandboxResults[i], desFileUris[i]);
+          }
         }
         copied++;
       } catch (err) {
@@ -733,34 +791,108 @@ export class CameraService {
     return name.replace(/[/\\:*?"<>|]/g, '_');
   }
 
+  private registryPath(): string {
+    return this.downloadDir + '/download_registry.json';
+  }
+
+  private registryJournalPath(): string {
+    return this.downloadDir + '/download_registry.jsonl';
+  }
+
   private async loadRegistry(): Promise<void> {
     if (this.registryLoaded) return;
-    const path = this.downloadDir + '/download_registry.json';
-    try {
-      const f = await fileIo.open(path, fileIo.OpenMode.READ_ONLY);
-      const stat = await fileIo.stat(path);
-      const buf = new ArrayBuffer(stat.size);
-      await fileIo.read(f.fd, buf);
-      await fileIo.close(f);
-      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-      const obj = JSON.parse(text) as Record<string, DownloadRecord>;
-      for (const k of Object.keys(obj)) {
-        this.downloadRegistry.set(k, obj[k]);
-      }
-      this.log.add(`加载下载记录: ${this.downloadRegistry.size} 条`);
-    this.registryVersion++;
-    } catch (_e) {
-      // File doesn't exist yet — registry stays empty
+    const loading = this.registryLoading;
+    if (loading !== null) {
+      await Promise.resolve(loading);
+      return;
     }
-    this.registryLoaded = true;
+    const task = this.doLoadRegistry();
+    this.registryLoading = task;
+    try {
+      await task;
+    } finally {
+      this.registryLoading = null;
+    }
+  }
+
+  private async doLoadRegistry(): Promise<void> {
+    const text = AtomicFile.readText(this.registryPath());
+    if (text !== null && text !== '') {
+      try {
+        const parsed = JSON.parse(text) as Record<string, Object>;
+        const version = parsed['version'];
+        const raw = version !== undefined ? parsed['records'] : parsed;
+        if (raw !== undefined && raw !== null) {
+          const map = raw as Record<string, DownloadRecord>;
+          for (const k of Object.keys(map)) {
+            this.downloadRegistry.set(k, map[k]);
+          }
+        }
+        this.log.add(`加载下载记录: ${this.downloadRegistry.size} 条`);
+      } catch (err) {
+        this.log.add(`加载下载记录失败: ${JSON.stringify(err)}`);
+      }
+    }
+    this.registryVersion++;
+
+    // 逐张追加的 journal 比整份快照更耐崩溃：先合并，再压缩回快照。
+    const journalText = AtomicFile.readText(this.registryJournalPath());
+    if (journalText !== null && journalText !== '') {
+      let applied = 0;
+      const lines = journalText.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed === '') continue;
+        try {
+          const entry = JSON.parse(trimmed) as DownloadJournalEntry;
+          if (entry.key !== undefined && entry.key !== '' &&
+              entry.record !== undefined && entry.record !== null) {
+            this.downloadRegistry.set(entry.key, entry.record);
+            applied++;
+          }
+        } catch (_e) {
+          // 最后一行可能只写了一半，忽略
+        }
+      }
+      if (applied > 0) {
+        this.log.add(`下载记录 journal 恢复: ${applied} 条`);
+      }
+      await this.compactRegistry();
+    }
+
+    // 超过上限时按下载时间淘汰最旧记录。
+    if (this.pruneDownloadRegistry()) {
+      await this.compactRegistry();
+    }
 
     // Prune entries whose Gallery files no longer exist (e.g. user deleted from Album)
     await this.validateRegistry();
+    this.registryLoaded = true;
+  }
+
+  /** 注册表超过 MAX_DOWNLOAD_RECORDS 时删除最旧记录；返回是否删除过。 */
+  private pruneDownloadRegistry(): boolean {
+    if (this.downloadRegistry.size <= MAX_DOWNLOAD_RECORDS) return false;
+    const keys: string[] = [];
+    this.downloadRegistry.forEach((_record: DownloadRecord, key: string) => {
+      keys.push(key);
+    });
+    keys.sort((a: string, b: string): number => {
+      const da = this.downloadRegistry.get(a)?.downloadDate ?? '';
+      const db = this.downloadRegistry.get(b)?.downloadDate ?? '';
+      return da.localeCompare(db);
+    });
+    const drop = keys.length - MAX_DOWNLOAD_RECORDS;
+    for (let i = 0; i < drop; i++) {
+      this.downloadRegistry.delete(keys[i]);
+    }
+    this.log.add(`下载注册表超过 ${MAX_DOWNLOAD_RECORDS} 条，已清理最旧 ${drop} 条`);
+    return true;
   }
 
   /**
    * Validates the persisted download registry against actual filesystem state.
-   * Removes entries for files that have been deleted from Gallery.
+   * 只有明确“文件不存在”才删除；权限/IPC/临时错误一律保留，避免一次启动异常清空历史。
    */
   private async validateRegistry(): Promise<void> {
     const keys: string[] = [];
@@ -768,15 +900,22 @@ export class CameraService {
       keys.push(key);
     });
     const stale: string[] = [];
+    let skipped = 0;
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i];
       const record = this.downloadRegistry.get(key);
-      if (!record) continue;
+      if (!record || !record.localPath) continue;
       try {
         const f = await fileIo.open(record.localPath, fileIo.OpenMode.READ_ONLY);
         await fileIo.close(f);
-      } catch (_e) {
-        stale.push(key);
+      } catch (err) {
+        const code = (err as BusinessError).code;
+        // 13900002 = No such file or directory
+        if (code === 13900002) {
+          stale.push(key);
+        } else {
+          skipped++;
+        }
       }
     }
     if (stale.length > 0) {
@@ -784,29 +923,59 @@ export class CameraService {
         this.downloadRegistry.delete(stale[i]);
       }
       this.log.add(`下载记录清理: 移除 ${stale.length} 条失效记录`);
-      await this.saveRegistry();
+      await this.compactRegistry();
+    }
+    if (skipped > 0) {
+      this.log.add(`下载记录校验跳过 ${skipped} 条（非“文件不存在”错误）`);
     }
   }
 
-  private async saveRegistry(): Promise<void> {
-    const obj: Record<string, DownloadRecord> = {};
-    this.downloadRegistry.forEach((v: DownloadRecord, k: string) => { obj[k] = v; });
-    const text = JSON.stringify(obj);
-    const path = this.downloadDir + '/download_registry.json';
+  private async saveRegistry(): Promise<boolean> {
+    const records: Record<string, DownloadRecord> = {};
+    this.downloadRegistry.forEach((v: DownloadRecord, k: string) => {
+      records[k] = v;
+    });
+    const file: DownloadRegistryFile = {
+      version: 1,
+      records: records
+    };
     try {
-      const f = await fileIo.open(path,
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      await fileIo.write(f.fd, text);
-      await fileIo.close(f);
-    this.registryVersion++;
+      AtomicFile.writeText(this.registryPath(), JSON.stringify(file));
+      this.registryVersion++;
+      return true;
     } catch (err) {
       this.log.add(`保存下载记录失败: ${JSON.stringify(err)}`);
+      return false;
     }
+  }
+
+  /** 快照写成功后删除 journal；写失败则保留，下次启动继续恢复。 */
+  private async compactRegistry(): Promise<void> {
+    const ok = await this.saveRegistry();
+    if (ok) {
+      AtomicFile.delete(this.registryJournalPath());
+    }
+  }
+
+  /** 单条记录立即写 journal，避免批次被杀时整批下载历史丢失。 */
+  private appendRegistryRecord(record: DownloadRecord): void {
+    this.downloadRegistry.set(record.key, record);
+    this.registryVersion++;
+    try {
+      const entry: DownloadJournalEntry = { key: record.key, record: record };
+      AtomicFile.appendText(this.registryJournalPath(), JSON.stringify(entry) + '\n');
+    } catch (err) {
+      this.log.add(`下载记录 journal 写入失败: ${JSON.stringify(err)}`);
+    }
+  }
+
+  private addDownloadRecord(record: DownloadRecord): void {
+    if (this.downloadRegistry.has(record.key)) return;
+    this.appendRegistryRecord(record);
   }
 
   async scanForCamera(quickMode: boolean = true): Promise<void> {
     this.scanning = true;
-    this.log.clear();
     this.log.add('=== 开始扫描 ===');
 
     // Debug builds only: swap in the virtual camera before searching.
@@ -1215,6 +1384,8 @@ export class CameraService {
       // 置位的标志会让这些行一次都不递增，扫描结束前已挂载的单元格就永远停在占位符。
       if (rowPromises.length > 0) {
         this.thumbnailVersion++;
+        // 崩溃时最多丢最近 2 秒的索引，而不是整轮扫描的清单。
+        this.thumbCache.maybePersist();
       }
 
       // Update lastDecodedHandle for PhotoViewer on-screen refresh
@@ -1323,17 +1494,9 @@ export class CameraService {
   private loadMetadataCache(): PhotoEntry[] | null {
     if (!this.cameraIdentity) return null;
     const path = this.thumbCache.getCacheDir() + '/metadata_cache.json';
+    const text = AtomicFile.readText(path);
+    if (text === null || text === '') return null;
     try {
-      const f = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(path);
-      if (stat.size <= 0) {
-        fileIo.closeSync(f);
-        return null;
-      }
-      const buf = new ArrayBuffer(stat.size);
-      fileIo.readSync(f.fd, buf);
-      fileIo.closeSync(f);
-      const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
       const raw: Record<string, Object> = JSON.parse(text);
       const rawEntries = raw['entries'] as PhotoEntry[] | undefined;
       if (rawEntries && rawEntries.length > 0) {
@@ -1341,7 +1504,7 @@ export class CameraService {
         return rawEntries;
       }
     } catch (_e) {
-      // File doesn't exist yet
+      this.log.add('元数据缓存损坏，忽略');
     }
     return null;
   }
@@ -1349,16 +1512,13 @@ export class CameraService {
   /** Persist PhotoEntry[] to metadata_cache.json */
   private saveMetadataCache(entries: PhotoEntry[]): void {
     if (!this.cameraIdentity) return;
-    const path = this.thumbCache.getCacheDir() + '/metadata_cache.json';
     try {
       fileIo.mkdirSync(this.thumbCache.getCacheDir(), true);
     } catch (_e) { /* best effort */ }
     try {
-      const text = JSON.stringify({ entries: entries });
-      const f = fileIo.openSync(path,
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(f.fd, text);
-      fileIo.closeSync(f);
+      const path = this.thumbCache.getCacheDir() + '/metadata_cache.json';
+      const text = JSON.stringify({ version: 1, entries: entries });
+      AtomicFile.writeText(path, text);
       this.log.add(`元数据缓存已保存: ${entries.length} 条`);
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'saveMetadataCache failed: %{public}s', JSON.stringify(err));
@@ -1761,6 +1921,9 @@ export class CameraService {
     }
     this.cachingEnabled = false;
     this.cachingDialogRequired = false;
+    this.pendingCamIdForDialog = '';
+    this.pendingCamNameForDialog = '';
+    this.pendingCachingPrompt = false;
     this.photoCount = 0;
     this.photos = [];
     this.thumbnailPixelMapMap.clear();
@@ -1843,6 +2006,8 @@ export class CameraService {
       this.log.add(`新相机 ${this.cameraName}，先缓存后询问`);
       return;
     }
+    // 已登记过的相机每次连接都刷新 lastSeen / 名称，缓存管理页的“上次连接”才准确。
+    this.cachePrefs.touch(this.cameraIdentity, this.cameraName);
     if (pref.cachingEnabled) {
       this.cachingEnabled = true;
       this.cachingDialogRequired = false;
@@ -1857,13 +2022,25 @@ export class CameraService {
 
   /**
    * Called from MainScreen after the user responds to the caching dialog.
+   * 拒绝时必须把“先缓存后询问”已经写下的缩略图与元数据快照删掉。
    */
-  setCachingPreference(cameraId: string, enabled: boolean): void {
-    this.cachePrefs.set(cameraId, this.pendingCamNameForDialog, enabled);
+  async setCachingPreference(cameraId: string, enabled: boolean): Promise<void> {
+    const camName = this.pendingCamNameForDialog !== ''
+      ? this.pendingCamNameForDialog : this.cameraName;
+    this.cachePrefs.set(cameraId, camName, enabled);
     this.cachingDialogRequired = false;
     this.cachingEnabled = enabled;
     this.pendingCachingPrompt = false;
     this.log.add(enabled ? `用户已启用缓存: ${this.cameraName}` : `用户拒绝缓存: ${this.cameraName}`);
+    if (!enabled) {
+      if (cameraId === this.cameraIdentity) {
+        this.thumbCache.reset();
+      }
+      await ThumbnailCache.deleteCameraCache(this.filesDir, cameraId);
+      this.log.add(`已删除相机缓存: ${cameraId}`);
+    }
+    this.pendingCamIdForDialog = '';
+    this.pendingCamNameForDialog = '';
     // 扫描在弹窗之前就已完成，这里只落库设置，不重复扫描。
   }
 

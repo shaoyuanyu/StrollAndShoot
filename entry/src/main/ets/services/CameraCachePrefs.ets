@@ -5,12 +5,12 @@
  * Records whether the user has enabled/disabled thumbnail caching
  * for each camera they've connected, and when they were first asked.
  */
-import { fileIo } from '@kit.CoreFileKit';
-import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { AtomicFile } from '../utils/AtomicFile';
 
 const DOMAIN = 0x0000;
 const TAG = 'CameraCachePrefs';
+const SCHEMA_VERSION = 1;
 
 export interface CameraCachePref {
   cameraId: string;         // unique camera identity hash
@@ -18,6 +18,12 @@ export interface CameraCachePref {
   cachingEnabled: boolean;  // user has opted in?
   firstAsked: string;       // ISO timestamp of first prompt
   lastSeen: string;         // ISO timestamp of last connection
+}
+
+/** 带 schema 版本的文件信封，便于以后迁移。 */
+interface CameraCachePrefsFile {
+  version: number;
+  prefs: Record<string, CameraCachePref>;
 }
 
 export class CameraCachePrefs {
@@ -44,39 +50,47 @@ export class CameraCachePrefs {
     this.load();
   }
 
-  /** Load prefs from disk. */
+  /** Load prefs from disk. Supports the legacy plain-map format. */
   load(): void {
     this.prefs.clear();
+    if (!this.filePath) return;
+    const text = AtomicFile.readText(this.filePath);
+    if (text === null || text === '') {
+      hilog.info(DOMAIN, TAG, 'no cached camera prefs yet');
+      return;
+    }
     try {
-      const f = fileIo.openSync(this.filePath, fileIo.OpenMode.READ_ONLY);
-      const stat = fileIo.statSync(this.filePath);
-      if (stat.size > 0) {
-        const buf = new ArrayBuffer(stat.size);
-        fileIo.readSync(f.fd, buf);
-        const text = new util.TextDecoder('utf-8').decodeToString(new Uint8Array(buf));
-        const obj = JSON.parse(text) as Record<string, CameraCachePref>;
-        for (const k of Object.keys(obj)) {
-          this.prefs.set(k, obj[k]);
+      const obj = JSON.parse(text) as Record<string, Object>;
+      const version = obj['version'];
+      const raw = version !== undefined ? obj['prefs'] : obj;
+      if (raw !== undefined && raw !== null) {
+        const map = raw as Record<string, CameraCachePref>;
+        for (const k of Object.keys(map)) {
+          const p = map[k];
+          if (p && typeof p.cameraId === 'string' && p.cameraId !== '') {
+            this.prefs.set(k, p);
+          }
         }
       }
-      fileIo.closeSync(f);
       hilog.info(DOMAIN, TAG, 'Loaded %{public}d camera cache prefs', this.prefs.size);
-    } catch (_e) {
-      // File doesn't exist yet
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'load prefs failed: %{public}s', JSON.stringify(err));
     }
   }
 
-  /** Persist prefs to disk. */
+  /** Persist prefs to disk with a schema envelope. */
   save(): void {
     if (!this.filePath) return;
     try {
       const obj: Record<string, CameraCachePref> = {};
-      this.prefs.forEach((v, k) => { obj[k] = v; });
-      const text = JSON.stringify(obj, null, 2);
-      const f = fileIo.openSync(this.filePath,
-        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-      fileIo.writeSync(f.fd, text);
-      fileIo.closeSync(f);
+      this.prefs.forEach((v, k) => {
+        obj[k] = v;
+      });
+      const envelope: CameraCachePrefsFile = {
+        version: SCHEMA_VERSION,
+        prefs: obj
+      };
+      AtomicFile.writeText(this.filePath, JSON.stringify(envelope, null, 2));
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'save prefs failed: %{public}s', JSON.stringify(err));
     }
@@ -110,9 +124,23 @@ export class CameraCachePrefs {
         friendlyName,
         cachingEnabled,
         firstAsked: now,
-        lastSeen: now,
+        lastSeen: now
       });
     }
+    this.save();
+  }
+
+  /**
+   * 每次连接相机时刷新 lastSeen / friendlyName。
+   * 不改变 cachingEnabled，也不会为“尚未回答弹窗”的新相机凭空建条目。
+   */
+  touch(cameraId: string, friendlyName: string): void {
+    const existing = this.prefs.get(cameraId);
+    if (!existing) return;
+    if (friendlyName !== '') {
+      existing.friendlyName = friendlyName;
+    }
+    existing.lastSeen = new Date().toISOString();
     this.save();
   }
 

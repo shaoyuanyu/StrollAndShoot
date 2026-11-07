@@ -28,10 +28,13 @@ export interface DisplayGroup {
 
 /**
  * Persistent record of a downloaded photo.
- * Keyed by `${filename}::${size}` since PTP handles are not stable across sessions.
+ * Keyed by `${cameraId}::${filename}::${size}`: PTP handles are not stable
+ * across sessions, and the same filename/size can appear on two cameras.
  */
 export interface DownloadRecord {
   key: string;
+  /** 相机身份；旧版记录没有该字段，读取时按无相机记录兼容。 */
+  cameraId?: string;
   filename: string;
   size: number;
   localPath: string;
@@ -73,7 +76,7 @@ export interface GpsRecord {
    * 当天早些时候拍的照片会匹配不到 GPS。旧数据没有该字段时视为 timestamp。
    */
   runStart?: number;
-  /** 调试包「模拟 GPS 轨迹」注入的点；只影响显示，不写入 gps_records.json。 */
+  /** 调试包「模拟 GPS 轨迹」注入的点；只影响显示，不写入 gps_records.jsonl。 */
   mock?: boolean;
 }
 

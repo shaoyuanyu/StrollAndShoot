@@ -12,6 +12,7 @@ import { DownloadProgressBar } from '../components/DownloadProgressBar';
 import { SelectionActionBar } from '../components/SelectionActionBar';
 import type { DownloadProgress, DisplayGroup } from '../model/PhotoEntry';
 import { SettingsStore } from '../model/SettingsStore';
+import { UiStateStore } from '../model/UiStateStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
@@ -34,6 +35,7 @@ export struct MainScreen {
   @Local downloadProgress: DownloadProgress | null = null;
   @Local downloadedKeys: string[] = [];
   @Local settings: SettingsStore = SettingsStore.getInstance();
+  @Local uiState: UiStateStore = UiStateStore.getInstance();
   @Local gallerySelectMode: boolean = false;
   @Local galleryFilter: string = '';
   @Local exitSelectModeVersion: number = 0;
@@ -70,6 +72,9 @@ export struct MainScreen {
   private settingsScroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
+    const tab = this.uiState.lastTab;
+    this.currentTab = tab >= 0 && tab <= 2 ? tab : 1;
+    this.galleryFilter = this.uiState.galleryFilter;
     // 智感握姿：订阅握持手，下载浮岛贴到拇指易触及的一侧。
     // 机型不支持时服务内部会静默降级为固定右侧。
     HandednessService.getInstance().start();
@@ -77,6 +82,61 @@ export struct MainScreen {
 
   aboutToDisappear(): void {
     HandednessService.getInstance().stop();
+  }
+
+  /** 扫描完成 / Phase 0 部署后刷新“已下载”标记；筛选格式消失时回到“全部”。 */
+  @Monitor('svc.photosVersion')
+  onPhotosChanged(): void {
+    this.syncDownloadedKeys();
+    if (this.galleryFilter === '' || this.svc.photos.length === 0) return;
+    let found = false;
+    for (const p of this.svc.photos) {
+      if (getExt(p.filename) === this.galleryFilter) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      this.galleryFilter = '';
+      this.uiState.galleryFilter = '';
+    }
+  }
+
+  /** 下载注册表异步加载 / 增量写入后刷新“已下载”标记。 */
+  @Monitor('svc.registryVersion')
+  onRegistryChanged(): void {
+    this.syncDownloadedKeys();
+  }
+
+  /** 新相机首次连接：扫描结束后询问是否启用缩略图缓存。 */
+  @Monitor('svc.cachingDialogRequired')
+  onCachingDialogRequired(): void {
+    if (!this.svc.cachingDialogRequired) return;
+    const camId = this.svc.pendingCamIdForDialog;
+    const camName = this.svc.pendingCamNameForDialog;
+    if (camId === '') return;
+    this.getUIContext().showAlertDialog({
+      title: '发现新相机',
+      message: `检测到新相机「${camName}」，是否启用缩略图缓存？\n\n启用后下次连接时将直接从本地加载缩略图，大幅提升加载速度。`,
+      autoCancel: false,
+      primaryButton: {
+        value: '不缓存',
+        action: () => {
+          this.svc.setCachingPreference(camId, false).catch((err: Error) => {
+            this.svc.getLog().add(`缓存设置失败: ${JSON.stringify(err)}`);
+          });
+        }
+      },
+      secondaryButton: {
+        value: '启用缓存',
+        fontColor: $r('app.color.primary'),
+        action: () => {
+          this.svc.setCachingPreference(camId, true).catch((err: Error) => {
+            this.svc.getLog().add(`缓存设置失败: ${JSON.stringify(err)}`);
+          });
+        }
+      }
+    });
   }
 
   private tabTitle(): string {
@@ -158,6 +218,7 @@ export struct MainScreen {
     const list = this.formatList();
     if (index >= 0 && index < list.length) {
       this.galleryFilter = list[index];
+      this.uiState.galleryFilter = this.galleryFilter;
     }
   }
 
@@ -609,6 +670,7 @@ export struct MainScreen {
       .barHeight(this.gallerySelectMode ? 0 : 56)
       .onChange((idx: number) => {
         this.currentTab = idx;
+        this.uiState.lastTab = idx;
         if (idx === 2) { this.logText = this.svc.getLog().getText(); }
       })
       .width('100%').height('100%')

@@ -17,7 +17,7 @@ const LENS_STEPS: number = 16;
  *
  * 以当前位置为原点，生成一个约 300m × 210m 的相机图案（机身 + 取景器 + 镜头 +
  * 快门），时间铺在最近 4 分钟内。点带 `mock: true`，只交给 GpsRecorder 做
- * 当天显示，不写进 gps_records.json，也不参与照片 EXIF 匹配。
+ * 当天显示，不写进 gps_records.jsonl，也不参与照片 EXIF 匹配。
  *
  * 单独拆成纯逻辑是为了能在 Local Test 里验证点数、时间范围和包围盒。
  */

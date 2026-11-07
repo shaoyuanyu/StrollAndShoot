@@ -27,7 +27,6 @@ C++ 侧：`CMakeLists.txt` 只编译 `napi_init.cpp` 与 `ptp_engine.cpp`。`ptp
 - **手工版本号驱动的刷新**：`GalleryPage` 用 `photosVersion`、`thumbnailVersion`、`displayMode`、`filterValue`、`galleryScale` 五个字段判断 `buildFlatItems()` 的缓存是否有效，另外 `allDisplayGroups()`、`buildFilterOptions()`、`_filteredIndexMap` 各有自己的一份。任何一处改动都要同时顾及所有递增点。
 - **普通 `Map` 的状态追踪**：`thumbnailPixelMapMap`、`orientedDisplaySizes`、`compressedCache` 不是 `@Trace`，界面刷新依赖手工计数被 `build()` 读到。可以考虑换成 `@ObservedV2` 容器，减少漏改计数器导致的界面不刷新。
 - **重复的等待循环**：`PtpHost` 的 `getThumb` / `getObject` / `getPartialObject` 各抄了一份 `usbBusy` 轮询（150 次 × 200ms），可以合并成一个方法。
-- **日志策略**：`scanForCamera()` 开头的 `this.log.clear()` 会清掉扫描之前的记录，而扫描期间 200 条上限又会挤掉早期条目——排查 USB 问题时最想看的那部分恰好会被丢掉。`PtpHost.log()` 对每条 USB 命令输出十六进制片段。需要重新考虑保留策略。
 - **`README.md` 只有两行**，缺少环境变量、构建方式与设备要求。
 
 ## 界面与设计

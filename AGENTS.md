@@ -25,7 +25,7 @@ HarmonyOS 手机应用。通过 USB PTP 连接相机，浏览并导入照片，�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.16.0 / 1016000 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.17.0 / 1017000 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署）。见“macOS 开发环境” |
 
 ## macOS 开发环境
@@ -462,7 +462,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 开关（GPS 记录、模拟相机）用 `Toggle(Switch)`，**不要设 `selectedColor`**，否则会覆盖系统预设的沉浸光感样式。
 - 导航类行带 `chevron_right`（定位记录管理、缩略图缓存）。删除定位记录统一放在「定位记录管理」页（多选批量删除，或全屏轨迹页「更多」里删当天），设置页不再提供「清除定位记录」入口，避免误触。
 - 调试日志面板仍是等宽字体、高 240vp，只在调试包里渲染。
-- 调试区新增「模拟 GPS 轨迹」开关：以当前定位为起点生成相机图案，覆盖今天的地图/列表显示；真实 `gps_records.json` 不变，关掉开关立即恢复。仅 debug 包可见。
+- 调试区新增「模拟 GPS 轨迹」开关：以当前定位为起点生成相机图案，覆盖今天的地图/列表显示；真实 `gps_records.jsonl` 不变，关掉开关立即恢复。仅 debug 包可见。
 
 ### PhotoViewer.ets
 预览器，一个文件里有五个结构：`ZoomState`、`ZoomLayer`、`ZoomableImage`、`MainImageView`、`ThumbCellView`、`PhotoViewerScreen`。
@@ -555,16 +555,16 @@ PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
 - `disconnect()`：关闭会话，清空全部内存缓存
 
 ### AppLog（`services/AppLog.ets`）
-内存环形缓冲（最多 200 条）+ 文件 `app_log.txt`，同时写 hilog。文件写入按 1 秒节流。从设备上读取：
+内存环形缓冲（最多 500 条）+ **追加写**文件 `app_log.txt`（1 秒节流，超过 512KB 轮转到 `app_log.txt.1`），同时写 hilog。进入后台/销毁时 `flushNow()` 强制补齐；`scanForCamera()` 不再清空日志，只写一条 `=== 开始扫描 ===` 分隔。从设备上读取：
 
 ```bash
 hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/entry/files/app_log.txt
 ```
 
-注意：`scanForCamera()` 开头会调用 `log.clear()`，扫描之前的日志会被清掉。
+`app_log.txt` 与 `.1` 已从系统备份中排除（见 `backup_config.json`）。
 
 ### GpsRecorder（`services/GpsRecorder.ets`）
-连续定位记录。四种模式（精确 11 秒 / 出行 31 秒 / 日常 61 秒 / 省电 121 秒）对应 `TRANSPORT` 与 `DAILY_LIFE_SERVICE` 场景。启动时申请位置权限与后台长时任务（`backgroundMode: location`）。记录写入 `gps_records.json`，模式与运行状态写入 `gps_settings.json`，下次启动由 `autoStart()` 恢复。`findClosest(captureDate)` 用二分查找找时间最接近的记录，默认容忍 30 分钟。
+连续定位记录。四种模式（精确 11 秒 / 出行 31 秒 / 日常 61 秒 / 省电 121 秒）对应 `TRANSPORT` 与 `DAILY_LIFE_SERVICE` 场景。启动时申请位置权限与后台长时任务（`backgroundMode: location`）。记录写入 `gps_records.jsonl`（每行一条），模式与运行状态写入 `gps_settings.json`，下次启动由 `autoStart()` 恢复。`findClosest(captureDate)` 用二分查找找时间最接近的记录，默认容忍 30 分钟。
 
 - **内部模式码保持兼容**：`0=精确(11s)`、`1=日常(61s)`、`2=省电(121s)`、`3=出行(31s)`。设置页显示顺序是「精确 / 出行 / 日常 / 省电」，用 `GPS_MODE_UI_TO_CODE = [0, 3, 1, 2]` 做映射，不能把 `gpsMode` 直接当 `selectedIndex`；否则旧配置里的 `1=日常`、`2=省电` 会被改义。默认仍是省电（2），读取时允许 0–3。
 
@@ -573,7 +573,7 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 - `recordsVersion` 是 UI 依赖的计数；`getDailyStats` / `getGroupForDay` 内部按这个版本缓存按天聚合，页面不必每次遍历全部记录。
 - `getDayRecords` 返回当天升序数组；`ensureDailyCache` 已把按天记录数组一起缓存，直接复用，不要在每个卡片的 build 里重复 filter+sort。轨迹聚合交给 `GpsTrackCache`，不要重复算距离。
 - 调试包的模拟轨迹只放内存：`createMockTrack()` 生成 31 个 `mock: true` 的点，`getDayRecords`/`getDailyStats` 用它们覆盖当天显示；`clearMockTrack()` 恢复。真实记录不写盘、不参与 `findClosest`，应用重启时 `loadRecords` 会清掉。
-- **记录落盘**：`writeTextAtomic()` 先写 `.tmp` 再 `renameSync` 覆盖，rename 失败才退回 `copyFileSync + unlink`；`gps_settings.json` 同样原子写。记录数 ≤2000 时逐点落盘，>2000 时走 `scheduleSaveRecords()` 最多每 30 秒一次，`stop()` / 删除 / 重载时 `flushRecords()` 强制补齐；不要在定位回调里直接重写整份 JSON。2026-11-07 实测停止再启动后 42 条记录完整保留，没有残留 `.tmp`。
+- **记录落盘**：`gps_records.jsonl` 每行一条，定位回调里用 `AtomicFile.appendText()` 立即追加，进程被杀最多丢掉正在写的那一行；内存数组每 5 分钟用 `AtomicFile.writeText()` 压缩成快照（`.tmp` + rename，失败退回 copy），`stop()` / 删除 / 重载 / 进入后台时强制压缩。保留策略是 100000 条 / 365 天，超出后按整天丢弃最旧的一天，并通过 `trimmedRecords` 在设置页提示。`gps_settings.json` 同样原子写并带 `version`。不要在定位回调里直接重写整份 JSON。
 - `displayRecordCount()` = 真实总数 − 当天真实数 + 模拟点数；页头和设置页的「已记录 N 条定位记录」都用它。模拟日的 `GpsDailyGroup.mock` 驱动「模拟」徽标。
 
 ### GpsTrack（`utils/GpsTrack.ets`）与 GpsTrackCache（`services/GpsTrackCache.ets`）

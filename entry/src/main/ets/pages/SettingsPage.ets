@@ -297,7 +297,10 @@ export struct SettingsPage {
                 .fontSize(16)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
-              Text(`已记录 ${this.gps.displayRecordCount()} 条定位记录`)
+              Text(`已记录 ${this.gps.displayRecordCount()} 条定位记录` +
+                (this.gps.trimmedRecords > 0
+                  ? ` · 已按保留策略清理 ${this.gps.trimmedRecords} 条旧记录`
+                  : ''))
                 .fontSize(11)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)

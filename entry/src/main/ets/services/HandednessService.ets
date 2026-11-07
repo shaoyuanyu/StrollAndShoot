@@ -16,6 +16,7 @@
 import { motion } from '@kit.MultimodalAwarenessKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { UiStateStore } from '../model/UiStateStore';
 
 const DOMAIN = 0x0000;
 const TAG = 'Handedness';
@@ -28,6 +29,7 @@ export class HandednessService {
   @Trace leftHanded: boolean = false;
 
   private subscribed: boolean = false;
+  private uiState: UiStateStore = UiStateStore.getInstance();
 
   static getInstance(): HandednessService {
     if (HandednessService.instance === null) {
@@ -39,6 +41,8 @@ export class HandednessService {
   /** 订阅握持手变化。设备不支持或机型未开放时静默降级，保持默认右侧。 */
   start(): void {
     if (this.subscribed) return;
+    // 系统未上报前，先用上次识别结果兜底，左撇子重启后不必等一次握持事件。
+    this.leftHanded = this.uiState.lastHandedness;
     if (!canIUse('SystemCapability.MultimodalAwareness.Motion')) {
       hilog.info(DOMAIN, TAG, '%{public}s', 'motion capability unavailable, keep right');
       return;
@@ -71,8 +75,10 @@ export class HandednessService {
   private onHoldingHandChanged = (status: motion.HoldingHandStatus): void => {
     if (status === motion.HoldingHandStatus.LEFT_HAND_HELD) {
       this.leftHanded = true;
+      this.uiState.lastHandedness = true;
     } else if (status === motion.HoldingHandStatus.RIGHT_HAND_HELD) {
       this.leftHanded = false;
+      this.uiState.lastHandedness = false;
     }
   };
 }

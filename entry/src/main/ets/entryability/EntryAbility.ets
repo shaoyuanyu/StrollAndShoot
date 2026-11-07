@@ -4,6 +4,9 @@ import { window } from '@kit.ArkUI';
 import { WindowUtils } from '../utils/WindowUtils';
 import { saveWindowSnapshot } from '../utils/WindowShot';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
+import { CameraService } from '../services/CameraService';
+import { GpsRecorder } from '../services/GpsRecorder';
+import { GpsGeocoder } from '../services/GpsGeocoder';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
@@ -45,6 +48,29 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
+    this.flushPersistence();
+  }
+
+  /** 应用退到后台 / 销毁前，把延迟落盘的数据强制补齐。 */
+  private flushPersistence(): void {
+    try {
+      GpsRecorder.getInstance().flush();
+    } catch (_e) {
+      // best effort
+    }
+    try {
+      GpsGeocoder.getInstance().flush();
+    } catch (_e) {
+      // best effort
+    }
+    try {
+      CameraService.getInstance().getLog().flushNow();
+    } catch (_e) {
+      // best effort
+    }
+    CameraService.getInstance().flushPersistence().catch((_e: Error) => {
+      // best effort
+    });
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -111,6 +137,7 @@ export default class EntryAbility extends UIAbility {
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
+    this.flushPersistence();
   }
 
   onForeground(): void {
@@ -121,5 +148,6 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
+    this.flushPersistence();
   }
 }

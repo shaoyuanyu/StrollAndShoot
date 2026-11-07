@@ -1,7 +1,16 @@
 import geoLocationManager from '@ohos.geoLocationManager';
+import { AtomicFile } from '../utils/AtomicFile';
 
 /** 最多缓存多少个坐标的地址。一天几百个点，400 条足够覆盖最近浏览。 */
 const MAX_CACHED_ADDRESSES = 400;
+const SCHEMA_VERSION = 1;
+const SAVE_DELAY_MS = 2000;
+
+/** 地址缓存文件信封。 */
+interface AddressCacheFile {
+  version: number;
+  entries: Record<string, string>;
+}
 
 /**
  * 按坐标查询中文地址，带内存缓存与并发去重。
@@ -19,6 +28,9 @@ export class GpsGeocoder {
   private cache: Map<string, string> = new Map();
   private pending: Map<string, Promise<string | null>> = new Map();
   private available: boolean | null = null;
+  private filePath: string = '';
+  private dirty: boolean = false;
+  private saveTimer: number = -1;
 
   static getInstance(): GpsGeocoder {
     if (!GpsGeocoder.instance) {
@@ -28,6 +40,73 @@ export class GpsGeocoder {
   }
 
   private constructor() {}
+
+  /** 由 Index 在启动时调用；地址缓存跨重启复用，减少逆地理编码请求。 */
+  init(filesDir: string): void {
+    if (this.filePath !== '') return;
+    this.filePath = filesDir + '/gps_address_cache.json';
+    this.load();
+  }
+
+  private load(): void {
+    const text = AtomicFile.readText(this.filePath);
+    if (text === null || text === '') return;
+    try {
+      const parsed = JSON.parse(text) as Record<string, Object>;
+      const version = parsed['version'];
+      const raw = version !== undefined ? parsed['entries'] : parsed;
+      if (raw !== undefined && raw !== null) {
+        const map = raw as Record<string, string>;
+        for (const k of Object.keys(map)) {
+          const textValue = map[k];
+          if (typeof textValue === 'string' && textValue !== '') {
+            this.cache.set(k, textValue);
+          }
+        }
+      }
+      while (this.cache.size > MAX_CACHED_ADDRESSES) {
+        const oldest = this.cache.keys().next();
+        if (oldest.done === true) break;
+        this.cache.delete(oldest.value);
+      }
+      this.version++;
+    } catch (_e) {
+      // 损坏就当作空缓存，下一次查询会重新填充
+    }
+  }
+
+  private scheduleSave(): void {
+    this.dirty = true;
+    if (this.saveTimer >= 0) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = -1;
+      this.saveNow();
+    }, SAVE_DELAY_MS);
+  }
+
+  /** 进入后台 / 退出前调用，立即落盘。 */
+  flush(): void {
+    if (this.saveTimer >= 0) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = -1;
+    }
+    this.saveNow();
+  }
+
+  private saveNow(): void {
+    if (!this.dirty || this.filePath === '') return;
+    try {
+      const entries: Record<string, string> = {};
+      this.cache.forEach((v, k) => {
+        entries[k] = v;
+      });
+      const file: AddressCacheFile = { version: SCHEMA_VERSION, entries: entries };
+      AtomicFile.writeText(this.filePath, JSON.stringify(file));
+      this.dirty = false;
+    } catch (_e) {
+      // 保留 dirty，下一次 resolve 还会再排一次写
+    }
+  }
 
   private key(lat: number, lon: number): string {
     return `${lat.toFixed(5)},${lon.toFixed(5)}`;
@@ -80,6 +159,7 @@ export class GpsGeocoder {
         this.cache.delete(oldest.value);
       }
       this.version++;
+      this.scheduleSave();
       return text;
     } catch (_e) {
       return null;
