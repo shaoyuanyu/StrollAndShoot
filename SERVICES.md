@@ -16,6 +16,14 @@
 - `downloadPhotos(handles, onProgress, ctx)`：批量下载到沙箱，按拍摄时间匹配 GPS 并写入 EXIF，最后经 `showAssetsCreationDialog` 保存到系统相册，同时维护 `download_registry.json`
 - `disconnect()`：关闭会话，清空全部内存缓存
 
+### 下载注册表与「最近删除」
+
+- 键为 `${cameraIdentity}::${filename}::${size}`；旧版 `${filename}::${size}` 记录仍可兼容读取。
+- 每条记录保存相册 URI 与 `downloadDate`；图库删除后不物理删除记录，只写 `missingSince` 时间戳。`getDownloadedKeys()` 只返回 `missingSince` 为空的记录，所以绿点会立即消失。
+- `validateRegistry()` 在启动和每次扫描结束后执行：先 `fileIo.open` 相册 URI；失败且错误码像“已删除”（13900002 / media URI 的 13900001、13900012、201）时，再用 `photoAccessHelper.getAssets` 按 URI 查媒体库。查到资产就视为仍存在，查不到才标记 `missingSince`。
+- 图库「最近删除」保留 30 天；`missingSince` 超过 30 天的记录自动清理。用户在系统图库恢复照片后，下一次校验会清掉 `missingSince`，绿点恢复。
+- 重新下载同一张时 `addDownloadRecord()` 直接覆盖旧记录，清掉缺失状态。
+
 ### AppLog（`services/AppLog.ets`）
 
 内存环形缓冲（最多 500 条）+ **追加写**文件 `app_log.txt`（1 秒节流，超过 512KB 轮转到 `app_log.txt.1`），同时写 hilog。进入后台/销毁时 `flushNow()` 强制补齐；`scanForCamera()` 不再清空日志，只写一条 `=== 开始扫描 ===` 分隔。从设备上读取：
@@ -89,9 +97,9 @@ interface PhotoEntry {
 }
 ```
 
-同文件还有：`DisplayGroup`（内容优先模式下把同名文件合成一组）、`DownloadRecord`（下载注册表条目，键为 `filename::size`）、`DownloadProgress`、`DownloadResult`、`GpsRecord`、`GpsDailyGroup`。
+同文件还有：`DisplayGroup`（内容优先模式下把同名文件合成一组）、`DownloadRecord`（下载注册表条目，键为 `${cameraIdentity}::${filename}::${size}`，含 `missingSince` 表示暂时进了「最近删除」）、`DownloadProgress`、`DownloadResult`、`GpsRecord`、`GpsDailyGroup`。
 
-`model/SettingsStore.ets` 存放持久化设置（深色模式、画廊列数、显示模式）。
+`model/SettingsStore.ets` 存放持久化设置（深色模式、画廊列数、显示模式）；`model/UiStateStore.ets` 存放上次标签页、画廊筛选和握持手。
 
 ## 定位与地图
 

@@ -31,7 +31,7 @@ struct Index {
     if (hostCtx) {
       const ctx = hostCtx as common.UIAbilityContext;
       this.svc.initLogPath(ctx.filesDir);
-      this.svc.initDownloadDir(ctx.filesDir);
+      this.svc.initDownloadDir(ctx.filesDir, ctx);
       this.gpsRecorder.init(ctx.filesDir, this.svc.getLog(), ctx);
       GpsGeocoder.getInstance().init(ctx.filesDir);
       ExifGeotagger.setLog(this.svc.getLog());

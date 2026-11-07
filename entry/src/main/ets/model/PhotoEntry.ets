@@ -39,6 +39,11 @@ export interface DownloadRecord {
   size: number;
   localPath: string;
   downloadDate: string;
+  /**
+   * 系统图库中暂时找不到（通常是进了「最近删除」）。
+   * 只影响绿点显示，不删除记录；恢复后下一次校验会自动清掉。
+   */
+  missingSince?: number;
 }
 
 /**

@@ -4,6 +4,7 @@ import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { taskpool } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { dataSharePredicates } from '@kit.ArkData';
 import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
@@ -71,6 +72,8 @@ interface DownloadRegistryFile {
 
 /** 注册表最多保留多少条，避免多年使用后无限增长。 */
 const MAX_DOWNLOAD_RECORDS = 50000;
+/** 图库“最近删除”保留 30 天；超过这个时间的失效记录可以安全丢掉。 */
+const MISSING_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** 每成功保存一张照片就追加一行，崩溃后可从 journal 恢复。 */
 interface DownloadJournalEntry {
@@ -414,6 +417,10 @@ export class CameraService {
   private downloadAborted: boolean = false;
   private registryLoaded: boolean = false;
   private registryLoading: Promise<void> | null = null;
+  /** 用于按 URI 查询媒体库；没有 context 或没有权限时退化为逐个打开 URI。 */
+  private context: common.UIAbilityContext | null = null;
+  private phAccessHelper: photoAccessHelper.PhotoAccessHelper | null = null;
+  private mediaQuerySupported: boolean | null = null;
 
   // Change tracking
   @Trace registryVersion: number = 0;
@@ -439,9 +446,12 @@ export class CameraService {
     this.log.setFilePath(dir + '/app_log.txt');
   }
 
-  initDownloadDir(dir: string): void {
+  initDownloadDir(dir: string, ctx?: common.UIAbilityContext): void {
     this.filesDir = dir;
     this.downloadDir = dir;
+    if (ctx !== undefined) {
+      this.context = ctx;
+    }
     this.downloadTempDir = dir + '/download_temp';
     // 上次中断留下的沙箱临时图片不再需要；先清空再建目录。
     AtomicFile.deleteDirRecursive(this.downloadTempDir);
@@ -493,7 +503,7 @@ export class CameraService {
     const keys: string[] = [];
     for (const p of this.photos) {
       const record = this.findDownloadRecord(p.filename, p.size);
-      if (record !== null) {
+      if (record !== null && record.missingSince === undefined) {
         // 返回当前相机键，GalleryPage 用 makeDownloadKey() 计算出的键才能命中。
         keys.push(this.makeDownloadKey(p.filename, p.size));
       }
@@ -559,7 +569,7 @@ export class CameraService {
       const key = this.makeDownloadKey(photo.filename, photo.size);
 
       const existing = this.findDownloadRecord(photo.filename, photo.size);
-      if (existing !== null) {
+      if (existing !== null && existing.missingSince === undefined) {
         results.push({ handle: photo.handle, key, success: true, localPath: existing.localPath });
         onProgress({
           phase: 'downloading', currentIndex: i, totalCount: batch.length,
@@ -657,7 +667,6 @@ export class CameraService {
       });
 
       const onSaved = (result: DownloadResult, galleryUri: string): void => {
-        if (this.downloadRegistry.has(result.key)) return;
         const photo = batch.find((p: PhotoEntry) => p.handle === result.handle);
         if (!photo) return;
         const record: DownloadRecord = {
@@ -891,49 +900,123 @@ export class CameraService {
   }
 
   /**
-   * Validates the persisted download registry against actual filesystem state.
-   * 只有明确“文件不存在”才删除；权限/IPC/临时错误一律保留，避免一次启动异常清空历史。
+   * 校验下载记录与系统图库的实际状态。
+   *
+   * 图库删除会先进「最近删除」，此时 media URI 打开失败（常见 13900001），
+   * 但 30 天内仍可恢复。因此不做物理删除，只打 missingSince 标记：
+   * 绿点只按 active 记录计算，恢复后下一次校验清掉标记即可回来。
    */
   private async validateRegistry(): Promise<void> {
     const keys: string[] = [];
     this.downloadRegistry.forEach((_record: DownloadRecord, key: string) => {
       keys.push(key);
     });
-    const stale: string[] = [];
-    const skippedCodes: string[] = [];
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i];
+    const now = Date.now();
+    let markedMissing = 0;
+    let restored = 0;
+    let changed = false;
+    const skipped: string[] = [];
+    for (const key of keys) {
       const record = this.downloadRegistry.get(key);
       if (!record || !record.localPath) continue;
-      try {
-        const f = await fileIo.open(record.localPath, fileIo.OpenMode.READ_ONLY);
-        await fileIo.close(f);
-      } catch (err) {
-        const code = (err as BusinessError).code;
-        // 13900002 = No such file or directory
-        // 13900001 = Operation not permitted
-        // 13900012 / 201 = Permission denied
-        // 系统图库删除后图片会进“最近删除”，此时 media URI 往往返回 13900001
-        // 而不是 ENOENT；只对 media URI 把 EPERM/权限拒绝也判为失效。
-        const isMediaUri = record.localPath.startsWith('file://media/');
-        const mediaGone = isMediaUri &&
-          (code === 13900001 || code === 13900012 || code === 201);
-        if (code === 13900002 || mediaGone) {
-          stale.push(key);
-        } else {
-          skippedCodes.push(String(code));
+      const state = await this.checkRecordAvailability(record);
+      if (state === true) {
+        if (record.missingSince !== undefined) {
+          record.missingSince = undefined;
+          restored++;
+          changed = true;
         }
+      } else if (state === false) {
+        if (record.missingSince === undefined) {
+          record.missingSince = now;
+          markedMissing++;
+          changed = true;
+        }
+      } else {
+        skipped.push(record.filename);
       }
     }
-    if (stale.length > 0) {
-      for (let i = 0; i < stale.length; i++) {
-        this.downloadRegistry.delete(stale[i]);
+    // 超过图库「最近删除」保留期的记录不再可能恢复，清掉避免无限增长。
+    const expired: string[] = [];
+    this.downloadRegistry.forEach((record: DownloadRecord, key: string) => {
+      if (record.missingSince !== undefined &&
+          now - record.missingSince > MISSING_RETENTION_MS) {
+        expired.push(key);
       }
-      this.log.add(`下载记录清理: 移除 ${stale.length} 条失效记录`);
+    });
+    for (const key of expired) {
+      this.downloadRegistry.delete(key);
+    }
+    if (changed || expired.length > 0) {
       await this.compactRegistry();
     }
-    if (skippedCodes.length > 0) {
-      this.log.add(`下载记录校验跳过 ${skippedCodes.length} 条，错误码=${skippedCodes.join(',')}`);
+    if (markedMissing > 0) {
+      this.log.add(`下载记录标记失效: ${markedMissing} 条（可能在“最近删除”）`);
+    }
+    if (restored > 0) {
+      this.log.add(`下载记录恢复: ${restored} 条`);
+    }
+    if (expired.length > 0) {
+      this.log.add(`下载记录清理: 移除 ${expired.length} 条超过 30 天的失效记录`);
+    }
+    if (skipped.length > 0) {
+      this.log.add(`下载记录校验跳过 ${skipped.length} 条（未知错误）`);
+    }
+  }
+
+  /**
+   * 判断一条下载记录是否仍可在图库中访问。
+   * 先试 URI；失败时再按 URI 查询媒体库，查询不可用则按错误码判断。
+   */
+  private async checkRecordAvailability(record: DownloadRecord): Promise<boolean | null> {
+    try {
+      const f = await fileIo.open(record.localPath, fileIo.OpenMode.READ_ONLY);
+      await fileIo.close(f);
+      return true;
+    } catch (err) {
+      const code = (err as BusinessError).code;
+      const isMediaUri = record.localPath.startsWith('file://media/');
+      const likelyGone = code === 13900002 ||
+        (isMediaUri && (code === 13900001 || code === 13900012 || code === 201));
+      if (!likelyGone) {
+        return null;
+      }
+      const mediaFound = await this.queryMediaAsset(record.localPath);
+      if (mediaFound !== null) {
+        return mediaFound;
+      }
+      return false;
+    }
+  }
+
+  /**
+   * 按 URI 查询媒体库，判断资产是否仍存在。
+   * 未声明 READ_IMAGEVIDEO 时可能失败；失败返回 null，由调用方退化为 URI 探测。
+   */
+  private async queryMediaAsset(uri: string): Promise<boolean | null> {
+    if (this.mediaQuerySupported === false || this.context === null) {
+      return null;
+    }
+    try {
+      if (this.phAccessHelper === null) {
+        this.phAccessHelper = photoAccessHelper.getPhotoAccessHelper(this.context);
+      }
+      const predicates = new dataSharePredicates.DataSharePredicates();
+      predicates.equalTo(photoAccessHelper.PhotoKeys.URI, uri);
+      const options: photoAccessHelper.FetchOptions = {
+        predicates: predicates,
+        fetchColumns: [photoAccessHelper.PhotoKeys.URI]
+      };
+      const result = await this.phAccessHelper.getAssets(options);
+      const count = result.getCount();
+      result.close();
+      this.mediaQuerySupported = true;
+      return count > 0;
+    } catch (err) {
+      const code = (err as BusinessError).code;
+      this.mediaQuerySupported = false;
+      this.log.add(`媒体库查询不可用: code=${code}`);
+      return null;
     }
   }
 
@@ -977,7 +1060,7 @@ export class CameraService {
   }
 
   private addDownloadRecord(record: DownloadRecord): void {
-    if (this.downloadRegistry.has(record.key)) return;
+    // 从「最近删除」恢复后重新下载同一张时，覆盖旧记录的 URI 与缺失标记。
     this.appendRegistryRecord(record);
   }
 
