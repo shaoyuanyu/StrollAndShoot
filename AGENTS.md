@@ -493,9 +493,9 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 按**行程**分组，不再按 60 米逐点切：相邻采样间隔 >30 分钟才开新组；连续行程内累计位移 <120 米判为「停留」、否则判为「移动」。分组头标题统一用地点地址（移动组用起点地址），右侧状态字固定显示「移动/停留」，图标也区分（行走/定位）；副标题里移动给距离、停留给时长，再加时间范围和记录数。不要再用「地址 vs 移动距离」两种不同标题结构。小轨迹（≤30 条记录）默认展开，长轨迹默认收起只显示行程卡，用户点分组头展开。
 - 当天第一组的 `first` 用 `max(runStart, 当天 0 点)`，与面板统计的「时长」同源；后续组用本组第一条采样时间，避免上一轮静止的 `runStart` 跨过行程间隔。面板副标题也要用 `track.first` / `track.last`，不能直接用 `points[0].timestamp`，否则跨午夜静止时「00:00–03:03」和「3 小时 4 分」会对不上。
 - 分组内未选中行只显示时间、起点/终点；移动行程用 `HH:mm:ss`（采样间隔可能小于 1 分钟），停留行程用 `HH:mm`。选中行变成内嵌浅蓝卡，展开坐标、地址和海拔；面板头不再重复选中摘要。
-- 面板头是「轨迹明细 + 日期/时间范围 + 距离/时长/定位记录」三段统计；统计标签用官方 `SymbolGlyph` 图标（距离/时长/定位点），下面用官方 `Slider` 做轨迹采样拖动条，拖到哪一点就选中哪一点。选中时副标题变「第 N / 总数 条定位记录」，右侧出现「回到全程」浅蓝胶囊。
+- 面板头是「轨迹明细 + 日期/时间范围 + 距离/时长/定位记录」三段统计；统计标签用官方 `SymbolGlyph` 图标（距离/时长/定位点），下面用官方 `Slider` 做轨迹采样拖动条，拖到哪一点就选中哪一点。选中时副标题变「第 N / 总数 条定位记录」，右侧出现「回到全程」浅蓝胶囊。时长列给 `layoutWeight(1.4)`，否则「13 小时 12 分」在 16fp 的三等分栏里会折成两行。
 - 明细列表用 `Repeat(...).virtualScroll()`；地址只为可视分组标题和选中点按需解析（`GpsGeocoder`）。不要在 `onScrollIndex` 里给每个可视点预取地址——未选中的行只显示时间，预取只会白耗逆地理编码请求。
-- `bindSheet` 设 `enableOutsideInteractive: true` + `maskColor: Color.Transparent`，面板展开时地图仍可操作；`shouldDismiss` 不调用 dismiss，拖到最低档会停住而不是把面板关掉。`onHeightDidChange` 同步更新地图 padding / logo 和 Canvas 的 `bottomInset`。
+- `bindSheet` 设 `enableOutsideInteractive: true` + `maskColor: Color.Transparent`，面板展开时地图仍可操作。**不要用空的 `shouldDismiss` 来阻止面板关闭**：官方语义里侧拉关闭包含侧滑（左/右滑）、三键 back、ESC，注册后不调用 `dismiss()` 会把这些交互一起吞掉，表现就是“系统侧滑返回失效”。改用 `onWillDismiss`：`reason` 为 `PRESS_BACK`/`SLIDE` 时 `showSheet = false` 并 `pageInfos.pop()`；`SLIDE_DOWN` 不处理，保持拖到最低档停住。`onHeightDidChange` 同步更新地图 padding / logo 和 Canvas 的 `bottomInset`。
 - 地图不可用时（模拟器未签名、无网络）用 Canvas 示意图兜底，列表和地址仍然可用；`titleBarInsetVp()` / 底部面板高度会作为 `topInset` / `bottomInset` 传给示意图，避免轨迹被标题栏或面板裁掉。
 - **地图重试只对“签名包 + 超时/加载失败”显示**：`canRetryMap()` 同时检查 `MapCapability.isSignedPackage()`、`SystemCapability.Map.Core` 和 `mapError` 前缀；未签名/无地图能力不弹重试。`retryMap()` 要清 `controller`、`mapReady`、`mapLoaded`、`gcjCache`、`mapError`，再 `startInitTimeout()`，让 `MapComponent` 重新挂载。按钮用 `glass_bg` + `COMPONENT_THIN` 兜底（内容区拿不到真材质），放在标题栏下方右侧。
 

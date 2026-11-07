@@ -385,8 +385,14 @@ export struct GpsTrackViewerPage {
           this.applySheetMapPadding();
         }
       },
-      shouldDismiss: (_dismiss: SheetDismiss) => {
-        // 明细面板是页面主体，拖到最低档就停住，不真正关闭
+      onWillDismiss: (action: DismissSheetAction) => {
+        // 明细面板是页面主体：下拉到最低档不关闭；但系统侧滑/三键返回
+        // 必须真正退出页面，否则 shouldDismiss 空实现会把返回手势吞掉。
+        if (action.reason === DismissReason.PRESS_BACK ||
+          action.reason === DismissReason.SLIDE) {
+          this.showSheet = false;
+          this.pageInfos.pop();
+        }
       }
     };
   }
@@ -1217,7 +1223,9 @@ export struct GpsTrackViewerPage {
             Text('时长').fontSize(10).fontColor($r('app.color.text_tertiary'))
           }
         }
-        .layoutWeight(1).alignItems(HorizontalAlign.Start)
+        // 时长可能到「13 小时 12 分」，比距离/条数长；给中间列更多权重，
+        // 避免 16fp 的值在三分之一栏里折成两行。
+        .layoutWeight(1.4).alignItems(HorizontalAlign.Start)
         .padding({ left: 16 })
 
         Divider().vertical(true).height(26).color($r('app.color.divider'))
