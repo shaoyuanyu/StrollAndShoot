@@ -16,14 +16,14 @@
       "buildFunction": "GpsManagementPageBuilder"
     },
     {
-      "name": "GpsDayDetailPage",
-      "pageSourceFile": "src/main/ets/pages/GpsDayDetailPage.ets",
-      "buildFunction": "GpsDayDetailPageBuilder"
-    },
-    {
       "name": "CacheManagementPage",
       "pageSourceFile": "src/main/ets/pages/CacheManagementPage.ets",
       "buildFunction": "CacheManagementPageBuilder"
+    },
+    {
+      "name": "GpsTrackViewerPage",
+      "pageSourceFile": "src/main/ets/pages/GpsTrackViewerPage.ets",
+      "buildFunction": "GpsTrackViewerPageBuilder"
     }
   ]
 }

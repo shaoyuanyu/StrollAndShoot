@@ -131,6 +131,10 @@
     {
       "name": "glass_bg",
       "value": "#8CFFFFFF"
+    },
+    {
+      "name": "sheet_bg",
+      "value": "#E8FFFFFF"
     }
   ]
 }

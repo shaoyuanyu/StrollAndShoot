@@ -3,7 +3,6 @@ import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 
 import { CameraService } from '../services/CameraService';
-import { GpsRecorder } from '../services/GpsRecorder';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { HandednessService } from '../services/HandednessService';
 import { GalleryPage } from './GalleryPage';
@@ -31,15 +30,11 @@ export struct MainScreen {
   private pageInfos: NavPathStack = new NavPathStack();
   private pageId: number = -1;
   private tabsController: TabsController = new TabsController();
-  private gpsRecorder: GpsRecorder = GpsRecorder.getInstance();
   @Local svc: CameraService = CameraService.getInstance();
   @Local currentTab: number = 1;
   @Local logText: string = '';
   @Local downloadProgress: DownloadProgress | null = null;
   @Local downloadedKeys: string[] = [];
-  @Local gpsRunning: boolean = false;
-  @Local gpsRecordCount: number = 0;
-  @Local gpsMode: number = 2;
   @Local settings: SettingsStore = SettingsStore.getInstance();
   @Local gallerySelectMode: boolean = false;
   @Local galleryFilter: string = '';
@@ -404,31 +399,6 @@ export struct MainScreen {
     this.downloadedKeys = this.svc.getDownloadedKeys();
   }
 
-  syncGpsState(): void {
-    this.gpsRunning = this.gpsRecorder.isRunning();
-    this.gpsRecordCount = this.gpsRecorder.recordCount();
-    this.gpsMode = this.gpsRecorder.getGpsMode();
-  }
-
-  async toggleGps(): Promise<void> {
-    if (this.gpsRecorder.isRunning()) {
-      this.gpsRecorder.stop();
-    } else {
-      await this.gpsRecorder.start();
-    }
-    this.syncGpsState();
-  }
-
-  async changeGpsMode(mode: number): Promise<void> {
-    await this.gpsRecorder.setGpsMode(mode);
-    this.syncGpsState();
-  }
-
-  clearGpsRecords(): void {
-    this.gpsRecorder.clearRecords();
-    this.syncGpsState();
-  }
-
   @Builder
   TabItem(label: string, icon: Resource, index: number) {
     Column({ space: 2 }) {
@@ -606,9 +576,6 @@ export struct MainScreen {
           SettingsPage({
             scroller: this.settingsScroller,
             logText: this.logText,
-            gpsRunning: this.gpsRunning,
-            gpsRecordCount: this.gpsRecordCount,
-            gpsMode: this.gpsMode,
             onClear: () => { this.svc.getLog().clear(); this.syncDownloadedKeys(); },
             onCopy: () => {
               const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.logText);
@@ -616,9 +583,6 @@ export struct MainScreen {
               this.svc.getLog().add('日志已复制到剪贴板');
               this.syncDownloadedKeys();
             },
-            onGpsToggle: () => { this.toggleGps(); },
-            onGpsModeChange: (mode: number) => { this.changeGpsMode(mode); },
-            onGpsClear: () => { this.clearGpsRecords(); },
             onOpenGpsManagement: () => { this.pageInfos.pushPath({ name: 'GpsManagementPage' }); },
             onOpenCacheManagement: () => { this.pageInfos.pushPath({ name: 'CacheManagementPage' }); }
           })

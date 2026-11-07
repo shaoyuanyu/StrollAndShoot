@@ -63,13 +63,25 @@ export interface DownloadResult {
 }
 
 export interface GpsRecord {
-  timestamp: number;   // epoch ms
+  timestamp: number;   // epoch ms，最后一次定位的时间
   latitude: number;
   longitude: number;
   altitude: number;     // meters, 0 if unavailable
+  /**
+   * 这一轮「原地不动」的起点时间（epoch ms）。合并心跳按它计算：
+   * 从起点起满 10 分钟就补一条新记录，否则静止一整天只剩最后一个点，
+   * 当天早些时候拍的照片会匹配不到 GPS。旧数据没有该字段时视为 timestamp。
+   */
+  runStart?: number;
+  /** 调试包「模拟 GPS 轨迹」注入的点；只影响显示，不写入 gps_records.json。 */
+  mock?: boolean;
 }
 
 export interface GpsDailyGroup {
   day: string;    // "YYYY-MM-DD"
   count: number;
+  first: number;  // 当天第一条记录的时间戳（epoch ms）
+  last: number;   // 当天最后一条记录的时间戳
+  /** 这一天当前显示的是否为模拟轨迹（仅调试包）。 */
+  mock?: boolean;
 }
