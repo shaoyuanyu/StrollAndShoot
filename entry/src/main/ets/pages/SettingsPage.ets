@@ -36,9 +36,16 @@ const DISPLAY_OPTIONS: SelectOption[] = [
 
 const GPS_MODE_OPTIONS: SelectOption[] = [
   { value: '精确' },
+  { value: '出行' },
   { value: '日常' },
   { value: '省电' }
 ];
+
+/**
+ * 下拉框顺序映射到 GpsRecorder 的内部模式码。
+ * 内部码保持 0=精确 / 1=日常 / 2=省电，新增 3=出行，避免旧配置文件迁移。
+ */
+const GPS_MODE_UI_TO_CODE: number[] = [0, 3, 1, 2];
 
 @ComponentV2
 export struct SettingsPage {
@@ -96,6 +103,12 @@ export struct SettingsPage {
     if (!ok) {
       this.toast(this.gps.lastError === '' ? '定位启动失败' : this.gps.lastError);
     }
+  }
+
+  /** UI 顺序（精确/出行/日常/省电）→ 内部模式码；找不到时落回省电。 */
+  private gpsModeUiIndex(): number {
+    const index = GPS_MODE_UI_TO_CODE.indexOf(this.gps.gpsMode);
+    return index >= 0 ? index : 3;
   }
 
   private async onChangeGpsMode(mode: number): Promise<void> {
@@ -271,8 +284,11 @@ export struct SettingsPage {
           SettingSelectRow({
             label: '记录频率',
             options: GPS_MODE_OPTIONS,
-            selectedIndex: this.gps.gpsMode,
-            onSelect: (index: number) => { this.onChangeGpsMode(index); }
+            selectedIndex: this.gpsModeUiIndex(),
+            onSelect: (index: number) => {
+              const code = GPS_MODE_UI_TO_CODE[index];
+              if (code !== undefined) this.onChangeGpsMode(code);
+            }
           })
 
           Row({ space: 8 }) {

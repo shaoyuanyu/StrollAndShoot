@@ -35,7 +35,7 @@ export class GpsRecorder {
   @Trace running: boolean = false;
   /** 已记录的位置点数量。 */
   @Trace recordCount: number = 0;
-  /** 0=精确(11s), 1=日常(61s), 2=省电(121s)。 */
+  /** 0=精确(11s), 1=日常(61s), 2=省电(121s), 3=出行(31s)。 */
   @Trace gpsMode: number = 2;
   /** 最近一次定位结果，null 表示启动后还没拿到定位。 */
   @Trace lastFix: GpsRecord | null = null;
@@ -111,7 +111,7 @@ export class GpsRecorder {
 
   /** 切换记录频率。正在记录时会按新频率重启，返回是否最终在运行。 */
   async setGpsMode(mode: number): Promise<boolean> {
-    if (mode < 0 || mode > 2) mode = 2;
+    if (mode < 0 || mode > 3) mode = 2;
     if (mode === this.gpsMode) return this.running;
     this.gpsMode = mode;
     this.saveMode();
@@ -124,6 +124,7 @@ export class GpsRecorder {
     switch (this.gpsMode) {
       case 0: return '精确';
       case 1: return '日常';
+      case 3: return '出行';
       default: return '省电';
     }
   }
@@ -191,6 +192,10 @@ export class GpsRecorder {
       // @SuppressWarnings syscap
       scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
       interval = 11;
+    } else if (this.gpsMode === 3) {
+      // @SuppressWarnings syscap
+      scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
+      interval = 31;
     } else if (this.gpsMode === 1) {
       // @SuppressWarnings syscap
       scenario = geoLocationManager.UserActivityScenario.TRANSPORT;
@@ -639,7 +644,7 @@ export class GpsRecorder {
       if (typeof obj.gpsMode === 'number') {
         // Also migrate from old boolean precisionMode
         const mode = obj.gpsMode as number;
-        this.gpsMode = mode >= 0 && mode <= 2 ? mode : 2;
+        this.gpsMode = mode >= 0 && mode <= 3 ? mode : 2;
       } else if (typeof obj.precisionMode === 'boolean') {
         this.gpsMode = (obj.precisionMode as boolean) ? 0 : 2;
       }
