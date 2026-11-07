@@ -138,6 +138,7 @@ hvigorw test -p module=entry -p coverage=true
 ```
 
 - `devecocli` **没有** `test` 子命令，测试只能走 hvigor。
+- `hvigorw test` 在本机不要省 `--no-daemon`：不加时多次卡在 `Starting hvigor daemon`，只有后台 daemon 退出后才落结果；`--no-daemon` 通常十几秒完成。
 - 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`，末尾一行是 `Tests run / Failure / Error / Pass`。
 - `entry/src/mock/Libentry.mock.ets` 是模板生成的，曾经编译不过（三处无类型对象字面量，`arkts-no-untyped-obj-literals`），已改为先声明 `interface` 再返回。改动 mock 的返回值时必须保持这一点。
 - Instrument Test 需要设备，且 `ohosTest` 的 HAP 要签名，本机模拟器装不了签名的包。
@@ -269,6 +270,10 @@ $HDC -t $T shell aa start -a EntryAbility -b io.github.shaoyuanyu.strollandshoot
 - **`hdc discover` 在本机所在办公网无效**：实测 `Broadcast find daemon, total:0`。ARP 表里大量 `0:0:5e:0:1:2` 是代理网关，说明开了客户端隔离，广播包过不去。只能手工 `tconn IP:端口`。
 - 装包实测 **1.4 秒**，比 USB 慢但可接受；`-r` 覆盖安装保留数据。
 - 锁屏、切网会让连接变 `Offline`，重新 `tconn` 一次即可。
+- **`Unknown` / `Offline` 先怀疑 hdc server 残留，不要先改端口或配对方式**（2026-11-07 实测）：手机端口能 `nc` 通、`hdc tconn` 却返回 `Target is connected, repeat operation`，`list targets -v` 显示 `Unknown`/`Offline`；`lsof -nP -iTCP:<手机端口>` 能看到本机 hdc 的 TCP 连接停在 `SYN_SENT`。执行 `hdc kill -r` 重启 server，再 `tconn`，立即返回 `Connect OK`。官方《hdc》也把 `hdc kill -r`、等待通道建立（约 10 秒）列为首要排查手段。
+  - 如果 `kill -r` + 重连仍停在 `SYN_SENT`，再怀疑办公网/路由器的客户端隔离或 VPN；换手机热点或 USB。`ping` 通不代表调试端口可达。
+  - 安卓无线调试有独立的**配对端口**和**连接端口**（`adb pair` 与 `adb connect`），拿配对端口去 connect 会一直挂起；**鸿蒙 hdc 官方流程没有独立配对命令**，不要因为安卓经验去反复换端口，先重启 hdc server。
+  - 参考：[hdc 官方指南](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/hdc)、[华为开发者问答：hdc 连接设备失败排查](https://developer.huawei.com/consumer/cn/forum/topic/0208227365283665099?fid=0109140870620153026)。
 
 **读日志 / 截图**：
 
@@ -472,6 +477,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 按天分组列出记录条数、当天起止时间；卡片上不再放删除键，避免误触。
 - **手风琴展开**：同一时刻只保留一个展开项，进入页面默认展开第一条（`@Provider` / `@Consumer` 下发 `expandedDays`）。不要改成多天同时展开——一天一张 `MapComponent`，多开会把列表拖垮。
 - 页头右侧「选择」进入多选：多选态下卡片收起地图、右侧换成勾选圆圈，底部出现「已选 N 天 / 全选 / 删除」。批量删除要二次确认；单天删除只在全屏轨迹页的「更多」菜单里。多选删除要区分真实天和模拟天：模拟天只清内存覆盖层，弹窗不能把模拟条数算成真实删除，文案和按钮（删除/清除）都要对应。
+- **多选底栏必须挂在 `ManagementTitleBar` 的浮岛层**：`SelectBottomBar` 自身不设背景，`Row.systemMaterial(REGULAR)`；外层 `Column` 用 `position({ x: 0, y: screenHeightVp - navIndicatorVp - 56 - 12 })` 画到屏幕底部。直接放回内容区，`systemMaterial` 不生效，又会变回整条不透明白栏。列表多选时底部 padding 用 `84 + navIndicatorVp()`，给悬浮栏留出高度。2026-11-07 模拟器验收通过。
 - 展开区 `GpsTrackMap`：预览地图禁用手势，点击整张图或「全屏」胶囊进入 `GpsTrackViewerPage`。地图不可用时自动降级为 `GpsTrackSketch`（Canvas 轨迹示意图），全屏入口仍可用。
 - 整图点击层用**最上层、带 1/255 背景的透明 Button**（实测 `0x01000000`），比空 `Column` + `Color.Transparent` 稳；点任意位置（包括「全屏」胶囊）都进全屏。
 - `GpsTrackSketch` 只在地图不可用时渲染；地图可用时不要把它留在下层，MapComponent 会完全盖住它，但 Canvas 仍会随选中点/记录更新重绘，纯浪费。
@@ -491,6 +497,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 明细列表用 `Repeat(...).virtualScroll()`；地址只为可视分组标题和选中点按需解析（`GpsGeocoder`）。不要在 `onScrollIndex` 里给每个可视点预取地址——未选中的行只显示时间，预取只会白耗逆地理编码请求。
 - `bindSheet` 设 `enableOutsideInteractive: true` + `maskColor: Color.Transparent`，面板展开时地图仍可操作；`shouldDismiss` 不调用 dismiss，拖到最低档会停住而不是把面板关掉。`onHeightDidChange` 同步更新地图 padding / logo 和 Canvas 的 `bottomInset`。
 - 地图不可用时（模拟器未签名、无网络）用 Canvas 示意图兜底，列表和地址仍然可用；`titleBarInsetVp()` / 底部面板高度会作为 `topInset` / `bottomInset` 传给示意图，避免轨迹被标题栏或面板裁掉。
+- **地图重试只对“签名包 + 超时/加载失败”显示**：`canRetryMap()` 同时检查 `MapCapability.isSignedPackage()`、`SystemCapability.Map.Core` 和 `mapError` 前缀；未签名/无地图能力不弹重试。`retryMap()` 要清 `controller`、`mapReady`、`mapLoaded`、`gcjCache`、`mapError`，再 `startInitTimeout()`，让 `MapComponent` 重新挂载。按钮用 `glass_bg` + `COMPONENT_THIN` 兜底（内容区拿不到真材质），放在标题栏下方右侧。
 
 ### PtpHost.ets
 PTP 会话层，封装 `@ohos.usbManager`，见“关键概念”。
@@ -534,6 +541,7 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 - `recordsVersion` 是 UI 依赖的计数；`getDailyStats` / `getGroupForDay` 内部按这个版本缓存按天聚合，页面不必每次遍历全部记录。
 - `getDayRecords` 返回当天升序数组；`ensureDailyCache` 已把按天记录数组一起缓存，直接复用，不要在每个卡片的 build 里重复 filter+sort。轨迹聚合交给 `GpsTrackCache`，不要重复算距离。
 - 调试包的模拟轨迹只放内存：`createMockTrack()` 生成 31 个 `mock: true` 的点，`getDayRecords`/`getDailyStats` 用它们覆盖当天显示；`clearMockTrack()` 恢复。真实记录不写盘、不参与 `findClosest`，应用重启时 `loadRecords` 会清掉。
+- **记录落盘**：`writeTextAtomic()` 先写 `.tmp` 再 `renameSync` 覆盖，rename 失败才退回 `copyFileSync + unlink`；`gps_settings.json` 同样原子写。记录数 ≤2000 时逐点落盘，>2000 时走 `scheduleSaveRecords()` 最多每 30 秒一次，`stop()` / 删除 / 重载时 `flushRecords()` 强制补齐；不要在定位回调里直接重写整份 JSON。2026-11-07 实测停止再启动后 42 条记录完整保留，没有残留 `.tmp`。
 - `displayRecordCount()` = 真实总数 − 当天真实数 + 模拟点数；页头和设置页的「已记录 N 条定位记录」都用它。模拟日的 `GpsDailyGroup.mock` 驱动「模拟」徽标。
 
 ### GpsTrack（`utils/GpsTrack.ets`）与 GpsTrackCache（`services/GpsTrackCache.ets`）
