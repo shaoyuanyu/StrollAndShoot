@@ -31,7 +31,6 @@ export struct SelectionActionBar {
     .width(96)
     .height(56)
     .justifyContent(FlexAlign.Center)
-    .accessibilityText(`下载已选的 ${this.selectedCount} 张照片`)
     .onClick(() => {
       if (this.selectedCount > 0) {
         this.onDownload();

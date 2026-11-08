@@ -4,7 +4,7 @@
 
 ## 相机与照片管线
 
-### CameraService（`services/CameraService.ets`，约 1800 行）
+### CameraService（`services/CameraService.ets`，约 2200 行）
 
 单例，`@ObservedV2`，相机相关操作的入口：
 

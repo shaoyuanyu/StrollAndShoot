@@ -174,7 +174,6 @@ export struct CacheManagementPage {
                     }
                     .width(32).height(32)
                     .backgroundColor($r('app.color.primary_soft'))
-                    .accessibilityText('删除该相机的缓存')
                     .onClick(() => {
                       this.deleteCameraCache(ri.item.cameraId, ri.item.friendlyName);
                     })

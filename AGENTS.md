@@ -23,8 +23,12 @@ HarmonyOS/ArkUI 知识见下文「HarmonyOS 开发知识」；调试、工具链
 
 - 任何 UI 都先使用官方 ArkUI / HarmonyOS 组件或系统能力（如 `bindSheet`、`List`、`Navigation`、`Tabs`、`Select`、`Toggle`、`Swiper` 等），按官方推荐方式实现。
 - **不得**以“自己画更可控/更快”为理由自绘组件。
-- 只有官方组件确实无法实现所需特殊效果时，才允许自绘；落地前必须先向用户说明：官方组件为什么不够、自绘范围、交互/无障碍/主题/性能风险、验证方式，并得到确认。
+- 只有官方组件确实无法实现所需特殊效果时，才允许自绘；落地前必须先向用户说明：官方组件为什么不够、自绘范围、交互/主题/性能风险、验证方式，并得到确认。
 - 自绘也必须遵循系统设计语言，优先保留官方组件的壳、动画和材质；能用官方容器 + 自定义内容组合的，不要从零画。
+
+### 无障碍不在范围内
+
+本项目**不考虑无障碍功能**：不添加 `accessibilityText` / `accessibilityGroup` / `accessibilityLevel` 等无障碍标注，也不为读屏与无障碍焦点顺序做专项适配；实现、评审与验收都不把无障碍作为检查项。历史上为按钮补过的无障碍标注已全部移除，后续不要重新引入。如果平台规范或第三方集成强制要求，先与用户确认，不要自行补回。
 
 ### 先查官方资料，再写 HarmonyOS 代码
 
@@ -175,7 +179,7 @@ hvigorw test -p module=entry -p coverage=true
 - 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`，末尾一行是 `Tests run / Failure / Error / Pass`。
 - `entry/src/mock/Libentry.mock.ets` 是模板生成的，曾经编译不过（三处无类型对象字面量，`arkts-no-untyped-obj-literals`），已改为先声明 `interface` 再返回。改动 mock 的返回值时必须保持这一点。
 - Instrument Test 需要设备，且 `ohosTest` 的 HAP 要签名，本机模拟器装不了签名的包。
-- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 29 个用例）；`entry/src/ohosTest` 仍是模板用例。
+- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 37 个用例）；`entry/src/ohosTest` 仍是模板用例。
 
 ### macOS
 
@@ -766,7 +770,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 #### 字符串资源
 
-`base/element/string.json` 有 36 条字符串，代码里没有任何引用，界面文案直接写在组件内部。
+`base/element/string.json` 有 37 条字符串，代码里没有任何引用，界面文案直接写在组件内部。
 
 如果要支持多语言，需要把组件内文案改成 `$r('app.string.*')`；目前不要假设这些资源已经生效。
 

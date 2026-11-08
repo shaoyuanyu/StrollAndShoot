@@ -331,7 +331,6 @@ export struct MainScreen {
       .width(40)
       .height(40)
       .backgroundColor(Color.Transparent)
-      .accessibilityText('退出选择')
       .systemMaterial(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
         interactive: true
@@ -355,7 +354,6 @@ export struct MainScreen {
       .padding({ left: 16, right: 16 })
       .backgroundColor(Color.Transparent)
       .borderRadius(20)
-      .accessibilityText(this.allSelected() ? '取消全选' : '全选')
       .systemMaterial(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
         interactive: true
@@ -395,7 +393,6 @@ export struct MainScreen {
             .borderRadius(20)
             .backgroundColor(Color.Transparent)
             .margin({ right: 8 })
-            .accessibilityText('格式筛选，当前' + this.filterLabel())
             .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
               .fontColor([$r('app.color.text_primary')]))
             .systemMaterial(new uiMaterial.ImmersiveMaterial({
@@ -413,7 +410,6 @@ export struct MainScreen {
         .padding({ left: 16, right: 16 })
         .backgroundColor(Color.Transparent)
         .borderRadius(20)
-        .accessibilityText('选择照片')
         .systemMaterial(new uiMaterial.ImmersiveMaterial({
           style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
           interactive: true
@@ -446,7 +442,6 @@ export struct MainScreen {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_on_primary'))
             .borderRadius(20)
-            .accessibilityText(this.svc.connected ? '快速扫描相机' : '搜索相机')
             .systemMaterial(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true

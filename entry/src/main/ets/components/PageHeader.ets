@@ -32,7 +32,6 @@ export struct PageHeader {
       .height(40)
       .backgroundColor(Color.Transparent)
       .borderRadius(20)
-      .accessibilityText('返回')
       .onClick(() => { this.onBack(); })
 
       Column({ space: 2 }) {

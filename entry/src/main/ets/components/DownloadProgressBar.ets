@@ -127,7 +127,6 @@ export struct DownloadProgressBar {
         .height(32)
         // 不铺底色：宿主是沉浸材质，额外画一层灰圆会把它压成一块脏斑
         .backgroundColor(Color.Transparent)
-        .accessibilityText('取消下载')
         .onClick(() => { this.onCancel(); })
       }
     }

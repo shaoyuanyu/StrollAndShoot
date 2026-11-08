@@ -652,7 +652,6 @@ export struct GalleryPage {
                         })
                         // 视觉 20vp，热区扩到 44vp
                         .responseRegion({ x: -12, y: -12, width: 44, height: 44 })
-                        .accessibilityText(`全选 ${this.dateHeaderLabel(ri.item.dateKey)}`)
                         .onClick(() => { this.toggleSelectDate(ri.item.dateKey); })
                       }
                     }

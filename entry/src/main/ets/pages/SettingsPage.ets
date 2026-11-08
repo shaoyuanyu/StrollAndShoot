@@ -496,7 +496,6 @@ struct SettingSelectRow {
           style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
           interactive: true
         }))
-        .accessibilityText(`${this.label}，当前${this.selectedLabel()}`)
         .onSelect((index: number) => { this.onSelect(index); })
     }
     .width('100%')

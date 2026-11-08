@@ -391,7 +391,6 @@ export struct GpsTrackMap {
           .height('100%')
           // 1/255 黑：肉眼不可见，但给空按钮一个非零背景，保证命中测试
           .backgroundColor(0x01000000)
-          .accessibilityText('查看完整轨迹')
           .onClick(() => { this.onOpen(); })
       }
     }

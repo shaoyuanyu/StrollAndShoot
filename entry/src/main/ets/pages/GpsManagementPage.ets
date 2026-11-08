@@ -415,7 +415,6 @@ export struct GpsManagementPage {
           .backgroundColor(Color.Transparent)
           .borderRadius(20)
           .systemMaterial(this.titleMaterial)
-          .accessibilityText('返回')
           .onClick(() => { this.pageInfos.pop(); })
 
           Column({ space: 1 }) {

@@ -1111,7 +1111,6 @@ export struct GpsTrackViewerPage {
         .width(40).height(40)
         .backgroundColor(Color.Transparent)
         .systemMaterial(this.titleMaterial)
-        .accessibilityText('返回')
         .onClick(() => { this.pageInfos.pop(); })
 
         // 标题也做成标题栏里的玻璃控件，直接吃 ImmersiveMaterial，
@@ -1128,7 +1127,6 @@ export struct GpsTrackViewerPage {
         .backgroundColor(Color.Transparent)
         .borderRadius(20)
         .systemMaterial(this.titleMaterial)
-        .accessibilityText('当天轨迹')
 
         Blank()
 
@@ -1140,7 +1138,6 @@ export struct GpsTrackViewerPage {
         .width(40).height(40)
         .backgroundColor(Color.Transparent)
         .systemMaterial(this.titleMaterial)
-        .accessibilityText('更多操作')
         .bindMenu([
           {
             value: '删除当天记录',
@@ -1258,7 +1255,6 @@ export struct GpsTrackViewerPage {
           .trackColor($r('app.color.divider'))
           .blockColor($r('app.color.primary'))
           .trackThickness(3)
-          .accessibilityText('轨迹采样位置')
           .onChange((value: number, mode: SliderChangeMode) => {
             this.onScrub(value, mode);
           })
@@ -1365,7 +1361,6 @@ export struct GpsTrackViewerPage {
                     .backgroundColor($r('app.color.glass_bg'))
                     .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
                     .borderRadius(15)
-                    .accessibilityText('重新加载地图')
                     .onClick(() => { this.retryMap(); })
                 }
                 .width('100%')
