@@ -1,0 +1,69 @@
+{
+  "plural": [
+    {
+      "name": "photo_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d 張"
+        },
+        {
+          "quantity": "other",
+          "value": "%d 張"
+        }
+      ]
+    },
+    {
+      "name": "record_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d 條定位記錄"
+        },
+        {
+          "quantity": "other",
+          "value": "%d 條定位記錄"
+        }
+      ]
+    },
+    {
+      "name": "day_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d 天"
+        },
+        {
+          "quantity": "other",
+          "value": "%d 天"
+        }
+      ]
+    },
+    {
+      "name": "mock_record_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d 條模擬定位記錄"
+        },
+        {
+          "quantity": "other",
+          "value": "%d 條模擬定位記錄"
+        }
+      ]
+    },
+    {
+      "name": "log_line_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d 條日誌"
+        },
+        {
+          "quantity": "other",
+          "value": "%d 條日誌"
+        }
+      ]
+    }
+  ]
+}

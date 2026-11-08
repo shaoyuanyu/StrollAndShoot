@@ -13,6 +13,8 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import { MapCapability } from '../utils/MapCapability';
+import { L10n } from '../utils/L10n';
+import { formatDayKey } from '../utils/DateTimeText';
 import type { GpsRecord } from '../model/PhotoEntry';
 
 @Builder
@@ -91,7 +93,8 @@ struct GpsPointRow {
                 .fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.primary'))
               if (this.isFirst || this.isLast) {
-                Text(this.isFirst ? '起点' : '终点')
+                Text(this.isFirst
+                  ? $r('app.string.gps_start_point') : $r('app.string.gps_end_point'))
                   .fontSize(FontSize.Micro)
                   .fontColor($r('app.color.text_tertiary'))
               }
@@ -136,7 +139,8 @@ struct GpsPointRow {
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
             if (this.isFirst || this.isLast) {
-              Text(this.isFirst ? '起点' : '终点')
+              Text(this.isFirst
+                  ? $r('app.string.gps_start_point') : $r('app.string.gps_end_point'))
                 .fontSize(FontSize.Micro)
                 .fontColor($r('app.color.text_tertiary'))
             }
@@ -192,11 +196,14 @@ struct GpsGroupHeader {
 
   private subtitle(): string {
     const range = `${formatHm(this.first)} – ${formatHm(this.last)}`;
+    const records = L10n.plural('record_count', this.count, this.count);
     if (this.stationary) {
-      if (this.count <= 1) return `${range} · ${this.count} 条定位记录`;
-      return `${range} · ${formatDuration(this.last - this.first)} · ${this.count} 条定位记录`;
+      if (this.count <= 1) return L10n.tr('gps_group_stationary', range, records);
+      return L10n.tr('gps_group_stationary_duration',
+        range, formatDuration(this.last - this.first), records);
     }
-    return `${range} · ${formatDistance(this.distanceMeters)} · ${this.count} 条定位记录`;
+    return L10n.tr('gps_group_moving',
+      range, formatDistance(this.distanceMeters), records);
   }
 
   build() {
@@ -215,7 +222,8 @@ struct GpsGroupHeader {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
-          Text(this.stationary ? '停留' : '移动')
+          Text(this.stationary
+            ? $r('app.string.gps_stationary') : $r('app.string.gps_moving'))
             .fontSize(FontSize.Micro)
             .fontColor($r('app.color.primary'))
             .maxLines(1)
@@ -265,6 +273,7 @@ export struct GpsTrackViewerPage {
   @Local day: string = '';
   @Local track: GpsDayTrack | null = null;
   @Local mapReady: boolean = false;
+  /** 内部兜底状态（未签名 / 不支持 / 超时 / 失败），只用于分支判断，不直接显示。 */
   @Local mapError: string = '';
   /** 系统半模态的高度（vp）；拖动时由 onHeightDidChange 更新地图避让。 */
   @Local sheetHeightVp: number = 380;
@@ -1011,41 +1020,34 @@ export struct GpsTrackViewerPage {
     return track !== null && track.count > 0 && track.points[0].mock === true;
   }
 
-  private titleDayLabel(): string {
+  private titleDayLabel(): ResourceStr {
     const today = GpsRecorder.dayKeyFor(Date.now());
-    if (this.day === today) return '今天';
+    if (this.day === today) return $r('app.string.date_today');
     const yesterday = GpsRecorder.dayKeyFor(Date.now() - 86400000);
-    if (this.day === yesterday) return '昨天';
+    if (this.day === yesterday) return $r('app.string.date_yesterday');
     return this.dayLabel();
   }
 
+  /** 跨年的旧记录带年份，当年只显示月日（格式交给系统区域）。 */
   private dayLabel(): string {
-    const parts = this.day.split('-');
-    if (parts.length !== 3) return this.day;
-    const year = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10);
-    const day = parseInt(parts[2], 10);
-    // 跨年的旧记录要带年份，否则标题栏里的「11月6日」会分不清是哪一年。
-    if (year !== new Date().getFullYear()) {
-      return `${year}年${month}月${day}日`;
-    }
-    return `${month}月${day}日`;
+    return formatDayKey(this.day);
   }
 
   private distanceText(): string {
     const meters = this.track !== null ? this.track.distanceMeters : 0;
-    return meters < 5 ? '未移动' : formatDistance(meters);
+    return meters < 5 ? L10n.tr('gps_not_moved') : formatDistance(meters);
   }
 
-  private sheetSubtitle(): string {
+  private sheetSubtitle(): ResourceStr {
     if (this.selectedIndex >= 0) {
-      return `第 ${this.selectedIndex + 1} / ${this.pointCount()} 条定位记录`;
+      return $r('app.string.gps_sheet_position', this.selectedIndex + 1, this.pointCount());
     }
     const track = this.track;
     if (track === null || track.count === 0) return '';
     // 与统计行的「时长」用同一个起点：首条记录可能是跨午夜静止心跳，
     // 此时 track.first 已经被裁到当天 0 点，不能再用 points[0].timestamp。
-    return `${this.dayLabel()} · ${formatHm(track.first)} – ${formatHm(track.last)}`;
+    return $r('app.string.gps_sheet_day_range',
+      this.dayLabel(), formatHm(track.first), formatHm(track.last));
   }
 
   private recordAt(index: number): GpsRecord {
@@ -1058,12 +1060,12 @@ export struct GpsTrackViewerPage {
     if (this.day === '') return;
     if (this.isMockTrack()) {
       this.getUIContext().showAlertDialog({
-        title: '清除模拟轨迹',
-        message: '只清除这一天的模拟轨迹，真实定位记录不受影响。',
+        title: $r('app.string.gps_clear_mock_day_title'),
+        message: $r('app.string.gps_clear_mock_day_message'),
         autoCancel: true,
-        primaryButton: { value: '取消', action: () => {} },
+        primaryButton: { value: $r('app.string.common_cancel'), action: () => {} },
         secondaryButton: {
-          value: '清除',
+          value: $r('app.string.common_clear'),
           fontColor: $r('app.color.button_danger'),
           action: () => {
             this.gps.clearMockTrack();
@@ -1076,12 +1078,13 @@ export struct GpsTrackViewerPage {
     }
 
     this.getUIContext().showAlertDialog({
-      title: '删除当天记录',
-      message: `删除 ${this.day} 的 ${this.pointCount()} 条定位记录？`,
+      title: $r('app.string.gps_delete_day_title'),
+      message: $r('app.string.gps_delete_day_message', this.dayLabel(),
+        L10n.plural('record_count', this.pointCount(), this.pointCount())),
       autoCancel: true,
-      primaryButton: { value: '取消', action: () => {} },
+      primaryButton: { value: $r('app.string.common_cancel'), action: () => {} },
       secondaryButton: {
-        value: '删除',
+        value: $r('app.string.common_delete'),
         fontColor: $r('app.color.button_danger'),
         action: () => {
           this.gps.deleteDay(this.day);
@@ -1141,7 +1144,7 @@ export struct GpsTrackViewerPage {
         .systemMaterial(this.titleMaterial)
         .bindMenu([
           {
-            value: '删除当天记录',
+            value: $r('app.string.gps_delete_day_menu'),
             action: () => { this.confirmDeleteDay(); }
           }
         ])
@@ -1161,12 +1164,12 @@ export struct GpsTrackViewerPage {
       Row({ space: 8 }) {
         Column({ space: 3 }) {
           Row({ space: 6 }) {
-            Text('轨迹明细')
+            Text($r('app.string.gps_track_details'))
               .fontSize(FontSize.Title)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
             if (this.isMockTrack()) {
-              Text('模拟轨迹')
+              Text($r('app.string.gps_mock_track'))
                 .fontSize(FontSize.Micro)
                 .fontColor($r('app.color.primary'))
             }
@@ -1183,7 +1186,7 @@ export struct GpsTrackViewerPage {
         .alignItems(HorizontalAlign.Start)
 
         if (this.selectedIndex >= 0) {
-          Button('回到全程')
+          Button($r('app.string.gps_back_to_full'))
             .fontSize(FontSize.Caption)
             .height(30)
             .fontColor($r('app.color.primary'))
@@ -1204,7 +1207,7 @@ export struct GpsTrackViewerPage {
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.figure_walk'))
               .fontSize(IconSize.Small).fontColor([$r('app.color.primary')])
-            Text('距离').fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
+            Text($r('app.string.gps_distance')).fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
           }
         }
         .layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -1218,7 +1221,7 @@ export struct GpsTrackViewerPage {
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.clock'))
               .fontSize(IconSize.Small).fontColor([$r('app.color.primary')])
-            Text('时长').fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
+            Text($r('app.string.gps_duration')).fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
           }
         }
         // 时长可能到「13 小时 12 分」，比距离/条数长；给中间列更多权重，
@@ -1235,7 +1238,7 @@ export struct GpsTrackViewerPage {
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
               .fontSize(IconSize.Small).fontColor([$r('app.color.primary')])
-            Text('定位记录').fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
+            Text($r('app.string.gps_records_label')).fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
           }
         }
         .layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -1322,7 +1325,7 @@ export struct GpsTrackViewerPage {
         if (this.track === null) {
           Column({ space: 8 }) {
             LoadingProgress().width(28).height(28)
-            Text('正在读取轨迹…')
+            Text($r('app.string.gps_loading_track'))
               .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
           }
           .width('100%').height('100%')
@@ -1332,7 +1335,7 @@ export struct GpsTrackViewerPage {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
               .fontSize(IconSize.Empty)
               .fontColor([$r('app.color.text_tertiary')])
-            Text('当天无记录')
+            Text($r('app.string.gps_no_records_day'))
               .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
           }
           .width('100%').height('100%')
@@ -1346,7 +1349,7 @@ export struct GpsTrackViewerPage {
                 sketchPoints: this.track.sketchPoints,
                 bounds: this.track.bounds,
                 selected: this.selectedRecord(),
-                caption: '地图暂不可用 · 轨迹示意',
+                caption: $r('app.string.gps_map_unavailable'),
                 captionBottom: this.sheetHeightVp + 10,
                 topInset: titleBarInsetVp() + 8,
                 bottomInset: this.sheetHeightVp + 8
@@ -1354,7 +1357,7 @@ export struct GpsTrackViewerPage {
 
               if (this.canRetryMap()) {
                 Row() {
-                  Button('重试地图')
+                  Button($r('app.string.gps_retry_map'))
                     .fontSize(FontSize.Caption)
                     .height(30)
                     .padding({ left: 12, right: 12 })
@@ -1386,7 +1389,7 @@ export struct GpsTrackViewerPage {
               Stack({ alignContent: Alignment.Center }) {
                 Row({ space: 6 }) {
                   LoadingProgress().width(16).height(16)
-                  Text('地图加载中').fontSize(FontSize.Micro).fontColor($r('app.color.text_secondary'))
+                  Text($r('app.string.gps_map_loading')).fontSize(FontSize.Micro).fontColor($r('app.color.text_secondary'))
                 }
                 .padding({ left: 10, right: 12, top: 6, bottom: 6 })
                 .backgroundColor($r('app.color.glass_bg'))

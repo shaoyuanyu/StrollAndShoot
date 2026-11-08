@@ -9,10 +9,10 @@ import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens
  */
 @ComponentV2
 export struct PageHeader {
-  @Param title: string = '';
-  @Param subtitle: string = '';
+  @Param title: ResourceStr = '';
+  @Param subtitle: ResourceStr = '';
   /** 右侧文字操作（如「选择」/「取消」）；空串表示不显示。 */
-  @Param actionText: string = '';
+  @Param actionText: ResourceStr = '';
   @Event onBack: () => void = () => {};
   @Event onAction: () => void = () => {};
 
@@ -41,7 +41,7 @@ export struct PageHeader {
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
-        if (this.subtitle.length > 0) {
+        if (this.subtitle !== '') {
           Text(this.subtitle)
             .fontSize(FontSize.Caption)
             .fontColor($r('app.color.text_secondary'))
@@ -51,7 +51,7 @@ export struct PageHeader {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      if (this.actionText.length > 0) {
+      if (this.actionText !== '') {
         Button(this.actionText)
           .fontSize(FontSize.Body)
           .fontWeight(FontWeight.Medium)

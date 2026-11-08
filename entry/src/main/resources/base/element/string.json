@@ -1,16 +1,40 @@
 {
   "string": [
     {
-      "name": "module_desc",
-      "value": "走走拍拍 - 相机连接与照片导入"
+      "name": "common_cancel",
+      "value": "取消"
     },
     {
-      "name": "EntryAbility_desc",
-      "value": "走走拍拍主程序"
+      "name": "common_delete",
+      "value": "删除"
     },
     {
-      "name": "EntryAbility_label",
-      "value": "走走拍拍"
+      "name": "common_clear",
+      "value": "清除"
+    },
+    {
+      "name": "common_select",
+      "value": "选择"
+    },
+    {
+      "name": "common_select_all",
+      "value": "全选"
+    },
+    {
+      "name": "common_deselect_all",
+      "value": "取消全选"
+    },
+    {
+      "name": "common_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "common_none",
+      "value": "无"
+    },
+    {
+      "name": "common_all",
+      "value": "全部"
     },
     {
       "name": "tab_gallery",
@@ -25,120 +49,16 @@
       "value": "设置"
     },
     {
-      "name": "status_ready",
-      "value": "就绪"
+      "name": "module_desc",
+      "value": "走走拍拍 - 相机连接与照片导入"
     },
     {
-      "name": "status_connected",
-      "value": "已连接"
+      "name": "EntryAbility_desc",
+      "value": "走走拍拍主程序"
     },
     {
-      "name": "status_disconnected",
-      "value": "已断开"
-    },
-    {
-      "name": "status_scanning",
-      "value": "扫描中..."
-    },
-    {
-      "name": "status_no_camera",
-      "value": "未检测到USB相机"
-    },
-    {
-      "name": "btn_scan",
-      "value": "搜索相机"
-    },
-    {
-      "name": "btn_rescan",
-      "value": "重新扫描"
-    },
-    {
-      "name": "btn_disconnect",
-      "value": "断开连接"
-    },
-    {
-      "name": "btn_import",
-      "value": "导入照片"
-    },
-    {
-      "name": "btn_copy_log",
-      "value": "复制日志"
-    },
-    {
-      "name": "btn_clear_log",
-      "value": "清除"
-    },
-    {
-      "name": "btn_process_border",
-      "value": "边框"
-    },
-    {
-      "name": "btn_process_watermark",
-      "value": "水印"
-    },
-    {
-      "name": "section_general",
-      "value": "通用设置"
-    },
-    {
-      "name": "section_about",
-      "value": "关于"
-    },
-    {
-      "name": "section_debug_log",
-      "value": "调试日志"
-    },
-    {
-      "name": "section_device_info",
-      "value": "设备信息"
-    },
-    {
-      "name": "setting_dark_mode",
-      "value": "深色模式"
-    },
-    {
-      "name": "setting_version",
-      "value": "版本"
-    },
-    {
-      "name": "empty_gallery_hint",
-      "value": "连接相机以浏览照片"
-    },
-    {
-      "name": "gallery_empty",
-      "value": "相机中无照片"
-    },
-    {
-      "name": "gallery_filter_all",
-      "value": "全部"
-    },
-    {
-      "name": "gallery_filter_jpeg",
-      "value": "JPEG"
-    },
-    {
-      "name": "gallery_filter_raw",
-      "value": "RAW"
-    },
-    {
-      "name": "gallery_filter_heif",
-      "value": "HEIF"
-    },
-    {
-      "name": "gallery_select_count",
-      "value": "已选 %d 张"
-    },
-    {
-      "name": "gallery_download_btn",
-      "value": "下载 (%d)"
-    },
-    {
-      "name": "gallery_cancel_select",
-      "value": "取消"
-    },
-    {
-      "name": "photo_detail_loading",
-      "value": "加载中..."
+      "name": "EntryAbility_label",
+      "value": "走走拍拍"
     },
     {
       "name": "location_permission_reason",
@@ -147,6 +67,754 @@
     {
       "name": "gesture_permission_reason",
       "value": "用于识别握持手，让下载进度浮岛跟随到拇指易触及的一侧"
+    },
+    {
+      "name": "camera_status_ready",
+      "value": "就绪"
+    },
+    {
+      "name": "camera_status_searching",
+      "value": "正在搜索USB相机..."
+    },
+    {
+      "name": "camera_status_no_camera",
+      "value": "未检测到USB相机"
+    },
+    {
+      "name": "camera_status_connected",
+      "value": "已连接"
+    },
+    {
+      "name": "camera_status_found_camera",
+      "value": "发现相机: %1$s"
+    },
+    {
+      "name": "camera_status_connect_failed",
+      "value": "连接相机失败"
+    },
+    {
+      "name": "camera_status_choose_cache",
+      "value": "请选择缓存设置..."
+    },
+    {
+      "name": "camera_status_loading_cache",
+      "value": "正在加载缓存..."
+    },
+    {
+      "name": "camera_status_scanning",
+      "value": "正在扫描..."
+    },
+    {
+      "name": "camera_status_scan_error",
+      "value": "扫描出错"
+    },
+    {
+      "name": "camera_status_fetching_list",
+      "value": "正在获取照片列表..."
+    },
+    {
+      "name": "camera_status_no_storage",
+      "value": "已连接 (无存储设备)"
+    },
+    {
+      "name": "camera_status_walking_dirs",
+      "value": "正在遍历目录..."
+    },
+    {
+      "name": "camera_status_disconnected",
+      "value": "已断开连接"
+    },
+    {
+      "name": "camera_status_load_failed",
+      "value": "加载照片失败"
+    },
+    {
+      "name": "camera_status_photo_count",
+      "value": "已连接 - %1$s"
+    },
+    {
+      "name": "camera_phase_metadata",
+      "value": "获取元数据"
+    },
+    {
+      "name": "camera_phase_loading_metadata",
+      "value": "正在获取元数据..."
+    },
+    {
+      "name": "camera_phase_thumbnails",
+      "value": "加载缩略图"
+    },
+    {
+      "name": "camera_phase_loading_thumbnails",
+      "value": "正在加载缩略图..."
+    },
+    {
+      "name": "camera_scan_stats",
+      "value": "照片 %1$s | 扫描完成"
+    },
+    {
+      "name": "camera_scanning_fallback",
+      "value": "正在扫描"
+    },
+    {
+      "name": "camera_empty_title",
+      "value": "未连接相机"
+    },
+    {
+      "name": "camera_empty_hint",
+      "value": "用 USB 数据线连接相机，并选择 PTP 传输模式\n然后点右上角的「搜索相机」"
+    },
+    {
+      "name": "camera_info_brand",
+      "value": "品牌"
+    },
+    {
+      "name": "camera_info_model",
+      "value": "型号"
+    },
+    {
+      "name": "camera_info_serial",
+      "value": "序列号"
+    },
+    {
+      "name": "camera_info_firmware",
+      "value": "固件版本"
+    },
+    {
+      "name": "camera_info_usb_id",
+      "value": "USB 识别码"
+    },
+    {
+      "name": "camera_info_usb_serial",
+      "value": "USB 序列号"
+    },
+    {
+      "name": "camera_info_cache_id",
+      "value": "缓存标识"
+    },
+    {
+      "name": "camera_info_photo_count",
+      "value": "照片数量"
+    },
+    {
+      "name": "camera_info_connection",
+      "value": "连接方式"
+    },
+    {
+      "name": "camera_connection_ptp",
+      "value": "USB PTP"
+    },
+    {
+      "name": "camera_action_full_scan",
+      "value": "全量扫描"
+    },
+    {
+      "name": "camera_action_full_scan_desc",
+      "value": "忽略缓存，重新读取所有文件的元数据与缩略图"
+    },
+    {
+      "name": "camera_action_disconnect",
+      "value": "断开连接"
+    },
+    {
+      "name": "camera_main_scanning",
+      "value": "扫描中"
+    },
+    {
+      "name": "camera_main_quick_scan",
+      "value": "快速扫描"
+    },
+    {
+      "name": "camera_main_find",
+      "value": "搜索相机"
+    },
+    {
+      "name": "gallery_scanning",
+      "value": "正在扫描相机…"
+    },
+    {
+      "name": "gallery_empty_hint",
+      "value": "连接相机以浏览照片"
+    },
+    {
+      "name": "gallery_empty_hint_sub",
+      "value": "在「相机」页搜索并连接 PTP 设备"
+    },
+    {
+      "name": "gallery_unknown_date",
+      "value": "未知日期"
+    },
+    {
+      "name": "date_today",
+      "value": "今天"
+    },
+    {
+      "name": "date_yesterday",
+      "value": "昨天"
+    },
+    {
+      "name": "gallery_select_title",
+      "value": "已选择 %1$d 项"
+    },
+    {
+      "name": "settings_section_appearance",
+      "value": "外观"
+    },
+    {
+      "name": "settings_section_gallery",
+      "value": "画廊"
+    },
+    {
+      "name": "settings_section_location",
+      "value": "定位记录"
+    },
+    {
+      "name": "settings_section_storage",
+      "value": "存储"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "关于"
+    },
+    {
+      "name": "settings_section_debug",
+      "value": "调试"
+    },
+    {
+      "name": "settings_dark_mode",
+      "value": "深色模式"
+    },
+    {
+      "name": "settings_dark_follow",
+      "value": "跟随系统"
+    },
+    {
+      "name": "settings_dark_light",
+      "value": "浅色"
+    },
+    {
+      "name": "settings_dark_dark",
+      "value": "深色"
+    },
+    {
+      "name": "settings_language",
+      "value": "语言"
+    },
+    {
+      "name": "settings_language_follow_system",
+      "value": "跟随系统"
+    },
+    {
+      "name": "settings_language_zh_hans",
+      "value": "简体中文"
+    },
+    {
+      "name": "settings_language_zh_hant",
+      "value": "繁體中文"
+    },
+    {
+      "name": "settings_language_en",
+      "value": "English"
+    },
+    {
+      "name": "settings_language_confirm_title",
+      "value": "切换语言"
+    },
+    {
+      "name": "settings_language_confirm_message",
+      "value": "应用将重启以应用新的语言设置。"
+    },
+    {
+      "name": "settings_language_restart",
+      "value": "重启"
+    },
+    {
+      "name": "settings_language_failed",
+      "value": "语言切换失败"
+    },
+    {
+      "name": "settings_language_restart_failed",
+      "value": "语言已保存，重新打开应用后生效"
+    },
+    {
+      "name": "settings_columns",
+      "value": "默认列数"
+    },
+    {
+      "name": "settings_columns_auto",
+      "value": "自动"
+    },
+    {
+      "name": "settings_columns_n",
+      "value": "%1$d 列"
+    },
+    {
+      "name": "settings_display_mode",
+      "value": "显示模式"
+    },
+    {
+      "name": "settings_display_content_first",
+      "value": "内容优先"
+    },
+    {
+      "name": "settings_display_file_first",
+      "value": "文件优先"
+    },
+    {
+      "name": "settings_gps_records",
+      "value": "定位记录"
+    },
+    {
+      "name": "settings_gps_off_desc",
+      "value": "关闭时不会记录位置"
+    },
+    {
+      "name": "settings_gps_waiting",
+      "value": "正在等待定位…"
+    },
+    {
+      "name": "settings_gps_recording",
+      "value": "正在记录位置"
+    },
+    {
+      "name": "settings_gps_frequency",
+      "value": "记录频率"
+    },
+    {
+      "name": "settings_gps_precise",
+      "value": "精确"
+    },
+    {
+      "name": "settings_gps_travel",
+      "value": "出行"
+    },
+    {
+      "name": "settings_gps_daily",
+      "value": "日常"
+    },
+    {
+      "name": "settings_gps_power",
+      "value": "省电"
+    },
+    {
+      "name": "settings_gps_manage",
+      "value": "定位记录管理"
+    },
+    {
+      "name": "settings_gps_record_count",
+      "value": "已记录 %1$s"
+    },
+    {
+      "name": "settings_gps_trimmed",
+      "value": " · 已按保留策略清理 %1$s"
+    },
+    {
+      "name": "settings_cache",
+      "value": "缩略图缓存"
+    },
+    {
+      "name": "settings_version",
+      "value": "版本"
+    },
+    {
+      "name": "settings_mock_gps",
+      "value": "模拟 GPS 轨迹"
+    },
+    {
+      "name": "settings_mock_gps_waiting",
+      "value": "正在获取当前位置…"
+    },
+    {
+      "name": "settings_mock_gps_active",
+      "value": "模拟中 · %1$s（仅今日显示，不改真实记录）"
+    },
+    {
+      "name": "settings_mock_gps_desc",
+      "value": "以当前位置为起点注入一个相机图案，仅影响今日显示，不改真实记录"
+    },
+    {
+      "name": "settings_mock_camera",
+      "value": "模拟相机设备"
+    },
+    {
+      "name": "settings_mock_camera_connected",
+      "value": "已连接虚拟相机，共 %1$s"
+    },
+    {
+      "name": "settings_mock_camera_desc",
+      "value": "开启后到「相机」页点右上角的「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片"
+    },
+    {
+      "name": "settings_log_count",
+      "value": "%1$s"
+    },
+    {
+      "name": "settings_copy",
+      "value": "复制"
+    },
+    {
+      "name": "settings_clear",
+      "value": "清除"
+    },
+    {
+      "name": "settings_toast_gps_start_failed",
+      "value": "定位启动失败"
+    },
+    {
+      "name": "settings_toast_mock_cleared",
+      "value": "模拟轨迹已清除"
+    },
+    {
+      "name": "settings_toast_mock_failed",
+      "value": "模拟轨迹生成失败"
+    },
+    {
+      "name": "settings_toast_mock_injected",
+      "value": "已注入相机图案轨迹（%1$s）"
+    },
+    {
+      "name": "cache_title",
+      "value": "缓存管理"
+    },
+    {
+      "name": "cache_delete_title",
+      "value": "删除缓存"
+    },
+    {
+      "name": "cache_delete_message",
+      "value": "删除「%1$s」的所有缓存缩略图？此操作不可恢复。"
+    },
+    {
+      "name": "cache_clear_all_title",
+      "value": "清除所有缓存"
+    },
+    {
+      "name": "cache_clear_all_message",
+      "value": "删除全部相机的缩略图缓存？此操作不可恢复。"
+    },
+    {
+      "name": "cache_clear_all_button",
+      "value": "清除所有缓存"
+    },
+    {
+      "name": "cache_empty",
+      "value": "暂无缓存记录"
+    },
+    {
+      "name": "cache_empty_hint",
+      "value": "连接相机并启用缓存后将在此显示"
+    },
+    {
+      "name": "cache_total_size",
+      "value": "共 %1$s"
+    },
+    {
+      "name": "cache_item_stats",
+      "value": "%1$s | %2$s | 上次连接: %3$s"
+    },
+    {
+      "name": "gps_title",
+      "value": "定位记录"
+    },
+    {
+      "name": "gps_mock_badge",
+      "value": "模拟"
+    },
+    {
+      "name": "gps_record_count_zero",
+      "value": "0 条定位记录"
+    },
+    {
+      "name": "gps_selected_days",
+      "value": "已选 %1$s"
+    },
+    {
+      "name": "gps_delete_title",
+      "value": "删除定位记录"
+    },
+    {
+      "name": "gps_delete_message",
+      "value": "删除 %1$s，共 %2$s？"
+    },
+    {
+      "name": "gps_clear_mock_title",
+      "value": "清除模拟轨迹"
+    },
+    {
+      "name": "gps_clear_mock_message",
+      "value": "清除 %1$s 的模拟轨迹？真实定位记录不受影响。"
+    },
+    {
+      "name": "gps_delete_mixed_message",
+      "value": "删除 %1$s 的 %2$s，并清除 %3$s 的模拟轨迹？"
+    },
+    {
+      "name": "gps_empty_title",
+      "value": "还没有定位记录"
+    },
+    {
+      "name": "gps_empty_hint",
+      "value": "在设置页打开「定位记录」后，应用会按设定的频率记录定位"
+    },
+    {
+      "name": "gps_total_records",
+      "value": "共 %1$s"
+    },
+    {
+      "name": "gps_delete_day_menu",
+      "value": "删除当天记录"
+    },
+    {
+      "name": "gps_delete_day_title",
+      "value": "删除当天记录"
+    },
+    {
+      "name": "gps_delete_day_message",
+      "value": "删除 %1$s 的 %2$s？"
+    },
+    {
+      "name": "gps_clear_mock_day_title",
+      "value": "清除模拟轨迹"
+    },
+    {
+      "name": "gps_clear_mock_day_message",
+      "value": "只清除这一天的模拟轨迹，真实定位记录不受影响。"
+    },
+    {
+      "name": "gps_track_details",
+      "value": "轨迹明细"
+    },
+    {
+      "name": "gps_mock_track",
+      "value": "模拟轨迹"
+    },
+    {
+      "name": "gps_back_to_full",
+      "value": "回到全程"
+    },
+    {
+      "name": "gps_distance",
+      "value": "距离"
+    },
+    {
+      "name": "gps_duration",
+      "value": "时长"
+    },
+    {
+      "name": "gps_records_label",
+      "value": "定位记录"
+    },
+    {
+      "name": "gps_loading_track",
+      "value": "正在读取轨迹…"
+    },
+    {
+      "name": "gps_no_records_day",
+      "value": "当天无记录"
+    },
+    {
+      "name": "gps_map_unavailable",
+      "value": "地图暂不可用 · 轨迹示意"
+    },
+    {
+      "name": "gps_retry_map",
+      "value": "重试地图"
+    },
+    {
+      "name": "gps_map_loading",
+      "value": "地图加载中"
+    },
+    {
+      "name": "gps_fullscreen",
+      "value": "全屏"
+    },
+    {
+      "name": "gps_start_point",
+      "value": "起点"
+    },
+    {
+      "name": "gps_end_point",
+      "value": "终点"
+    },
+    {
+      "name": "gps_stationary",
+      "value": "停留"
+    },
+    {
+      "name": "gps_moving",
+      "value": "移动"
+    },
+    {
+      "name": "gps_not_moved",
+      "value": "未移动"
+    },
+    {
+      "name": "gps_sheet_position",
+      "value": "第 %1$d / %2$d 条定位记录"
+    },
+    {
+      "name": "gps_sheet_day_range",
+      "value": "%1$s · %2$s – %3$s"
+    },
+    {
+      "name": "gps_group_stationary",
+      "value": "%1$s · %2$s"
+    },
+    {
+      "name": "gps_group_stationary_duration",
+      "value": "%1$s · %2$s · %3$s"
+    },
+    {
+      "name": "gps_group_moving",
+      "value": "%1$s · %2$s · %3$s"
+    },
+    {
+      "name": "gps_altitude",
+      "value": "海拔 %1$dm"
+    },
+    {
+      "name": "gps_distance_meters",
+      "value": "%1$d 米"
+    },
+    {
+      "name": "gps_distance_kilometers",
+      "value": "%1$s 公里"
+    },
+    {
+      "name": "gps_distance_compact_meters",
+      "value": "%1$dm"
+    },
+    {
+      "name": "gps_distance_compact_kilometers",
+      "value": "%1$skm"
+    },
+    {
+      "name": "gps_zero_meters",
+      "value": "0 米"
+    },
+    {
+      "name": "gps_zero_distance_compact",
+      "value": "0m"
+    },
+    {
+      "name": "gps_duration_minutes",
+      "value": "%1$d 分钟"
+    },
+    {
+      "name": "gps_duration_hours",
+      "value": "%1$d 小时"
+    },
+    {
+      "name": "gps_duration_hours_minutes",
+      "value": "%1$d 小时 %2$d 分"
+    },
+    {
+      "name": "gps_duration_compact_minutes",
+      "value": "%1$d分"
+    },
+    {
+      "name": "gps_duration_compact_hours",
+      "value": "%1$d时"
+    },
+    {
+      "name": "gps_duration_compact_hours_minutes",
+      "value": "%1$d时%2$d分"
+    },
+    {
+      "name": "gps_zero_minutes",
+      "value": "0 分钟"
+    },
+    {
+      "name": "gps_zero_duration_compact",
+      "value": "0分"
+    },
+    {
+      "name": "viewer_updating",
+      "value": "更新中 %1$d/%2$d"
+    },
+    {
+      "name": "viewer_decoding",
+      "value": "正在解码缩略图…"
+    },
+    {
+      "name": "viewer_waiting_scan",
+      "value": "等待扫描…"
+    },
+    {
+      "name": "viewer_title_fallback",
+      "value": "走走拍拍"
+    },
+    {
+      "name": "download_title",
+      "value": "下载"
+    },
+    {
+      "name": "download_downloading",
+      "value": "下载中"
+    },
+    {
+      "name": "download_saving",
+      "value": "保存中"
+    },
+    {
+      "name": "download_failed",
+      "value": "失败"
+    },
+    {
+      "name": "new_camera_title",
+      "value": "发现新相机"
+    },
+    {
+      "name": "new_camera_message",
+      "value": "检测到新相机「%1$s」，是否启用缩略图缓存？\n\n启用后下次连接时将直接从本地加载缩略图，大幅提升加载速度。"
+    },
+    {
+      "name": "new_camera_no_cache",
+      "value": "不缓存"
+    },
+    {
+      "name": "new_camera_enable_cache",
+      "value": "启用缓存"
+    },
+    {
+      "name": "error_no_context",
+      "value": "无法获取应用上下文"
+    },
+    {
+      "name": "error_location_permission_denied",
+      "value": "未授予位置权限，请在系统设置中允许「走走拍拍」获取位置"
+    },
+    {
+      "name": "error_location_permission_failed",
+      "value": "位置权限申请失败: %1$s"
+    },
+    {
+      "name": "error_location_unsupported",
+      "value": "当前设备不支持定位能力"
+    },
+    {
+      "name": "error_location_check_failed",
+      "value": "定位状态检查失败: %1$s"
+    },
+    {
+      "name": "error_location_service_off",
+      "value": "系统位置服务未开启，请在控制中心打开「位置」后重试"
+    },
+    {
+      "name": "error_location_start_failed",
+      "value": "启动定位失败: %1$s"
+    },
+    {
+      "name": "error_mock_generation_failed",
+      "value": "模拟轨迹生成失败"
+    },
+    {
+      "name": "error_mock_no_location",
+      "value": "没有可用的当前位置"
+    },
+    {
+      "name": "error_location_current_failed",
+      "value": "获取当前位置失败: %1$s"
     }
   ]
 }

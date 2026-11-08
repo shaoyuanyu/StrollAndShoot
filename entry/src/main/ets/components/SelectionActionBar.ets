@@ -24,7 +24,7 @@ export struct SelectionActionBar {
         .fontSize(IconSize.Large)
         .fontColor([this.selectedCount > 0
           ? $r('app.color.text_primary') : $r('app.color.text_tertiary')])
-      Text('下载')
+      Text($r('app.string.download_title'))
         .fontSize(FontSize.Micro)
         .fontWeight(this.selectedCount > 0 ? FontWeight.Medium : FontWeight.Regular)
         .fontColor(this.selectedCount > 0

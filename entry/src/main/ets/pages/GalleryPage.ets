@@ -5,6 +5,7 @@ import { getExt, buildDisplayGroups } from '../utils/PhotoGroupUtil';
 import { GalleryZoom } from '../utils/GalleryZoom';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
+import { formatDateParts } from '../utils/DateTimeText';
 
 class FlatItem {
   kind: 'header' | 'row' | 'tail' = 'tail';
@@ -226,8 +227,8 @@ export struct GalleryPage {
   }
 
   /** 对齐官方图库的日期标题：今天 / 昨天 / 11月6日 / 2025年11月6日。 */
-  private dateHeaderLabel(key: string): string {
-    if (!key) return '未知日期';
+  private dateHeaderLabel(key: string): ResourceStr {
+    if (!key) return $r('app.string.gallery_unknown_date');
     const y = Number(key.substring(0, 4));
     const m = Number(key.substring(4, 6));
     const d = Number(key.substring(6, 8));
@@ -235,10 +236,10 @@ export struct GalleryPage {
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const target = new Date(y, m - 1, d);
     const diffDays = Math.round((todayStart.getTime() - target.getTime()) / 86400000);
-    if (diffDays === 0) return '今天';
-    if (diffDays === 1) return '昨天';
-    if (y === now.getFullYear()) return `${m}月${d}日`;
-    return `${y}年${m}月${d}日`;
+    if (diffDays === 0) return $r('app.string.date_today');
+    if (diffDays === 1) return $r('app.string.date_yesterday');
+    const text = formatDateParts(y, m, d, y !== now.getFullYear());
+    return text !== '' ? text : $r('app.string.gallery_unknown_date');
   }
 
   private getDownloadedSet(): Set<string> {
@@ -552,7 +553,7 @@ export struct GalleryPage {
           .color($r('app.color.primary'))
           .backgroundColor($r('app.color.divider'))
         Row() {
-          Text(this.svc.scanPhaseText || '正在扫描')
+          Text(this.svc.scanPhaseText || $r('app.string.gallery_scanning'))
             .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
           Blank()
           Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
@@ -600,12 +601,12 @@ export struct GalleryPage {
             .fontColor([$r('app.color.text_tertiary')])
           if (this.svc.scanning) {
             LoadingProgress().width(28).height(28).color($r('app.color.primary'))
-            Text('正在扫描相机…')
+            Text($r('app.string.gallery_scanning'))
               .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
           } else {
-            Text('连接相机以浏览照片')
+            Text($r('app.string.gallery_empty_hint'))
               .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
-            Text('在「相机」页搜索并连接 PTP 设备')
+            Text($r('app.string.gallery_empty_hint_sub'))
               .fontSize(FontSize.Caption).fontColor($r('app.color.text_tertiary'))
           }
         }

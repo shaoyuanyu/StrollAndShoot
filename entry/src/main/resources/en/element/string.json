@@ -1,0 +1,820 @@
+{
+  "string": [
+    {
+      "name": "common_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "common_delete",
+      "value": "Delete"
+    },
+    {
+      "name": "common_clear",
+      "value": "Clear"
+    },
+    {
+      "name": "common_select",
+      "value": "Select"
+    },
+    {
+      "name": "common_select_all",
+      "value": "Select All"
+    },
+    {
+      "name": "common_deselect_all",
+      "value": "Deselect All"
+    },
+    {
+      "name": "common_unknown",
+      "value": "Unknown"
+    },
+    {
+      "name": "common_none",
+      "value": "None"
+    },
+    {
+      "name": "common_all",
+      "value": "All"
+    },
+    {
+      "name": "tab_gallery",
+      "value": "Gallery"
+    },
+    {
+      "name": "tab_camera",
+      "value": "Camera"
+    },
+    {
+      "name": "tab_settings",
+      "value": "Settings"
+    },
+    {
+      "name": "module_desc",
+      "value": "Stroll & Shoot – Camera connection and photo import"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Stroll & Shoot"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Stroll & Shoot"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "Used to record photo locations and add geotags to photos"
+    },
+    {
+      "name": "gesture_permission_reason",
+      "value": "Used to detect which hand is holding the device so the download progress panel appears on the thumb-friendly side"
+    },
+    {
+      "name": "camera_status_ready",
+      "value": "Ready"
+    },
+    {
+      "name": "camera_status_searching",
+      "value": "Searching for USB camera…"
+    },
+    {
+      "name": "camera_status_no_camera",
+      "value": "No USB camera detected"
+    },
+    {
+      "name": "camera_status_connected",
+      "value": "Connected"
+    },
+    {
+      "name": "camera_status_found_camera",
+      "value": "Camera found: %1$s"
+    },
+    {
+      "name": "camera_status_connect_failed",
+      "value": "Failed to connect to camera"
+    },
+    {
+      "name": "camera_status_choose_cache",
+      "value": "Choose a cache setting…"
+    },
+    {
+      "name": "camera_status_loading_cache",
+      "value": "Loading cache…"
+    },
+    {
+      "name": "camera_status_scanning",
+      "value": "Scanning…"
+    },
+    {
+      "name": "camera_status_scan_error",
+      "value": "Scan failed"
+    },
+    {
+      "name": "camera_status_fetching_list",
+      "value": "Fetching photo list…"
+    },
+    {
+      "name": "camera_status_no_storage",
+      "value": "Connected (no storage)"
+    },
+    {
+      "name": "camera_status_walking_dirs",
+      "value": "Walking directories…"
+    },
+    {
+      "name": "camera_status_disconnected",
+      "value": "Disconnected"
+    },
+    {
+      "name": "camera_status_load_failed",
+      "value": "Failed to load photos"
+    },
+    {
+      "name": "camera_status_photo_count",
+      "value": "Connected · %1$s"
+    },
+    {
+      "name": "camera_phase_metadata",
+      "value": "Fetching metadata"
+    },
+    {
+      "name": "camera_phase_loading_metadata",
+      "value": "Fetching metadata…"
+    },
+    {
+      "name": "camera_phase_thumbnails",
+      "value": "Loading thumbnails"
+    },
+    {
+      "name": "camera_phase_loading_thumbnails",
+      "value": "Loading thumbnails…"
+    },
+    {
+      "name": "camera_scan_stats",
+      "value": "%1$s · Scan complete"
+    },
+    {
+      "name": "camera_scanning_fallback",
+      "value": "Scanning"
+    },
+    {
+      "name": "camera_empty_title",
+      "value": "No camera connected"
+    },
+    {
+      "name": "camera_empty_hint",
+      "value": "Connect the camera with a USB cable and select PTP mode.\nThen tap “Find Camera” in the top-right corner."
+    },
+    {
+      "name": "camera_info_brand",
+      "value": "Brand"
+    },
+    {
+      "name": "camera_info_model",
+      "value": "Model"
+    },
+    {
+      "name": "camera_info_serial",
+      "value": "Serial Number"
+    },
+    {
+      "name": "camera_info_firmware",
+      "value": "Firmware"
+    },
+    {
+      "name": "camera_info_usb_id",
+      "value": "USB ID"
+    },
+    {
+      "name": "camera_info_usb_serial",
+      "value": "USB Serial"
+    },
+    {
+      "name": "camera_info_cache_id",
+      "value": "Cache ID"
+    },
+    {
+      "name": "camera_info_photo_count",
+      "value": "Photos"
+    },
+    {
+      "name": "camera_info_connection",
+      "value": "Connection"
+    },
+    {
+      "name": "camera_connection_ptp",
+      "value": "USB PTP"
+    },
+    {
+      "name": "camera_action_full_scan",
+      "value": "Full Scan"
+    },
+    {
+      "name": "camera_action_full_scan_desc",
+      "value": "Ignore the cache and re-read metadata and thumbnails for all files"
+    },
+    {
+      "name": "camera_action_disconnect",
+      "value": "Disconnect"
+    },
+    {
+      "name": "camera_main_scanning",
+      "value": "Scanning"
+    },
+    {
+      "name": "camera_main_quick_scan",
+      "value": "Quick Scan"
+    },
+    {
+      "name": "camera_main_find",
+      "value": "Find Camera"
+    },
+    {
+      "name": "gallery_scanning",
+      "value": "Scanning camera…"
+    },
+    {
+      "name": "gallery_empty_hint",
+      "value": "Connect a camera to browse photos"
+    },
+    {
+      "name": "gallery_empty_hint_sub",
+      "value": "Find and connect a PTP device on the Camera tab"
+    },
+    {
+      "name": "gallery_unknown_date",
+      "value": "Unknown date"
+    },
+    {
+      "name": "date_today",
+      "value": "Today"
+    },
+    {
+      "name": "date_yesterday",
+      "value": "Yesterday"
+    },
+    {
+      "name": "gallery_select_title",
+      "value": "%1$d selected"
+    },
+    {
+      "name": "settings_section_appearance",
+      "value": "Appearance"
+    },
+    {
+      "name": "settings_section_gallery",
+      "value": "Gallery"
+    },
+    {
+      "name": "settings_section_location",
+      "value": "Location Records"
+    },
+    {
+      "name": "settings_section_storage",
+      "value": "Storage"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "About"
+    },
+    {
+      "name": "settings_section_debug",
+      "value": "Debug"
+    },
+    {
+      "name": "settings_dark_mode",
+      "value": "Dark Mode"
+    },
+    {
+      "name": "settings_dark_follow",
+      "value": "Follow System"
+    },
+    {
+      "name": "settings_dark_light",
+      "value": "Light"
+    },
+    {
+      "name": "settings_dark_dark",
+      "value": "Dark"
+    },
+    {
+      "name": "settings_language",
+      "value": "Language"
+    },
+    {
+      "name": "settings_language_follow_system",
+      "value": "Follow System"
+    },
+    {
+      "name": "settings_language_zh_hans",
+      "value": "简体中文"
+    },
+    {
+      "name": "settings_language_zh_hant",
+      "value": "繁體中文"
+    },
+    {
+      "name": "settings_language_en",
+      "value": "English"
+    },
+    {
+      "name": "settings_language_confirm_title",
+      "value": "Change Language"
+    },
+    {
+      "name": "settings_language_confirm_message",
+      "value": "The app will restart to apply the new language."
+    },
+    {
+      "name": "settings_language_restart",
+      "value": "Restart"
+    },
+    {
+      "name": "settings_language_failed",
+      "value": "Failed to change language"
+    },
+    {
+      "name": "settings_language_restart_failed",
+      "value": "Language saved. Reopen the app to apply it."
+    },
+    {
+      "name": "settings_columns",
+      "value": "Default Columns"
+    },
+    {
+      "name": "settings_columns_auto",
+      "value": "Auto"
+    },
+    {
+      "name": "settings_columns_n",
+      "value": "%1$d columns"
+    },
+    {
+      "name": "settings_display_mode",
+      "value": "Display Mode"
+    },
+    {
+      "name": "settings_display_content_first",
+      "value": "Content First"
+    },
+    {
+      "name": "settings_display_file_first",
+      "value": "File First"
+    },
+    {
+      "name": "settings_gps_records",
+      "value": "Location Records"
+    },
+    {
+      "name": "settings_gps_off_desc",
+      "value": "Location is not recorded while off"
+    },
+    {
+      "name": "settings_gps_waiting",
+      "value": "Waiting for a location…"
+    },
+    {
+      "name": "settings_gps_recording",
+      "value": "Recording location"
+    },
+    {
+      "name": "settings_gps_frequency",
+      "value": "Frequency"
+    },
+    {
+      "name": "settings_gps_precise",
+      "value": "Precise"
+    },
+    {
+      "name": "settings_gps_travel",
+      "value": "Travel"
+    },
+    {
+      "name": "settings_gps_daily",
+      "value": "Daily"
+    },
+    {
+      "name": "settings_gps_power",
+      "value": "Power Saving"
+    },
+    {
+      "name": "settings_gps_manage",
+      "value": "Manage Records"
+    },
+    {
+      "name": "settings_gps_record_count",
+      "value": "Recorded: %1$s"
+    },
+    {
+      "name": "settings_gps_trimmed",
+      "value": " · Removed by retention policy: %1$s"
+    },
+    {
+      "name": "settings_cache",
+      "value": "Thumbnail Cache"
+    },
+    {
+      "name": "settings_version",
+      "value": "Version"
+    },
+    {
+      "name": "settings_mock_gps",
+      "value": "Mock GPS Track"
+    },
+    {
+      "name": "settings_mock_gps_waiting",
+      "value": "Getting current location…"
+    },
+    {
+      "name": "settings_mock_gps_active",
+      "value": "Mocking · %1$s (today only; real records unchanged)"
+    },
+    {
+      "name": "settings_mock_gps_desc",
+      "value": "Inject a camera-shaped track starting at your current location. Today's view only; real records are unchanged."
+    },
+    {
+      "name": "settings_mock_camera",
+      "value": "Mock Camera"
+    },
+    {
+      "name": "settings_mock_camera_connected",
+      "value": "Mock camera connected · %1$s"
+    },
+    {
+      "name": "settings_mock_camera_desc",
+      "value": "Turn this on, then tap “Find Camera” on the Camera tab. A virtual PTP camera will connect and scan 38 synthetic photos."
+    },
+    {
+      "name": "settings_log_count",
+      "value": "%1$s"
+    },
+    {
+      "name": "settings_copy",
+      "value": "Copy"
+    },
+    {
+      "name": "settings_clear",
+      "value": "Clear"
+    },
+    {
+      "name": "settings_toast_gps_start_failed",
+      "value": "Failed to start location"
+    },
+    {
+      "name": "settings_toast_mock_cleared",
+      "value": "Mock track cleared"
+    },
+    {
+      "name": "settings_toast_mock_failed",
+      "value": "Failed to generate mock track"
+    },
+    {
+      "name": "settings_toast_mock_injected",
+      "value": "Injected camera-shaped track (%1$s)"
+    },
+    {
+      "name": "cache_title",
+      "value": "Cache Management"
+    },
+    {
+      "name": "cache_delete_title",
+      "value": "Delete Cache"
+    },
+    {
+      "name": "cache_delete_message",
+      "value": "Delete all cached thumbnails for “%1$s”? This cannot be undone."
+    },
+    {
+      "name": "cache_clear_all_title",
+      "value": "Clear All Caches"
+    },
+    {
+      "name": "cache_clear_all_message",
+      "value": "Delete cached thumbnails for all cameras? This cannot be undone."
+    },
+    {
+      "name": "cache_clear_all_button",
+      "value": "Clear All Caches"
+    },
+    {
+      "name": "cache_empty",
+      "value": "No Cached Cameras"
+    },
+    {
+      "name": "cache_empty_hint",
+      "value": "Cameras appear here after you connect them and enable caching"
+    },
+    {
+      "name": "cache_total_size",
+      "value": "Total %1$s"
+    },
+    {
+      "name": "cache_item_stats",
+      "value": "%1$s | %2$s | Last connected: %3$s"
+    },
+    {
+      "name": "gps_title",
+      "value": "Location Records"
+    },
+    {
+      "name": "gps_mock_badge",
+      "value": "Mock"
+    },
+    {
+      "name": "gps_record_count_zero",
+      "value": "0 location records"
+    },
+    {
+      "name": "gps_selected_days",
+      "value": "%1$s selected"
+    },
+    {
+      "name": "gps_delete_title",
+      "value": "Delete Location Records"
+    },
+    {
+      "name": "gps_delete_message",
+      "value": "Delete %1$s with %2$s?"
+    },
+    {
+      "name": "gps_clear_mock_title",
+      "value": "Clear Mock Track"
+    },
+    {
+      "name": "gps_clear_mock_message",
+      "value": "Clear mock tracks for %1$s? Real location records are unaffected."
+    },
+    {
+      "name": "gps_delete_mixed_message",
+      "value": "Delete %1$s with %2$s and clear mock tracks for %3$s?"
+    },
+    {
+      "name": "gps_empty_title",
+      "value": "No Location Records Yet"
+    },
+    {
+      "name": "gps_empty_hint",
+      "value": "Turn on Location Records in Settings. The app will record your location at the selected interval."
+    },
+    {
+      "name": "gps_total_records",
+      "value": "%1$s in total"
+    },
+    {
+      "name": "gps_delete_day_menu",
+      "value": "Delete This Day's Records"
+    },
+    {
+      "name": "gps_delete_day_title",
+      "value": "Delete This Day's Records"
+    },
+    {
+      "name": "gps_delete_day_message",
+      "value": "Delete %2$s for %1$s?"
+    },
+    {
+      "name": "gps_clear_mock_day_title",
+      "value": "Clear Mock Track"
+    },
+    {
+      "name": "gps_clear_mock_day_message",
+      "value": "Clear this day's mock track? Real location records are unaffected."
+    },
+    {
+      "name": "gps_track_details",
+      "value": "Track Details"
+    },
+    {
+      "name": "gps_mock_track",
+      "value": "Mock Track"
+    },
+    {
+      "name": "gps_back_to_full",
+      "value": "Back to Full Track"
+    },
+    {
+      "name": "gps_distance",
+      "value": "Distance"
+    },
+    {
+      "name": "gps_duration",
+      "value": "Duration"
+    },
+    {
+      "name": "gps_records_label",
+      "value": "Records"
+    },
+    {
+      "name": "gps_loading_track",
+      "value": "Loading track…"
+    },
+    {
+      "name": "gps_no_records_day",
+      "value": "No records for this day"
+    },
+    {
+      "name": "gps_map_unavailable",
+      "value": "Map unavailable · Track sketch"
+    },
+    {
+      "name": "gps_retry_map",
+      "value": "Retry Map"
+    },
+    {
+      "name": "gps_map_loading",
+      "value": "Loading map"
+    },
+    {
+      "name": "gps_fullscreen",
+      "value": "Full Screen"
+    },
+    {
+      "name": "gps_start_point",
+      "value": "Start"
+    },
+    {
+      "name": "gps_end_point",
+      "value": "End"
+    },
+    {
+      "name": "gps_stationary",
+      "value": "Stationary"
+    },
+    {
+      "name": "gps_moving",
+      "value": "Moving"
+    },
+    {
+      "name": "gps_not_moved",
+      "value": "Not moved"
+    },
+    {
+      "name": "gps_sheet_position",
+      "value": "Record %1$d of %2$d"
+    },
+    {
+      "name": "gps_sheet_day_range",
+      "value": "%1$s · %2$s – %3$s"
+    },
+    {
+      "name": "gps_group_stationary",
+      "value": "%1$s · %2$s"
+    },
+    {
+      "name": "gps_group_stationary_duration",
+      "value": "%1$s · %2$s · %3$s"
+    },
+    {
+      "name": "gps_group_moving",
+      "value": "%1$s · %2$s · %3$s"
+    },
+    {
+      "name": "gps_altitude",
+      "value": "Altitude %1$dm"
+    },
+    {
+      "name": "gps_distance_meters",
+      "value": "%1$d m"
+    },
+    {
+      "name": "gps_distance_kilometers",
+      "value": "%1$s km"
+    },
+    {
+      "name": "gps_distance_compact_meters",
+      "value": "%1$dm"
+    },
+    {
+      "name": "gps_distance_compact_kilometers",
+      "value": "%1$skm"
+    },
+    {
+      "name": "gps_zero_meters",
+      "value": "0 m"
+    },
+    {
+      "name": "gps_zero_distance_compact",
+      "value": "0m"
+    },
+    {
+      "name": "gps_duration_minutes",
+      "value": "%1$d min"
+    },
+    {
+      "name": "gps_duration_hours",
+      "value": "%1$d h"
+    },
+    {
+      "name": "gps_duration_hours_minutes",
+      "value": "%1$d h %2$d min"
+    },
+    {
+      "name": "gps_duration_compact_minutes",
+      "value": "%1$d min"
+    },
+    {
+      "name": "gps_duration_compact_hours",
+      "value": "%1$d h"
+    },
+    {
+      "name": "gps_duration_compact_hours_minutes",
+      "value": "%1$d h %2$d min"
+    },
+    {
+      "name": "gps_zero_minutes",
+      "value": "0 min"
+    },
+    {
+      "name": "gps_zero_duration_compact",
+      "value": "0 min"
+    },
+    {
+      "name": "viewer_updating",
+      "value": "Updating %1$d/%2$d"
+    },
+    {
+      "name": "viewer_decoding",
+      "value": "Decoding thumbnail…"
+    },
+    {
+      "name": "viewer_waiting_scan",
+      "value": "Waiting for scan…"
+    },
+    {
+      "name": "viewer_title_fallback",
+      "value": "Stroll & Shoot"
+    },
+    {
+      "name": "download_title",
+      "value": "Download"
+    },
+    {
+      "name": "download_downloading",
+      "value": "Importing"
+    },
+    {
+      "name": "download_saving",
+      "value": "Saving"
+    },
+    {
+      "name": "download_failed",
+      "value": "Failed"
+    },
+    {
+      "name": "new_camera_title",
+      "value": "New Camera Found"
+    },
+    {
+      "name": "new_camera_message",
+      "value": "A new camera “%1$s” was detected. Enable thumbnail caching?\n\nWhen enabled, thumbnails load from local storage on the next connection, which is much faster."
+    },
+    {
+      "name": "new_camera_no_cache",
+      "value": "Don't Cache"
+    },
+    {
+      "name": "new_camera_enable_cache",
+      "value": "Enable Cache"
+    },
+    {
+      "name": "error_no_context",
+      "value": "Unable to access the app context"
+    },
+    {
+      "name": "error_location_permission_denied",
+      "value": "Location permission not granted. Allow “Stroll & Shoot” to access your location in system settings."
+    },
+    {
+      "name": "error_location_permission_failed",
+      "value": "Failed to request location permission: %1$s"
+    },
+    {
+      "name": "error_location_unsupported",
+      "value": "This device does not support location"
+    },
+    {
+      "name": "error_location_check_failed",
+      "value": "Failed to check location status: %1$s"
+    },
+    {
+      "name": "error_location_service_off",
+      "value": "Location services are off. Turn on Location in Control Center and try again."
+    },
+    {
+      "name": "error_location_start_failed",
+      "value": "Failed to start location: %1$s"
+    },
+    {
+      "name": "error_mock_generation_failed",
+      "value": "Failed to generate mock track"
+    },
+    {
+      "name": "error_mock_no_location",
+      "value": "No current location available"
+    },
+    {
+      "name": "error_location_current_failed",
+      "value": "Failed to get current location: %1$s"
+    }
+  ]
+}

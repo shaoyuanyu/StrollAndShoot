@@ -2,6 +2,7 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { WindowUtils } from '../utils/WindowUtils';
+import { L10n } from '../utils/L10n';
 import { saveWindowSnapshot } from '../utils/WindowShot';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { CameraService } from '../services/CameraService';
@@ -38,6 +39,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    // service / utils 里的运行时文案通过资源管理器取，必须在加载页面前注入。
+    L10n.init(this.context.resourceManager);
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {

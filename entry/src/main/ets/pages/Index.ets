@@ -6,6 +6,7 @@ import { ExifGeotagger } from '../services/ExifGeotagger';
 import { SettingsStore } from '../model/SettingsStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { WindowUtils } from '../utils/WindowUtils';
+import { L10n } from '../utils/L10n';
 
 @Entry
 @ComponentV2
@@ -30,6 +31,8 @@ struct Index {
     // Initialize services
     if (hostCtx) {
       const ctx = hostCtx as common.UIAbilityContext;
+      // 预览器等入口没有走 EntryAbility.onCreate，这里补一次注入。
+      L10n.init(ctx.resourceManager);
       this.svc.initLogPath(ctx.filesDir);
       this.svc.initDownloadDir(ctx.filesDir, ctx);
       this.gpsRecorder.init(ctx.filesDir, this.svc.getLog(), ctx);

@@ -7,6 +7,8 @@
 import { PageHeader } from '../components/PageHeader';
 import { CameraCachePrefs, type CameraCachePref } from '../services/CameraCachePrefs';
 import { ThumbnailCache, type CacheInfo } from '../services/ThumbnailCache';
+import { L10n } from '../utils/L10n';
+import { formatIsoDate } from '../utils/DateTimeText';
 import { FontSize, IconSize, Radius } from '../utils/UiTokens';
 
 @Builder
@@ -61,15 +63,15 @@ export struct CacheManagementPage {
 
   deleteCameraCache(cameraId: string, friendlyName: string): void {
     this.getUIContext().showAlertDialog({
-      title: '删除缓存',
-      message: `删除「${friendlyName}」的所有缓存缩略图？此操作不可恢复。`,
+      title: $r('app.string.cache_delete_title'),
+      message: $r('app.string.cache_delete_message', friendlyName),
       autoCancel: true,
       primaryButton: {
-        value: '取消',
+        value: $r('app.string.common_cancel'),
         action: () => {}
       },
       secondaryButton: {
-        value: '删除',
+        value: $r('app.string.common_delete'),
         fontColor: $r('app.color.button_danger'),
         action: async () => {
           this.cachePrefs.delete(cameraId);
@@ -84,15 +86,15 @@ export struct CacheManagementPage {
     const total = this.cameras.length;
     if (total === 0) return;
     this.getUIContext().showAlertDialog({
-      title: '清除所有缓存',
-      message: `删除全部 ${total} 个相机的缩略图缓存？此操作不可恢复。`,
+      title: $r('app.string.cache_clear_all_title'),
+      message: $r('app.string.cache_clear_all_message'),
       autoCancel: true,
       primaryButton: {
-        value: '取消',
+        value: $r('app.string.common_cancel'),
         action: () => {}
       },
       secondaryButton: {
-        value: '全部清除',
+        value: $r('app.string.cache_clear_all_button'),
         fontColor: $r('app.color.button_danger'),
         action: async () => {
           const all = this.cachePrefs.getAll();
@@ -113,30 +115,24 @@ export struct CacheManagementPage {
   }
 
   formatDate(iso: string): string {
-    if (!iso) return '';
-    try {
-      const d = new Date(iso);
-      return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
-    } catch (_e) {
-      return iso.substring(0, 10);
-    }
+    return formatIsoDate(iso);
   }
 
   build() {
     NavDestination() {
       Column() {
         PageHeader({
-          title: '缓存管理',
-          subtitle: `共 ${this.formatSize(this.totalCacheSize)}`,
+          title: $r('app.string.cache_title'),
+          subtitle: $r('app.string.cache_total_size', this.formatSize(this.totalCacheSize)),
           onBack: () => { this.pageInfos.pop(); }
         })
 
       if (this.cameras.length === 0) {
         Column() {
-          Text('暂无缓存记录')
+          Text($r('app.string.cache_empty'))
             .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
             .margin({ top: 80 })
-          Text('连接相机并启用缓存后将在此显示')
+          Text($r('app.string.cache_empty_hint'))
             .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
             .margin({ top: 6 })
         }
@@ -153,7 +149,10 @@ export struct CacheManagementPage {
                       Text(ri.item.friendlyName)
                         .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
                         .fontColor($r('app.color.text_primary'))
-                      Text(`${ri.item.entryCount} 张 | ${this.formatSize(ri.item.cacheSizeBytes)} | 上次连接: ${this.formatDate(ri.item.lastSeen)}`)
+                      Text($r('app.string.cache_item_stats',
+                        L10n.plural('photo_count', ri.item.entryCount, ri.item.entryCount),
+                        this.formatSize(ri.item.cacheSizeBytes),
+                        this.formatDate(ri.item.lastSeen)))
                         .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
                         .margin({ top: 2 })
                     }
@@ -196,7 +195,7 @@ export struct CacheManagementPage {
 
       // Bottom: clear all button
       if (this.cameras.length > 0) {
-        Button('清除所有缓存')
+        Button($r('app.string.cache_clear_all_button'))
           .width('90%').height(44).margin({ bottom: 24, top: 8 })
           .fontSize(FontSize.Body)
           .fontColor($r('app.color.button_danger'))

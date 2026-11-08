@@ -15,6 +15,7 @@ import {
 import { RectInfoInPx } from '../utils/ComponentAttrUtils';
 import { WindowUtils } from '../utils/WindowUtils';
 import { FontSize, IconSize, Radius } from '../utils/UiTokens';
+import { formatCaptureTime } from '../utils/DateTimeText';
 
 const TAG = 'PhotoViewer';
 const DOMAIN = 0x0001;
@@ -544,9 +545,9 @@ struct MainImageView {
     return this.state !== null && this.state.fullPm !== null;
   }
 
-  private scanText(): string {
+  private scanText(): ResourceStr {
     if (this.svc.scanTotal <= 0) { return ''; }
-    return `更新中 ${this.svc.scanProgress}/${this.svc.scanTotal}`;
+    return $r('app.string.viewer_updating', this.svc.scanProgress, this.svc.scanTotal);
   }
 
   build() {
@@ -570,7 +571,8 @@ struct MainImageView {
               .fontSize(FontSize.Body).fontColor($r('app.color.viewer_text_secondary'))
               .maxLines(2).textAlign(TextAlign.Center)
             if (this.svc.scanning) {
-              Text(this.svc.lastDecodedHandle >= 0 ? '正在解码缩略图…' : '等待扫描…')
+              Text(this.svc.lastDecodedHandle >= 0
+                ? $r('app.string.viewer_decoding') : $r('app.string.viewer_waiting_scan'))
                 .fontSize(FontSize.Caption).fontColor($r('app.color.viewer_text_tertiary')).margin({ top: 8 })
             }
           }
@@ -638,13 +640,15 @@ function formatCaptureDate(entry: PhotoEntry): string {
   const raw = entry.captureDate;
   if (!raw || raw.length < 14) return '';
   // PTP format: YYYYMMDDThhmmss
-  const y = raw.substring(0, 4);
-  const mo = raw.substring(4, 6);
-  const d = raw.substring(6, 8);
-  const h = raw.substring(9, 11);
-  const mi = raw.substring(11, 13);
-  const s = raw.substring(13, 15);
-  return `${y}年${mo}月${d}日 ${h}:${mi}:${s}`;
+  const y = parseInt(raw.substring(0, 4), 10);
+  const mo = parseInt(raw.substring(4, 6), 10);
+  const d = parseInt(raw.substring(6, 8), 10);
+  const h = parseInt(raw.substring(9, 11), 10);
+  const mi = parseInt(raw.substring(11, 13), 10);
+  const s = parseInt(raw.substring(13, 15), 10);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d) ||
+    !Number.isFinite(h) || !Number.isFinite(mi) || !Number.isFinite(s)) return '';
+  return formatCaptureTime(y, mo, d, h, mi, s);
 }
 
 function formatFileSize(bytes: number): string {
@@ -1482,9 +1486,9 @@ export struct PhotoViewerScreen {
     return null;
   }
 
-  private getMainTitle(): string {
+  private getMainTitle(): ResourceStr {
     const p = this.currentPhoto();
-    if (!p) return '走走拍拍';
+    if (!p) return $r('app.string.viewer_title_fallback');
     return formatCaptureDate(p) || p.filename;
   }
 

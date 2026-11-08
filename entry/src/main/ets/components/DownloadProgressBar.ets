@@ -55,11 +55,13 @@ export struct DownloadProgressBar {
   }
 
   /** 环下那一行：只说当前在干什么，四态等长，浮岛高度不会跳。 */
-  private phaseText(): string {
-    if (this.progress.phase === 'complete') return `${this.progress.totalCount} 张`;
-    if (this.progress.phase === 'saving') return '保存中';
-    if (this.progress.phase === 'error') return '失败';
-    return '下载中';
+  private phaseText(): ResourceStr {
+    if (this.progress.phase === 'complete') {
+      return $r('app.plural.photo_count', this.progress.totalCount, this.progress.totalCount);
+    }
+    if (this.progress.phase === 'saving') return $r('app.string.download_saving');
+    if (this.progress.phase === 'error') return $r('app.string.download_failed');
+    return $r('app.string.download_downloading');
   }
 
   private running(): boolean {

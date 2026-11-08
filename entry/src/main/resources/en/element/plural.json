@@ -1,0 +1,69 @@
+{
+  "plural": [
+    {
+      "name": "photo_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d photo"
+        },
+        {
+          "quantity": "other",
+          "value": "%d photos"
+        }
+      ]
+    },
+    {
+      "name": "record_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d location record"
+        },
+        {
+          "quantity": "other",
+          "value": "%d location records"
+        }
+      ]
+    },
+    {
+      "name": "day_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d day"
+        },
+        {
+          "quantity": "other",
+          "value": "%d days"
+        }
+      ]
+    },
+    {
+      "name": "mock_record_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d mock record"
+        },
+        {
+          "quantity": "other",
+          "value": "%d mock records"
+        }
+      ]
+    },
+    {
+      "name": "log_line_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d log line"
+        },
+        {
+          "quantity": "other",
+          "value": "%d log lines"
+        }
+      ]
+    }
+  ]
+}

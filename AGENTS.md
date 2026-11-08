@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.18.1 / 1018001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.20.0 / 1020000 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -135,12 +135,12 @@ StrollAndShoot/
 │   │   │   ├── components/         # 复用组件
 │   │   │   ├── services/           # 单例服务
 │   │   │   ├── model/              # 数据结构与持久化设置
-│   │   │   ├── utils/              # 分组、画廊缩放的列数换算、组件坐标、窗口信息、标题栏尺寸
+│   │   │   ├── utils/              # 分组、缩放列数、窗口、标题栏、L10n、日期格式化
 │   │   │   ├── workers/            # ImageDecoder：TaskPool 并发函数（不是 Worker 线程）
 │   │   │   └── CustomTransition/   # 一镜到底转场：注册表 + PhotoMorph（共享照片层与几何换算）
 │   │   ├── debug/                  # 仅调试包生效的虚拟 PTP 相机（MockPtpDevice / MockPtpSession）
 │   │   ├── cpp/                    # NAPI 代码与 libentry.so 的类型声明
-│   │   └── resources/              # base 为浅色，dark 为深色
+│   │   └── resources/              # base 为浅色且简体中文，dark 为深色，en / zh_Hant 为语言资源
 │   ├── src/test/                   # Local Test：主机侧 ArkTS 单测，不需要设备
 │   ├── src/ohosTest/               # Instrument Test：装到设备/模拟器上跑（仍是模板用例）
 │   └── src/mock/                   # NAPI mock，让 Local Test 能跑依赖 libentry.so 的代码
@@ -267,8 +267,8 @@ devecocli check lint entry/src/main/ets
 ```json5
 {
   "app": {
-    "versionName": "1.18.1",  // 语义化版本字符串
-    "versionCode": 1018001    // 整数编码，用于程序化比较
+    "versionName": "1.20.0",  // 语义化版本字符串
+    "versionCode": 1020000    // 整数编码，用于程序化比较
   }
 }
 ```
@@ -291,12 +291,12 @@ devecocli check lint entry/src/main/ets
 6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`，并同步 `build-profile.json5` 里 `default` 的 `versionName`
 
 - `versionCode` / `versionName` 定义在 `AppScope/app.json5`：前者是整数（0~2147483647，只用于比较新旧，每次发布递增），后者是展示串，设置页「关于 → 版本」直接显示 `versionName`。
-- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.18.1{debug}`），发布包用纯数字（`1.17.0`）。
+- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.20.0{debug}`），发布包用纯数字（`1.17.0`）。
 - `versionName` 只接受两种形态 —— ① 只有数字和点；② 同时包含 `{` 和 `}`、字符集为数字/字母/下划线/点/花括号。打包工具的校验正则是 `^[0-9.]+|(?=.*[{])(?=.*[}])[0-9a-zA-Z_.{}]+$`，所以 `1.17.0-beta`、`1.17.0 Debug`、`v1.17.0` 都不合法。`{debug}` 会**原样**显示在「关于」页，这是预期行为。
 - 调试标记写在 **product 级** `build-profile.json5` 的 `products[]` 里，只配 `default`：
 
   ```json5
-  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.18.1{debug}", ... }
+  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.20.0{debug}", ... }
   ```
 
   `AppScope/app.json5` 被两个 product 共用，写在那里会让发布包也带上 `{debug}`；`dist` 不要配 `versionName`，沿用 `app.json5` 的干净版本号。反过来（`app.json5` 写 `{debug}`、`dist` 覆盖）一旦忘了覆盖，发布包就会带调试标记，不要这么干。
@@ -613,6 +613,7 @@ HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_kno
 | `services/AppLog.ets` | 内存环形缓冲 + `app_log.txt` 追加写 + hilog |
 | `pages/PtpHost.ets` | USB/PTP 会话层 |
 | `model/SettingsStore.ets` | 持久化设置 |
+| `model/LanguageStore.ets` | 应用语言偏好（单独 PersistenceV2 key，默认跟随系统） |
 | `model/PhotoEntry.ets` | `PhotoEntry`、`DownloadRecord`、`GpsRecord` 等数据结构 |
 
 缓存阶段、数据模型、GPS 与地图服务的细节见 [SERVICES.md](SERVICES.md)。
@@ -791,17 +792,37 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - 已删除的死 token：`bg_elevated`、`tab_bar_bg`、`list_bg`、`action_bar_bg`、`detail_bg`、`sheet_bg`。
 - 裸色只有两处例外，均因 API 不接受 `Resource`：`WindowUtils` 的系统栏颜色字符串、`GpsTrackSketch` 的 Canvas `fillStyle`。两处取值与 `color.json` 手工保持一致，改 token 时必须同步。
 
-#### 字符串资源
+#### 字符串资源与多语言
 
-`base/element/string.json` 有 37 条字符串，代码里没有任何引用，界面文案直接写在组件内部。
+界面文案一律走资源，不写死在组件里：
 
-如果要支持多语言，需要把组件内文案改成 `$r('app.string.*')`；目前不要假设这些资源已经生效。
+- `base/element/string.json` + `base/element/plural.json`：简体中文，也是未匹配语言时的兜底。
+- `en/element/*.json`：英文。语言限定词只写 `en`，覆盖 en-US / en-GB 等所有英语区域。
+- `zh_Hant/element/*.json`：繁体中文。只写文字限定词 `zh_Hant`，覆盖 zh-Hant-TW / zh-Hant-HK 等。
+- `AppScope/resources` 下的同名语言目录负责应用名 `app_name`；模块的 `EntryAbility_label`、权限申请理由也各有翻译。
+
+约定：
+
+- 静态 UI 文案用 `$r('app.string.xxx')`；带占位符用 `$r('app.string.xxx', arg1, arg2)`；数量用 `$r('app.plural.xxx', count, count)`。
+- service / utils 里运行时拼出来的状态、错误与单位文案走 `utils/L10n.ets`：`L10n.tr(name, ...args)` / `L10n.plural(name, count, ...args)`。资源管理器在 `EntryAbility.onCreate` 注入，`Index.aboutToAppear` 再补一次（预览器不走 Ability）。
+- 日期与月份名用 `utils/DateTimeText.ets` 的 `Intl.DateTimeFormat`，不要在资源里维护 12 个月份；「今天 / 昨天」仍走资源。
+- 调试日志（Settings 页的日志框）保持中文，属于开发诊断信息，不做翻译。
+- 新增文案必须同时补 `base` / `en` / `zh_Hant` 三份；占位符用 `%1$s` / `%2$d` 形式，便于翻译调整语序。
+
+应用内语言切换在「设置 → 外观 → 语言」：
+
+- 选项：跟随系统（默认）/ 简体中文 / 繁體中文 / English。
+- 偏好存在 `model/LanguageStore.ets`，**不要**把 `appLanguage` 追加到 `SettingsStore`：PersistenceV2 恢复旧对象时不会补新增的 `@Trace` 字段。
+- 切换时调用 `i18n.System.setAppPreferredLanguage('zh-Hans' | 'zh-Hant' | 'en')`；选「跟随系统」传 `'default'` 清空偏好。
+- 官方约束：应用偏好语言在冷启动时加载。设置成功后用 `ApplicationContext.restartApp(want)` 重启进程；`want` 用当前 `UIAbilityContext.abilityInfo` 的 bundle / module / ability 构造，不要写死包名。
+- 切换前弹确认框；取消（按钮或点遮罩）必须把 `LanguageStore.appLanguage` 退回原值，避免 Select 显示与实际语言不一致。
 
 ### 已核对官方结论
 
 - USB 单次 `bulkTransfer` 小于 200KB：官方 `usbManager` 参考里没有写这个数值，属于本项目实测，改动缓冲区必须在真机验证。
 - `@SyncMonitor`：官方文档写明从 API 23 开始支持，`@Monitor` 从 API 12 开始支持。
 - `Repeat`：`LazyForEach` 的官方迁移写法是 `Repeat(data).virtualScroll()`，没有 `RepeatForEach` 这个组件。
+- 应用偏好语言：`i18n.System.setAppPreferredLanguage()` 设置应用语言，传 `'default'` 恢复跟随系统；官方写明资源在**冷启动**时按偏好语言加载，所以本项目设置后用 `ApplicationContext.restartApp()` 重启进程。`getAppPreferredLanguage()` 用于读取偏好。
 - EXIF Orientation：官方 FAQ 给出 8 个取值与字符串表示的对应关系（1 = `Top-left`，……，8 = `Left-bottom`），读取时返回字符串，未写入该字段的图片按不旋转处理。
 - GPS 经纬度：官方把 `GPSLatitude` / `GPSLongitude` 定义为三个 RATIONAL 值（度、分、秒），典型写法是 `dd/1,mm/1,ss/1`；本项目写入的是逗号分隔的度分秒（如 `43,49,23.16`），写完读回验证。
 - 图片编码默认不保留 EXIF：`PackingOption.needsPackProperties` 默认 false。缩略图缓存里保存的编码结果因此没有 EXIF，方向信息另外记在 manifest 里。
@@ -815,9 +836,9 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 ## 当前进度
 
-已完成：PTP/USB 通信、画廊与多选、预览器与一镜到底转场、缩略图缓存与快速扫描、批量下载与 EXIF/GPS、GPS 连续定位与轨迹地图、深色模式、缓存管理、V2 状态管理迁移、UI 令牌化与全局统一。
+已完成：PTP/USB 通信、画廊与多选、预览器与一镜到底转场、缩略图缓存与快速扫描、批量下载与 EXIF/GPS、GPS 连续定位与轨迹地图、深色模式、缓存管理、V2 状态管理迁移、UI 令牌化与全局统一、简体中文 / 繁体中文 / 英文多语言、应用内语言切换。
 
-未实现：边框、水印、LUT、滤镜、美颜（只有 `string.json` 里的两条占位字符串）。
+未实现：边框、水印、LUT、滤镜、美颜。
 
 ## 开发流程
 

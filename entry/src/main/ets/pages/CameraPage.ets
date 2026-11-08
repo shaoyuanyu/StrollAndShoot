@@ -29,13 +29,15 @@ export struct CameraPage {
         Row()
           .width(8).height(8).borderRadius(pillRadius(8))
           .backgroundColor(this.statusColor())
-        Text(this.svc.connected ? '已连接' : (this.svc.statusText || '未连接相机'))
+        Text(this.svc.connected
+          ? $r('app.string.camera_status_connected')
+          : (this.svc.statusText || $r('app.string.camera_empty_title')))
           .fontSize(FontSize.CardTitle)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
         Blank()
         if (this.svc.connected && this.svc.photoCount > 0) {
-          Text(`${this.svc.photoCount} 张`)
+          Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
             .fontSize(FontSize.Caption)
             .fontColor($r('app.color.primary'))
             .padding({ left: 10, right: 10, top: 4, bottom: 4 })
@@ -73,7 +75,7 @@ export struct CameraPage {
             .color($r('app.color.primary'))
             .backgroundColor($r('app.color.divider'))
           Row() {
-            Text(this.svc.scanPhaseText || '正在扫描')
+            Text(this.svc.scanPhaseText || $r('app.string.camera_scanning_fallback'))
               .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
             Blank()
             Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
@@ -104,12 +106,12 @@ export struct CameraPage {
       SymbolGlyph($r('sys.symbol.camera'))
         .fontSize(IconSize.Empty)
         .fontColor([$r('app.color.text_tertiary')])
-      Text('未连接相机')
+      Text($r('app.string.camera_empty_title'))
         .fontSize(FontSize.CardTitle)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .margin({ top: 2 })
-      Text('用 USB 数据线连接相机，并选择 PTP 传输模式\n然后点右上角的「搜索相机」')
+      Text($r('app.string.camera_empty_hint'))
         .fontSize(FontSize.Caption)
         .lineHeight(20)
         .textAlign(TextAlign.Center)
@@ -124,15 +126,15 @@ export struct CameraPage {
   @Builder
   DeviceCard() {
     Column() {
-      CameraInfoRow({ label: '品牌', value: this.svc.deviceManufacturer || '未知' })
-      CameraInfoRow({ label: '型号', value: this.svc.cameraName || '未知' })
-      CameraInfoRow({ label: '序列号', value: this.svc.deviceSerialNumber || '无' })
-      CameraInfoRow({ label: '固件版本', value: this.svc.deviceVersion || '未知' })
-      CameraInfoRow({ label: 'USB 识别码', value: this.svc.usbVidPid || '未知' })
-      CameraInfoRow({ label: 'USB 序列号', value: this.svc.usbSerialNumber || '无' })
-      CameraInfoRow({ label: '缓存标识', value: this.svc.cameraIdentity || '无' })
-      CameraInfoRow({ label: '照片数量', value: `${this.svc.photoCount}` })
-      CameraInfoRow({ label: '连接方式', value: 'USB PTP' })
+      CameraInfoRow({ label: $r('app.string.camera_info_brand'), value: this.svc.deviceManufacturer || $r('app.string.common_unknown') })
+      CameraInfoRow({ label: $r('app.string.camera_info_model'), value: this.svc.cameraName || $r('app.string.common_unknown') })
+      CameraInfoRow({ label: $r('app.string.camera_info_serial'), value: this.svc.deviceSerialNumber || $r('app.string.common_none') })
+      CameraInfoRow({ label: $r('app.string.camera_info_firmware'), value: this.svc.deviceVersion || $r('app.string.common_unknown') })
+      CameraInfoRow({ label: $r('app.string.camera_info_usb_id'), value: this.svc.usbVidPid || $r('app.string.common_unknown') })
+      CameraInfoRow({ label: $r('app.string.camera_info_usb_serial'), value: this.svc.usbSerialNumber || $r('app.string.common_none') })
+      CameraInfoRow({ label: $r('app.string.camera_info_cache_id'), value: this.svc.cameraIdentity || $r('app.string.common_none') })
+      CameraInfoRow({ label: $r('app.string.camera_info_photo_count'), value: `${this.svc.photoCount}` })
+      CameraInfoRow({ label: $r('app.string.camera_info_connection'), value: $r('app.string.camera_connection_ptp') })
     }
     .width('100%')
     .padding({ left: 16, right: 16 })
@@ -145,13 +147,13 @@ export struct CameraPage {
   ActionsCard() {
     Column() {
       CameraActionRow({
-        label: '全量扫描',
-        subtitle: '忽略缓存，重新读取所有文件的元数据与缩略图',
+        label: $r('app.string.camera_action_full_scan'),
+        subtitle: $r('app.string.camera_action_full_scan_desc'),
         disabled: this.svc.scanning,
         onTap: () => { this.onScan(false); }
       })
       CameraActionRow({
-        label: '断开连接',
+        label: $r('app.string.camera_action_disconnect'),
         danger: true,
         last: true,
         onTap: () => { this.onDisconnect(); }
@@ -190,8 +192,8 @@ export struct CameraPage {
 /** 设备信息行。 */
 @ComponentV2
 struct CameraInfoRow {
-  @Param label: string = '';
-  @Param value: string = '';
+  @Param label: ResourceStr = '';
+  @Param value: ResourceStr = '';
 
   build() {
     Row() {
@@ -217,8 +219,8 @@ struct CameraInfoRow {
 /** 设备卡里的操作行：普通操作带右箭头，危险操作用红字。 */
 @ComponentV2
 struct CameraActionRow {
-  @Param label: string = '';
-  @Param subtitle: string = '';
+  @Param label: ResourceStr = '';
+  @Param subtitle: ResourceStr = '';
   @Param danger: boolean = false;
   @Param disabled: boolean = false;
   @Param last: boolean = false;

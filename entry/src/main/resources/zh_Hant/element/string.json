@@ -1,0 +1,820 @@
+{
+  "string": [
+    {
+      "name": "common_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "common_delete",
+      "value": "刪除"
+    },
+    {
+      "name": "common_clear",
+      "value": "清除"
+    },
+    {
+      "name": "common_select",
+      "value": "選擇"
+    },
+    {
+      "name": "common_select_all",
+      "value": "全選"
+    },
+    {
+      "name": "common_deselect_all",
+      "value": "取消全選"
+    },
+    {
+      "name": "common_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "common_none",
+      "value": "無"
+    },
+    {
+      "name": "common_all",
+      "value": "全部"
+    },
+    {
+      "name": "tab_gallery",
+      "value": "畫廊"
+    },
+    {
+      "name": "tab_camera",
+      "value": "相機"
+    },
+    {
+      "name": "tab_settings",
+      "value": "設定"
+    },
+    {
+      "name": "module_desc",
+      "value": "走走拍拍 - 相機連接與照片匯入"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "走走拍拍主程式"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "走走拍拍"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "用於記錄拍照位置，為照片加入地理標記"
+    },
+    {
+      "name": "gesture_permission_reason",
+      "value": "用於辨識握持手，讓下載進度浮島跟隨到拇指易觸及的一側"
+    },
+    {
+      "name": "camera_status_ready",
+      "value": "就緒"
+    },
+    {
+      "name": "camera_status_searching",
+      "value": "正在搜尋 USB 相機…"
+    },
+    {
+      "name": "camera_status_no_camera",
+      "value": "未偵測到 USB 相機"
+    },
+    {
+      "name": "camera_status_connected",
+      "value": "已連線"
+    },
+    {
+      "name": "camera_status_found_camera",
+      "value": "發現相機：%1$s"
+    },
+    {
+      "name": "camera_status_connect_failed",
+      "value": "連接相機失敗"
+    },
+    {
+      "name": "camera_status_choose_cache",
+      "value": "請選擇快取設定…"
+    },
+    {
+      "name": "camera_status_loading_cache",
+      "value": "正在載入快取…"
+    },
+    {
+      "name": "camera_status_scanning",
+      "value": "正在掃描…"
+    },
+    {
+      "name": "camera_status_scan_error",
+      "value": "掃描出錯"
+    },
+    {
+      "name": "camera_status_fetching_list",
+      "value": "正在取得照片清單…"
+    },
+    {
+      "name": "camera_status_no_storage",
+      "value": "已連線（無儲存裝置）"
+    },
+    {
+      "name": "camera_status_walking_dirs",
+      "value": "正在遍歷目錄…"
+    },
+    {
+      "name": "camera_status_disconnected",
+      "value": "已中斷連線"
+    },
+    {
+      "name": "camera_status_load_failed",
+      "value": "載入照片失敗"
+    },
+    {
+      "name": "camera_status_photo_count",
+      "value": "已連線 - %1$s"
+    },
+    {
+      "name": "camera_phase_metadata",
+      "value": "取得中繼資料"
+    },
+    {
+      "name": "camera_phase_loading_metadata",
+      "value": "正在取得中繼資料…"
+    },
+    {
+      "name": "camera_phase_thumbnails",
+      "value": "載入縮圖"
+    },
+    {
+      "name": "camera_phase_loading_thumbnails",
+      "value": "正在載入縮圖…"
+    },
+    {
+      "name": "camera_scan_stats",
+      "value": "照片 %1$s | 掃描完成"
+    },
+    {
+      "name": "camera_scanning_fallback",
+      "value": "正在掃描"
+    },
+    {
+      "name": "camera_empty_title",
+      "value": "未連接相機"
+    },
+    {
+      "name": "camera_empty_hint",
+      "value": "用 USB 傳輸線連接相機，並選擇 PTP 傳輸模式\n然後點右上角的「搜尋相機」"
+    },
+    {
+      "name": "camera_info_brand",
+      "value": "品牌"
+    },
+    {
+      "name": "camera_info_model",
+      "value": "型號"
+    },
+    {
+      "name": "camera_info_serial",
+      "value": "序號"
+    },
+    {
+      "name": "camera_info_firmware",
+      "value": "韌體版本"
+    },
+    {
+      "name": "camera_info_usb_id",
+      "value": "USB 識別碼"
+    },
+    {
+      "name": "camera_info_usb_serial",
+      "value": "USB 序號"
+    },
+    {
+      "name": "camera_info_cache_id",
+      "value": "快取識別碼"
+    },
+    {
+      "name": "camera_info_photo_count",
+      "value": "照片數量"
+    },
+    {
+      "name": "camera_info_connection",
+      "value": "連線方式"
+    },
+    {
+      "name": "camera_connection_ptp",
+      "value": "USB PTP"
+    },
+    {
+      "name": "camera_action_full_scan",
+      "value": "完整掃描"
+    },
+    {
+      "name": "camera_action_full_scan_desc",
+      "value": "忽略快取，重新讀取所有檔案的中繼資料與縮圖"
+    },
+    {
+      "name": "camera_action_disconnect",
+      "value": "中斷連線"
+    },
+    {
+      "name": "camera_main_scanning",
+      "value": "掃描中"
+    },
+    {
+      "name": "camera_main_quick_scan",
+      "value": "快速掃描"
+    },
+    {
+      "name": "camera_main_find",
+      "value": "搜尋相機"
+    },
+    {
+      "name": "gallery_scanning",
+      "value": "正在掃描相機…"
+    },
+    {
+      "name": "gallery_empty_hint",
+      "value": "連接相機以瀏覽照片"
+    },
+    {
+      "name": "gallery_empty_hint_sub",
+      "value": "在「相機」頁搜尋並連接 PTP 裝置"
+    },
+    {
+      "name": "gallery_unknown_date",
+      "value": "未知日期"
+    },
+    {
+      "name": "date_today",
+      "value": "今天"
+    },
+    {
+      "name": "date_yesterday",
+      "value": "昨天"
+    },
+    {
+      "name": "gallery_select_title",
+      "value": "已選擇 %1$d 項"
+    },
+    {
+      "name": "settings_section_appearance",
+      "value": "外觀"
+    },
+    {
+      "name": "settings_section_gallery",
+      "value": "畫廊"
+    },
+    {
+      "name": "settings_section_location",
+      "value": "定位記錄"
+    },
+    {
+      "name": "settings_section_storage",
+      "value": "儲存空間"
+    },
+    {
+      "name": "settings_section_about",
+      "value": "關於"
+    },
+    {
+      "name": "settings_section_debug",
+      "value": "偵錯"
+    },
+    {
+      "name": "settings_dark_mode",
+      "value": "深色模式"
+    },
+    {
+      "name": "settings_dark_follow",
+      "value": "跟隨系統"
+    },
+    {
+      "name": "settings_dark_light",
+      "value": "淺色"
+    },
+    {
+      "name": "settings_dark_dark",
+      "value": "深色"
+    },
+    {
+      "name": "settings_language",
+      "value": "語言"
+    },
+    {
+      "name": "settings_language_follow_system",
+      "value": "跟隨系統"
+    },
+    {
+      "name": "settings_language_zh_hans",
+      "value": "簡體中文"
+    },
+    {
+      "name": "settings_language_zh_hant",
+      "value": "繁體中文"
+    },
+    {
+      "name": "settings_language_en",
+      "value": "English"
+    },
+    {
+      "name": "settings_language_confirm_title",
+      "value": "切換語言"
+    },
+    {
+      "name": "settings_language_confirm_message",
+      "value": "應用程式將重新啟動以套用新的語言設定。"
+    },
+    {
+      "name": "settings_language_restart",
+      "value": "重新啟動"
+    },
+    {
+      "name": "settings_language_failed",
+      "value": "語言切換失敗"
+    },
+    {
+      "name": "settings_language_restart_failed",
+      "value": "語言已儲存，重新開啟應用程式後生效"
+    },
+    {
+      "name": "settings_columns",
+      "value": "預設欄數"
+    },
+    {
+      "name": "settings_columns_auto",
+      "value": "自動"
+    },
+    {
+      "name": "settings_columns_n",
+      "value": "%1$d 欄"
+    },
+    {
+      "name": "settings_display_mode",
+      "value": "顯示模式"
+    },
+    {
+      "name": "settings_display_content_first",
+      "value": "內容優先"
+    },
+    {
+      "name": "settings_display_file_first",
+      "value": "檔案優先"
+    },
+    {
+      "name": "settings_gps_records",
+      "value": "定位記錄"
+    },
+    {
+      "name": "settings_gps_off_desc",
+      "value": "關閉時不會記錄位置"
+    },
+    {
+      "name": "settings_gps_waiting",
+      "value": "正在等待定位…"
+    },
+    {
+      "name": "settings_gps_recording",
+      "value": "正在記錄位置"
+    },
+    {
+      "name": "settings_gps_frequency",
+      "value": "記錄頻率"
+    },
+    {
+      "name": "settings_gps_precise",
+      "value": "精確"
+    },
+    {
+      "name": "settings_gps_travel",
+      "value": "出行"
+    },
+    {
+      "name": "settings_gps_daily",
+      "value": "日常"
+    },
+    {
+      "name": "settings_gps_power",
+      "value": "省電"
+    },
+    {
+      "name": "settings_gps_manage",
+      "value": "定位記錄管理"
+    },
+    {
+      "name": "settings_gps_record_count",
+      "value": "已記錄 %1$s"
+    },
+    {
+      "name": "settings_gps_trimmed",
+      "value": " · 已依保留策略清理 %1$s"
+    },
+    {
+      "name": "settings_cache",
+      "value": "縮圖快取"
+    },
+    {
+      "name": "settings_version",
+      "value": "版本"
+    },
+    {
+      "name": "settings_mock_gps",
+      "value": "模擬 GPS 軌跡"
+    },
+    {
+      "name": "settings_mock_gps_waiting",
+      "value": "正在取得目前位置…"
+    },
+    {
+      "name": "settings_mock_gps_active",
+      "value": "模擬中 · %1$s（僅今日顯示，不改真實記錄）"
+    },
+    {
+      "name": "settings_mock_gps_desc",
+      "value": "以目前位置為起點注入一個相機圖案，僅影響今日顯示，不改真實記錄"
+    },
+    {
+      "name": "settings_mock_camera",
+      "value": "模擬相機裝置"
+    },
+    {
+      "name": "settings_mock_camera_connected",
+      "value": "已連線虛擬相機，共 %1$s"
+    },
+    {
+      "name": "settings_mock_camera_desc",
+      "value": "開啟後到「相機」頁點右上角的「搜尋相機」，會連上一台虛擬 PTP 相機並掃描 38 張合成照片"
+    },
+    {
+      "name": "settings_log_count",
+      "value": "%1$s"
+    },
+    {
+      "name": "settings_copy",
+      "value": "複製"
+    },
+    {
+      "name": "settings_clear",
+      "value": "清除"
+    },
+    {
+      "name": "settings_toast_gps_start_failed",
+      "value": "定位啟動失敗"
+    },
+    {
+      "name": "settings_toast_mock_cleared",
+      "value": "模擬軌跡已清除"
+    },
+    {
+      "name": "settings_toast_mock_failed",
+      "value": "模擬軌跡產生失敗"
+    },
+    {
+      "name": "settings_toast_mock_injected",
+      "value": "已注入相機圖案軌跡（%1$s）"
+    },
+    {
+      "name": "cache_title",
+      "value": "快取管理"
+    },
+    {
+      "name": "cache_delete_title",
+      "value": "刪除快取"
+    },
+    {
+      "name": "cache_delete_message",
+      "value": "刪除「%1$s」的所有快取縮圖？此操作無法復原。"
+    },
+    {
+      "name": "cache_clear_all_title",
+      "value": "清除所有快取"
+    },
+    {
+      "name": "cache_clear_all_message",
+      "value": "刪除全部相機的縮圖快取？此操作無法復原。"
+    },
+    {
+      "name": "cache_clear_all_button",
+      "value": "清除所有快取"
+    },
+    {
+      "name": "cache_empty",
+      "value": "暫無快取記錄"
+    },
+    {
+      "name": "cache_empty_hint",
+      "value": "連接相機並啟用快取後將在此顯示"
+    },
+    {
+      "name": "cache_total_size",
+      "value": "共 %1$s"
+    },
+    {
+      "name": "cache_item_stats",
+      "value": "%1$s | %2$s | 上次連線：%3$s"
+    },
+    {
+      "name": "gps_title",
+      "value": "定位記錄"
+    },
+    {
+      "name": "gps_mock_badge",
+      "value": "模擬"
+    },
+    {
+      "name": "gps_record_count_zero",
+      "value": "0 條定位記錄"
+    },
+    {
+      "name": "gps_selected_days",
+      "value": "已選 %1$s"
+    },
+    {
+      "name": "gps_delete_title",
+      "value": "刪除定位記錄"
+    },
+    {
+      "name": "gps_delete_message",
+      "value": "刪除 %1$s，共 %2$s？"
+    },
+    {
+      "name": "gps_clear_mock_title",
+      "value": "清除模擬軌跡"
+    },
+    {
+      "name": "gps_clear_mock_message",
+      "value": "清除 %1$s 的模擬軌跡？真實定位記錄不受影響。"
+    },
+    {
+      "name": "gps_delete_mixed_message",
+      "value": "刪除 %1$s 的 %2$s，並清除 %3$s 的模擬軌跡？"
+    },
+    {
+      "name": "gps_empty_title",
+      "value": "尚無定位記錄"
+    },
+    {
+      "name": "gps_empty_hint",
+      "value": "在設定頁開啟「定位記錄」後，應用程式會依設定的頻率記錄定位"
+    },
+    {
+      "name": "gps_total_records",
+      "value": "共 %1$s"
+    },
+    {
+      "name": "gps_delete_day_menu",
+      "value": "刪除當天記錄"
+    },
+    {
+      "name": "gps_delete_day_title",
+      "value": "刪除當天記錄"
+    },
+    {
+      "name": "gps_delete_day_message",
+      "value": "刪除 %1$s 的 %2$s？"
+    },
+    {
+      "name": "gps_clear_mock_day_title",
+      "value": "清除模擬軌跡"
+    },
+    {
+      "name": "gps_clear_mock_day_message",
+      "value": "只清除這一天的模擬軌跡，真實定位記錄不受影響。"
+    },
+    {
+      "name": "gps_track_details",
+      "value": "軌跡明細"
+    },
+    {
+      "name": "gps_mock_track",
+      "value": "模擬軌跡"
+    },
+    {
+      "name": "gps_back_to_full",
+      "value": "回到全程"
+    },
+    {
+      "name": "gps_distance",
+      "value": "距離"
+    },
+    {
+      "name": "gps_duration",
+      "value": "時長"
+    },
+    {
+      "name": "gps_records_label",
+      "value": "定位記錄"
+    },
+    {
+      "name": "gps_loading_track",
+      "value": "正在讀取軌跡…"
+    },
+    {
+      "name": "gps_no_records_day",
+      "value": "當天無記錄"
+    },
+    {
+      "name": "gps_map_unavailable",
+      "value": "地圖暫不可用 · 軌跡示意"
+    },
+    {
+      "name": "gps_retry_map",
+      "value": "重試地圖"
+    },
+    {
+      "name": "gps_map_loading",
+      "value": "地圖載入中"
+    },
+    {
+      "name": "gps_fullscreen",
+      "value": "全螢幕"
+    },
+    {
+      "name": "gps_start_point",
+      "value": "起點"
+    },
+    {
+      "name": "gps_end_point",
+      "value": "終點"
+    },
+    {
+      "name": "gps_stationary",
+      "value": "停留"
+    },
+    {
+      "name": "gps_moving",
+      "value": "移動"
+    },
+    {
+      "name": "gps_not_moved",
+      "value": "未移動"
+    },
+    {
+      "name": "gps_sheet_position",
+      "value": "第 %1$d / %2$d 條定位記錄"
+    },
+    {
+      "name": "gps_sheet_day_range",
+      "value": "%1$s · %2$s – %3$s"
+    },
+    {
+      "name": "gps_group_stationary",
+      "value": "%1$s · %2$s"
+    },
+    {
+      "name": "gps_group_stationary_duration",
+      "value": "%1$s · %2$s · %3$s"
+    },
+    {
+      "name": "gps_group_moving",
+      "value": "%1$s · %2$s · %3$s"
+    },
+    {
+      "name": "gps_altitude",
+      "value": "海拔 %1$dm"
+    },
+    {
+      "name": "gps_distance_meters",
+      "value": "%1$d 公尺"
+    },
+    {
+      "name": "gps_distance_kilometers",
+      "value": "%1$s 公里"
+    },
+    {
+      "name": "gps_distance_compact_meters",
+      "value": "%1$dm"
+    },
+    {
+      "name": "gps_distance_compact_kilometers",
+      "value": "%1$skm"
+    },
+    {
+      "name": "gps_zero_meters",
+      "value": "0 公尺"
+    },
+    {
+      "name": "gps_zero_distance_compact",
+      "value": "0m"
+    },
+    {
+      "name": "gps_duration_minutes",
+      "value": "%1$d 分鐘"
+    },
+    {
+      "name": "gps_duration_hours",
+      "value": "%1$d 小時"
+    },
+    {
+      "name": "gps_duration_hours_minutes",
+      "value": "%1$d 小時 %2$d 分"
+    },
+    {
+      "name": "gps_duration_compact_minutes",
+      "value": "%1$d分"
+    },
+    {
+      "name": "gps_duration_compact_hours",
+      "value": "%1$d時"
+    },
+    {
+      "name": "gps_duration_compact_hours_minutes",
+      "value": "%1$d時%2$d分"
+    },
+    {
+      "name": "gps_zero_minutes",
+      "value": "0 分鐘"
+    },
+    {
+      "name": "gps_zero_duration_compact",
+      "value": "0分"
+    },
+    {
+      "name": "viewer_updating",
+      "value": "更新中 %1$d/%2$d"
+    },
+    {
+      "name": "viewer_decoding",
+      "value": "正在解碼縮圖…"
+    },
+    {
+      "name": "viewer_waiting_scan",
+      "value": "等待掃描…"
+    },
+    {
+      "name": "viewer_title_fallback",
+      "value": "走走拍拍"
+    },
+    {
+      "name": "download_title",
+      "value": "下載"
+    },
+    {
+      "name": "download_downloading",
+      "value": "下載中"
+    },
+    {
+      "name": "download_saving",
+      "value": "儲存中"
+    },
+    {
+      "name": "download_failed",
+      "value": "失敗"
+    },
+    {
+      "name": "new_camera_title",
+      "value": "發現新相機"
+    },
+    {
+      "name": "new_camera_message",
+      "value": "偵測到新相機「%1$s」，是否啟用縮圖快取？\n\n啟用後下次連線時將直接從本機載入縮圖，大幅提升載入速度。"
+    },
+    {
+      "name": "new_camera_no_cache",
+      "value": "不快取"
+    },
+    {
+      "name": "new_camera_enable_cache",
+      "value": "啟用快取"
+    },
+    {
+      "name": "error_no_context",
+      "value": "無法取得應用程式內容"
+    },
+    {
+      "name": "error_location_permission_denied",
+      "value": "未授予位置權限，請在系統設定中允許「走走拍拍」取得位置"
+    },
+    {
+      "name": "error_location_permission_failed",
+      "value": "位置權限申請失敗：%1$s"
+    },
+    {
+      "name": "error_location_unsupported",
+      "value": "目前裝置不支援定位功能"
+    },
+    {
+      "name": "error_location_check_failed",
+      "value": "定位狀態檢查失敗：%1$s"
+    },
+    {
+      "name": "error_location_service_off",
+      "value": "系統位置服務未開啟，請在控制中心開啟「位置」後重試"
+    },
+    {
+      "name": "error_location_start_failed",
+      "value": "啟動定位失敗：%1$s"
+    },
+    {
+      "name": "error_mock_generation_failed",
+      "value": "模擬軌跡產生失敗"
+    },
+    {
+      "name": "error_mock_no_location",
+      "value": "沒有可用的目前位置"
+    },
+    {
+      "name": "error_location_current_failed",
+      "value": "取得目前位置失敗：%1$s"
+    }
+  ]
+}

@@ -5,6 +5,8 @@ import { GpsTrackCache } from '../services/GpsTrackCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp } from '../utils/TitleBarMetrics';
 import { type GpsDayTrack } from '../utils/GpsTrack';
+import { L10n } from '../utils/L10n';
+import { formatDayKey } from '../utils/DateTimeText';
 import { ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
 
@@ -54,7 +56,13 @@ struct GpsDayCard {
 
   private countText(): string {
     const g = this.group();
-    return g !== null ? `${g.count} 条定位记录` : '0 条定位记录';
+    return g !== null
+      ? L10n.plural('record_count', g.count, g.count)
+      : L10n.tr('gps_record_count_zero');
+  }
+
+  private dayLabel(): string {
+    return formatDayKey(this.day);
   }
 
   private hm(ts: number): string {
@@ -81,12 +89,12 @@ struct GpsDayCard {
       Row({ space: 10 }) {
         Column({ space: 3 }) {
           Row({ space: 6 }) {
-            Text(this.day)
+            Text(this.dayLabel())
               .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
             if (this.isMock()) {
               // 不再做胶囊徽章；一个轻量文字标识即可
-              Text('模拟')
+              Text($r('app.string.gps_mock_badge'))
                 .fontSize(FontSize.Micro)
                 .fontColor($r('app.color.primary'))
             }
@@ -237,8 +245,8 @@ export struct GpsManagementPage {
   }
 
   private headerActionText(): string {
-    if (this.selectMode) return '取消';
-    return this.groupsFor(this.gps.recordsVersion).length > 0 ? '选择' : '';
+    if (this.selectMode) return L10n.tr('common_cancel');
+    return this.groupsFor(this.gps.recordsVersion).length > 0 ? L10n.tr('common_select') : '';
   }
 
   private onHeaderAction(): void {
@@ -308,22 +316,29 @@ export struct GpsManagementPage {
       if (realDays.includes(g.day)) total += g.count;
     }
 
-    let title = '删除定位记录';
-    let message = `删除选中的 ${realDays.length} 天，共 ${total} 条定位记录？`;
+    let title: ResourceStr = $r('app.string.gps_delete_title');
+    let message: ResourceStr = $r('app.string.gps_delete_message',
+      L10n.plural('day_count', realDays.length, realDays.length),
+      L10n.plural('record_count', total, total));
     if (realDays.length === 0) {
-      title = '清除模拟轨迹';
-      message = `清除 ${mockDays.length} 天的模拟轨迹？真实定位记录不受影响。`;
+      title = $r('app.string.gps_clear_mock_title');
+      message = $r('app.string.gps_clear_mock_message',
+        L10n.plural('day_count', mockDays.length, mockDays.length));
     } else if (mockDays.length > 0) {
-      message = `删除 ${realDays.length} 天的 ${total} 条定位记录，并清除 ${mockDays.length} 天的模拟轨迹？`;
+      message = $r('app.string.gps_delete_mixed_message',
+        L10n.plural('day_count', realDays.length, realDays.length),
+        L10n.plural('record_count', total, total),
+        L10n.plural('day_count', mockDays.length, mockDays.length));
     }
-    const actionLabel = realDays.length === 0 ? '清除' : '删除';
+    const actionLabel: ResourceStr = realDays.length === 0
+      ? $r('app.string.common_clear') : $r('app.string.common_delete');
 
     this.getUIContext().showAlertDialog({
       title: title,
       message: message,
       autoCancel: true,
       primaryButton: {
-        value: '取消',
+        value: $r('app.string.common_cancel'),
         action: () => {}
       },
       secondaryButton: {
@@ -350,20 +365,21 @@ export struct GpsManagementPage {
   @Builder
   SelectBottomBar() {
     Row({ space: 8 }) {
-      Text(`已选 ${this.selectedDays.length} 天`)
+      Text(L10n.tr('gps_selected_days',
+        L10n.plural('day_count', this.selectedDays.length, this.selectedDays.length)))
         .fontSize(FontSize.Caption)
         .fontColor($r('app.color.text_secondary'))
         .layoutWeight(1)
 
       Button(this.selectedDays.length === this.groupsFor(this.gps.recordsVersion).length
-        ? '取消全选' : '全选')
+        ? $r('app.string.common_deselect_all') : $r('app.string.common_select_all'))
         .fontSize(FontSize.Body)
         .height(36)
         .fontColor($r('app.color.primary'))
         .backgroundColor(Color.Transparent)
         .onClick(() => { this.toggleSelectAll(); })
 
-      Button('删除')
+      Button($r('app.string.common_delete'))
         .fontSize(FontSize.Body)
         .height(36)
         .padding({ left: 18, right: 18 })
@@ -419,12 +435,13 @@ export struct GpsManagementPage {
           .onClick(() => { this.pageInfos.pop(); })
 
           Column({ space: 1 }) {
-            Text('定位记录')
+            Text($r('app.string.gps_title'))
               .fontSize(FontSize.PageTitle)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)
-            Text(`共 ${this.gps.displayRecordCount()} 条定位记录`)
+            Text(L10n.tr('gps_total_records',
+              L10n.plural('record_count', this.gps.displayRecordCount(), this.gps.displayRecordCount())))
               .fontSize(FontSize.Micro)
               .fontColor($r('app.color.text_secondary'))
               .maxLines(1)
@@ -474,10 +491,10 @@ export struct GpsManagementPage {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
               .fontSize(IconSize.Empty)
               .fontColor([$r('app.color.text_tertiary')])
-            Text('还没有定位记录')
+            Text($r('app.string.gps_empty_title'))
               .fontSize(FontSize.Body)
               .fontColor($r('app.color.text_secondary'))
-            Text('在设置页打开「定位记录」后，应用会按设定的频率记录定位')
+            Text($r('app.string.gps_empty_hint'))
               .fontSize(FontSize.Caption)
               .fontColor($r('app.color.text_tertiary'))
               .textAlign(TextAlign.Center)

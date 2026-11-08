@@ -3,8 +3,44 @@ import {
   formatAltitude, formatClock, formatCoordinate, formatDistance,
   formatDistanceCompact, formatDuration, formatDurationCompact
 } from '../main/ets/utils/GpsFormat';
+import { L10n } from '../main/ets/utils/L10n';
+
+/**
+ * Local Test 不加载 HAP 的资源索引，这里用一份最小的中文资源表代替，
+ * 让 GpsFormat 的单位文案仍然可断言。正式运行时由 EntryAbility 注入
+ * 真正的 resourceManager。
+ */
+const TEST_VALUES: Record<string, string> = {
+  'gps_zero_meters': '0 米',
+  'gps_distance_meters': '%1$d 米',
+  'gps_distance_kilometers': '%1$s 公里',
+  'gps_zero_distance_compact': '0m',
+  'gps_distance_compact_meters': '%1$dm',
+  'gps_distance_compact_kilometers': '%1$skm',
+  'gps_zero_minutes': '0 分钟',
+  'gps_duration_minutes': '%1$d 分钟',
+  'gps_duration_hours': '%1$d 小时',
+  'gps_duration_hours_minutes': '%1$d 小时 %2$d 分',
+  'gps_zero_duration_compact': '0分',
+  'gps_duration_compact_minutes': '%1$d分',
+  'gps_duration_compact_hours': '%1$d时',
+  'gps_duration_compact_hours_minutes': '%1$d时%2$d分',
+  'gps_altitude': '海拔 %1$dm'
+};
+
+function testString(name: string, args: Array<string | number>): string {
+  let text = TEST_VALUES[name] ?? name;
+  for (let i = 0; i < args.length; i++) {
+    const value = String(args[i]);
+    text = text.replace(`%${i + 1}$s`, value).replace(`%${i + 1}$d`, value);
+  }
+  return text;
+}
 
 export default function gpsFormatTest() {
+  L10n.setResolvers(testString, (name: string, _count: number,
+    args: Array<string | number>): string => testString(name, args));
+
   describe('GpsFormat', () => {
     it('距离：米与公里', 0, () => {
       expect(formatDistance(0)).assertEqual('0 米');

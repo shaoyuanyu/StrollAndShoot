@@ -15,6 +15,7 @@ import { GpsRecorder } from './GpsRecorder';
 import { ExifGeotagger } from './ExifGeotagger';
 import { CameraCachePrefs } from './CameraCachePrefs';
 import { ThumbnailCache, type CacheEntry } from './ThumbnailCache';
+import { L10n } from '../utils/L10n';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { MockPtpSession } from '../debug/MockPtpSession';
 import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } from '../model/PhotoEntry';
@@ -90,7 +91,7 @@ export class CameraService {
   private log: AppLog = new AppLog();
 
   // State
-  @Trace statusText: string = '就绪';
+  @Trace statusText: string = L10n.isReady() ? L10n.tr('camera_status_ready') : '';
   @Trace cameraName: string = '';
   @Trace photoCount: number = 0;
   @Trace photos: PhotoEntry[] = [];
@@ -1071,13 +1072,13 @@ export class CameraService {
     // Debug builds only: swap in the virtual camera before searching.
     this.syncSessionMode();
 
-    this.statusText = '正在搜索USB相机...';
+    this.statusText = L10n.tr('camera_status_searching');
 
 
     try {
       const cameras = this.sessionIsMock ? MockPtpDevice.findCameras() : PtpSession.findCameras();
       if (cameras.length === 0) {
-        this.statusText = '未检测到USB相机';
+        this.statusText = L10n.tr('camera_status_no_camera');
         this.connected = false;
         this.cameraName = '';
         this.scanning = false;
@@ -1099,7 +1100,7 @@ export class CameraService {
         this.orientationMap.clear();
         this.orientedDisplaySizes.clear();
         this.clearFullCache();
-        this.statusText = '已连接';
+        this.statusText = L10n.tr('camera_status_connected');
 
         // Refresh camera identity from PTP if not already set
         if (!this.cameraIdentity) {
@@ -1119,12 +1120,12 @@ export class CameraService {
           await this.disconnect();
         }
 
-        this.statusText = `发现相机: ${cameras[0].productName}`;
+        this.statusText = L10n.tr('camera_status_found_camera', cameras[0].productName);
     
 
         const ok = await this.session.connect(cameras[0]);
         if (!ok) {
-          this.statusText = '连接相机失败';
+          this.statusText = L10n.tr('camera_status_connect_failed');
           this.connected = false;
           this.scanning = false;
       
@@ -1133,7 +1134,7 @@ export class CameraService {
 
         this.cameraName = cameras[0].productName || cameras[0].manufacturerName ||
                           cameras[0].name;
-        this.statusText = '已连接';
+        this.statusText = L10n.tr('camera_status_connected');
         this.connected = true;
 
         // Fetch PTP device identity for unique camera identification
@@ -1161,7 +1162,7 @@ export class CameraService {
       // If camera is new and caching dialog is required, wait for user
       // choice before scanning. setCachingPreference will trigger scan.
       if (this.cachingDialogRequired) {
-        this.statusText = `请选择缓存设置...`;
+        this.statusText = L10n.tr('camera_status_choose_cache');
         this.scanning = false;
         return;
       }
@@ -1170,7 +1171,7 @@ export class CameraService {
       if (quickMode && this.cachingEnabled && this.cameraIdentity &&
           this.cachePrefs.hasCamera(this.cameraIdentity)) {
         this.log.add('[快速扫描] 部署缓存快照...');
-        this.statusText = '正在加载缓存...';
+        this.statusText = L10n.tr('camera_status_loading_cache');
         // Manifest must be loaded before findCached() can hit anything.
         this.thumbCache.init(this.filesDir, this.cameraIdentity);
         await this.thumbCache.loadManifest();
@@ -1180,7 +1181,7 @@ export class CameraService {
 
       // scanning stays true for the entire scan (Phase 1 → 2a → 2b)
       this.scanning = true;
-      this.statusText = '正在扫描...';
+      this.statusText = L10n.tr('camera_status_scanning');
 
       // Phase 1 + 2a + 2b (replaces old loadPhotosAndThumbnails)
       await this.loadPhotosAndThumbnails(quickMode);
@@ -1189,7 +1190,7 @@ export class CameraService {
       this.validateRegistry().catch((_e: Error) => { /* best effort */ });
     } catch (err) {
       hilog.error(DOMAIN, TAG, `scan error: ${JSON.stringify(err)}`);
-      this.statusText = '扫描出错';
+      this.statusText = L10n.tr('camera_status_scan_error');
       this.connected = false;
     } finally {
       this.scanning = false;
@@ -1275,7 +1276,7 @@ export class CameraService {
    * metadata and thumbnails in a single pass with a progress bar.
    */
   private async loadPhotosAndThumbnails(_quickMode: boolean): Promise<void> {
-    this.statusText = '正在获取照片列表...';
+    this.statusText = L10n.tr('camera_status_fetching_list');
     this.photoCount = 0;
     this.scanProgress = 0;
     this.scanTotal = 0;
@@ -1288,13 +1289,13 @@ export class CameraService {
       if (storageIDs.length === 0) {
         this.photoCount = 0;
         this.photos = [];
-        this.statusText = '已连接 (无存储设备)';
+        this.statusText = L10n.tr('camera_status_no_storage');
     
         return;
       }
 
       // ---- Phase 1: traverse directories (2 getObjectHandles per level) ----
-      this.statusText = '正在遍历目录...';
+      this.statusText = L10n.tr('camera_status_walking_dirs');
       this.formatFilterWorks = null; // re-detect for this connection
   
 
@@ -1311,8 +1312,8 @@ export class CameraService {
       this.log.add(`开始加载 ${handles.length} 张照片元数据...`);
       this.scanProgress = 0;
       this.scanTotal = handles.length;
-      this.scanPhaseText = '获取元数据';
-      this.statusText = '正在获取元数据...';
+      this.scanPhaseText = L10n.tr('camera_phase_metadata');
+      this.statusText = L10n.tr('camera_phase_loading_metadata');
   
 
       const photoList: PhotoEntry[] = [];
@@ -1387,23 +1388,25 @@ export class CameraService {
       this.log.add(`元数据获取完成: ${photoList.length} 张`);
 
       // ---- Phase 2b: load thumbnails, row by row ----
-      this.scanPhaseText = '加载缩略图';
-      this.statusText = '正在加载缩略图...';
+      this.scanPhaseText = L10n.tr('camera_phase_thumbnails');
+      this.statusText = L10n.tr('camera_phase_loading_thumbnails');
       await this.loadThumbnailsRowByRow(validCacheKeys);
 
       // Compute scan stats for UI display
       {
         const total = this.photoCount;
-        this.scanStatsText = `照片${total} | 扫描完成`;
+        this.scanStatsText = L10n.tr('camera_scan_stats',
+          L10n.plural('photo_count', total, total));
         this.log.add(this.scanStatsText);
       }
 
       this.log.add('缩略图加载完成');
 
-      this.statusText = `已连接 - ${this.photoCount} 张照片`;
+      this.statusText = L10n.tr('camera_status_photo_count',
+        L10n.plural('photo_count', this.photoCount, this.photoCount));
     } catch (err) {
       hilog.error(DOMAIN, TAG, `loadPhotos error: ${JSON.stringify(err)}`);
-      this.statusText = '加载照片失败';
+      this.statusText = L10n.tr('camera_status_load_failed');
       this.scanStatsText = '';
     } finally {
       this.scanProgress = 0;
@@ -2026,7 +2029,7 @@ export class CameraService {
     this.lastDecodedHandle = -1;
     this.clearFullCache();
     this.thumbCache.close();
-    this.statusText = '已断开连接';
+    this.statusText = L10n.tr('camera_status_disconnected');
     this.log.add('已断开连接');
   }
 

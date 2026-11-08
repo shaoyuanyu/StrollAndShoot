@@ -5,6 +5,7 @@ import { AppLog } from './AppLog';
 import { GpsTrack } from '../utils/GpsTrack';
 import { GpsMockTrack } from '../utils/GpsMockTrack';
 import { AtomicFile } from '../utils/AtomicFile';
+import { L10n } from '../utils/L10n';
 import type { GpsRecord, GpsDailyGroup } from '../model/PhotoEntry';
 
 const LOCATION_PERMS: Permissions[] = [
@@ -91,7 +92,7 @@ export class GpsRecorder {
   /** 申请位置权限。返回空串表示已授权，否则返回给用户看的原因。 */
   private async ensurePermissions(): Promise<string> {
     if (this.permissionsChecked) return '';
-    if (!this.context) return '无法获取应用上下文';
+    if (!this.context) return L10n.tr('error_no_context');
 
     const atManager = abilityAccessCtrl.createAtManager();
     try {
@@ -103,9 +104,9 @@ export class GpsRecorder {
         this.permissionsChecked = true;
         return '';
       }
-      return '未授予位置权限，请在系统设置中允许「走走拍拍」获取位置';
+      return L10n.tr('error_location_permission_denied');
     } catch (err) {
-      return `位置权限申请失败: ${JSON.stringify(err)}`;
+      return L10n.tr('error_location_permission_failed', JSON.stringify(err));
     }
   }
 
@@ -126,10 +127,10 @@ export class GpsRecorder {
 
   getGpsModeLabel(): string {
     switch (this.gpsMode) {
-      case 0: return '精确';
-      case 1: return '日常';
-      case 3: return '出行';
-      default: return '省电';
+      case 0: return L10n.tr('settings_gps_precise');
+      case 1: return L10n.tr('settings_gps_daily');
+      case 3: return L10n.tr('settings_gps_travel');
+      default: return L10n.tr('settings_gps_power');
     }
   }
 
@@ -174,7 +175,7 @@ export class GpsRecorder {
     this.lastError = '';
 
     if (!canIUse('SystemCapability.Location.Location.Core')) {
-      return this.fail('当前设备不支持定位能力');
+      return this.fail(L10n.tr('error_location_unsupported'));
     }
 
     const permError = await this.ensurePermissions();
@@ -185,10 +186,10 @@ export class GpsRecorder {
       // @SuppressWarnings syscap
       locationEnabled = geoLocationManager.isLocationEnabled();
     } catch (err) {
-      return this.fail(`定位状态检查失败: ${JSON.stringify(err)}`);
+      return this.fail(L10n.tr('error_location_check_failed', JSON.stringify(err)));
     }
     if (!locationEnabled) {
-      return this.fail('系统位置服务未开启，请在控制中心打开「位置」后重试');
+      return this.fail(L10n.tr('error_location_service_off'));
     }
 
     let scenario: geoLocationManager.UserActivityScenario;
@@ -245,7 +246,7 @@ export class GpsRecorder {
       this.locationCallback = undefined;
       this.running = false;
       this.saveMode();
-      return this.fail(`启动定位失败: ${JSON.stringify(err)}`);
+      return this.fail(L10n.tr('error_location_start_failed', JSON.stringify(err)));
     }
   }
 
@@ -548,7 +549,7 @@ export class GpsRecorder {
   async createMockTrack(): Promise<boolean> {
     this.lastError = '';
     if (!canIUse('SystemCapability.Location.Location.Core')) {
-      this.lastError = '当前设备不支持定位能力';
+      this.lastError = L10n.tr('error_location_unsupported');
       return false;
     }
 
@@ -579,20 +580,20 @@ export class GpsRecorder {
       if (this.lastFix !== null && now - this.lastFix.timestamp <= 5 * 60 * 1000) {
         origin = this.lastFix;
       } else {
-        this.lastError = `获取当前位置失败: ${JSON.stringify(err)}`;
+        this.lastError = L10n.tr('error_location_current_failed', JSON.stringify(err));
         this.log.add(`模拟GPS轨迹: ${this.lastError}`);
         return false;
       }
     }
 
     if (origin === null) {
-      this.lastError = '没有可用的当前位置';
+      this.lastError = L10n.tr('error_mock_no_location');
       return false;
     }
 
     const records = GpsMockTrack.buildCameraTrack(origin, now);
     if (records.length === 0) {
-      this.lastError = '模拟轨迹生成失败';
+      this.lastError = L10n.tr('error_mock_generation_failed');
       return false;
     }
 

@@ -1,9 +1,12 @@
 /**
  * GPS 页面的纯格式化函数。
  *
- * 单独放在这里是为了在 Local Test 里直接验证（不依赖 UI / 定位服务）。
- * 距离和时长都做两种写法：卡片上的玻璃胶囊用紧凑版，底部明细用中文完整版。
+ * 距离、时长与海拔的单位文案来自 string.json，通过 L10n 按当前区域解析；
+ * 这里只保留数值换算与进位规则，方便在 Local Test 里验证（测试会注入
+ * 一份测试用资源解析器）。
  */
+
+import { L10n } from './L10n';
 
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
@@ -21,41 +24,43 @@ export function formatHm(ts: number): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
-/** 完整距离：`820 米` / `3.2 公里`。 */
+/** 完整距离：`820 米` / `3.20 公里`。 */
 export function formatDistance(meters: number): string {
-  if (!Number.isFinite(meters) || meters <= 0) return '0 米';
-  if (meters < 1000) return `${Math.round(meters)} 米`;
-  if (meters < 10000) return `${(meters / 1000).toFixed(2)} 公里`;
-  return `${(meters / 1000).toFixed(1)} 公里`;
+  if (!Number.isFinite(meters) || meters <= 0) return L10n.tr('gps_zero_meters');
+  if (meters < 1000) return L10n.tr('gps_distance_meters', Math.round(meters));
+  if (meters < 10000) return L10n.tr('gps_distance_kilometers', (meters / 1000).toFixed(2));
+  return L10n.tr('gps_distance_kilometers', (meters / 1000).toFixed(1));
 }
 
 /** 紧凑距离，用于空间有限的玻璃胶囊。 */
 export function formatDistanceCompact(meters: number): string {
-  if (!Number.isFinite(meters) || meters <= 0) return '0m';
-  if (meters < 1000) return `${Math.round(meters)}m`;
-  if (meters < 10000) return `${(meters / 1000).toFixed(1)}km`;
-  return `${(meters / 1000).toFixed(0)}km`;
+  if (!Number.isFinite(meters) || meters <= 0) return L10n.tr('gps_zero_distance_compact');
+  if (meters < 1000) return L10n.tr('gps_distance_compact_meters', Math.round(meters));
+  if (meters < 10000) return L10n.tr('gps_distance_compact_kilometers', (meters / 1000).toFixed(1));
+  return L10n.tr('gps_distance_compact_kilometers', (meters / 1000).toFixed(0));
 }
 
 /** 完整时长：`12 分钟` / `1 小时 12 分`。 */
 export function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0 分钟';
+  if (!Number.isFinite(ms) || ms <= 0) return L10n.tr('gps_zero_minutes');
   const totalMinutes = Math.round(ms / 60000);
-  if (totalMinutes < 60) return `${Math.max(1, totalMinutes)} 分钟`;
+  if (totalMinutes < 60) return L10n.tr('gps_duration_minutes', Math.max(1, totalMinutes));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  if (minutes === 0) return `${hours} 小时`;
-  return `${hours} 小时 ${minutes} 分`;
+  if (minutes === 0) return L10n.tr('gps_duration_hours', hours);
+  return L10n.tr('gps_duration_hours_minutes', hours, minutes);
 }
 
 /** 紧凑时长：`12分` / `1时12分`。用单字单位，避免和距离的 m 混淆。 */
 export function formatDurationCompact(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '0分';
+  if (!Number.isFinite(ms) || ms <= 0) return L10n.tr('gps_zero_duration_compact');
   const totalMinutes = Math.round(ms / 60000);
-  if (totalMinutes < 60) return `${Math.max(1, totalMinutes)}分`;
+  if (totalMinutes < 60) return L10n.tr('gps_duration_compact_minutes', Math.max(1, totalMinutes));
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  return minutes === 0 ? `${hours}时` : `${hours}时${minutes}分`;
+  return minutes === 0
+    ? L10n.tr('gps_duration_compact_hours', hours)
+    : L10n.tr('gps_duration_compact_hours_minutes', hours, minutes);
 }
 
 /** `22.878700, 113.880000` */
@@ -66,5 +71,5 @@ export function formatCoordinate(lat: number, lon: number): string {
 /** `海拔 45m`；海拔缺失时返回空串，调用方用 if 隐藏。 */
 export function formatAltitude(altitude: number): string {
   if (!Number.isFinite(altitude) || altitude === 0) return '';
-  return `海拔 ${Math.round(altitude)}m`;
+  return L10n.tr('gps_altitude', Math.round(altitude));
 }

@@ -6,6 +6,7 @@ import { formatDistanceCompact, formatDurationCompact } from '../utils/GpsFormat
 import { WindowUtils } from '../utils/WindowUtils';
 import type { GpsRecord } from '../model/PhotoEntry';
 import { MapCapability } from '../utils/MapCapability';
+import { L10n } from '../utils/L10n';
 import { FontSize, IconSize, Radius } from '../utils/UiTokens';
 
 /** 预览图上的折线最多保留多少个点；缩略图只有 190vp 高，再多也看不出来。 */
@@ -30,6 +31,7 @@ export struct GpsTrackMap {
   @Event onOpen: () => void = () => {};
 
   @Local mapReady: boolean = false;
+  /** 内部兜底状态（未签名 / 不支持 / 超时 / 失败），只用于分支判断，不直接显示。 */
   @Local mapError: string = '';
 
   private mapOptions: mapCommon.MapOptions = {
@@ -301,7 +303,7 @@ export struct GpsTrackMap {
     if (track.durationMs > 0) {
       parts.push(formatDurationCompact(track.durationMs));
     }
-    parts.push(`${track.count} 条定位记录`);
+    parts.push(L10n.plural('record_count', track.count, track.count));
     return parts.join(' · ');
   }
 
@@ -313,7 +315,7 @@ export struct GpsTrackMap {
         GpsTrackSketch({
           sketchPoints: this.track !== null ? this.track.sketchPoints : [],
           bounds: this.track !== null ? this.track.bounds : EMPTY_BOUNDS,
-          caption: '地图暂不可用 · 轨迹示意'
+          caption: $r('app.string.gps_map_unavailable')
         })
       }
 
@@ -331,7 +333,7 @@ export struct GpsTrackMap {
         Stack({ alignContent: Alignment.Center }) {
           Row({ space: 6 }) {
             LoadingProgress().width(16).height(16)
-            Text('地图加载中').fontSize(FontSize.Micro).fontColor($r('app.color.text_secondary'))
+            Text($r('app.string.gps_map_loading')).fontSize(FontSize.Micro).fontColor($r('app.color.text_secondary'))
           }
           .padding({ left: 10, right: 12, top: 6, bottom: 6 })
           .backgroundColor($r('app.color.glass_bg'))
@@ -367,7 +369,7 @@ export struct GpsTrackMap {
             SymbolGlyph($r('sys.symbol.arrow_up_left_and_arrow_down_right'))
               .fontSize(IconSize.Small)
               .fontColor([$r('app.color.text_primary')])
-            Text('全屏')
+            Text($r('app.string.gps_fullscreen'))
               .fontSize(FontSize.Micro)
               .fontColor($r('app.color.text_primary'))
           }

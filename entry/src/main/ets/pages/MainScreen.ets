@@ -117,11 +117,11 @@ export struct MainScreen {
     const camName = this.svc.pendingCamNameForDialog;
     if (camId === '') return;
     this.getUIContext().showAlertDialog({
-      title: '发现新相机',
-      message: `检测到新相机「${camName}」，是否启用缩略图缓存？\n\n启用后下次连接时将直接从本地加载缩略图，大幅提升加载速度。`,
+      title: $r('app.string.new_camera_title'),
+      message: $r('app.string.new_camera_message', camName),
       autoCancel: false,
       primaryButton: {
-        value: '不缓存',
+        value: $r('app.string.new_camera_no_cache'),
         action: () => {
           this.svc.setCachingPreference(camId, false).catch((err: Error) => {
             this.svc.getLog().add(`缓存设置失败: ${JSON.stringify(err)}`);
@@ -129,7 +129,7 @@ export struct MainScreen {
         }
       },
       secondaryButton: {
-        value: '启用缓存',
+        value: $r('app.string.new_camera_enable_cache'),
         fontColor: $r('app.color.primary'),
         action: () => {
           this.svc.setCachingPreference(camId, true).catch((err: Error) => {
@@ -140,15 +140,15 @@ export struct MainScreen {
     });
   }
 
-  private tabTitle(): string {
-    if (this.currentTab === 0) return '画廊';
-    if (this.currentTab === 1) return '相机';
-    return '设置';
+  private tabTitle(): ResourceStr {
+    if (this.currentTab === 0) return $r('app.string.tab_gallery');
+    if (this.currentTab === 1) return $r('app.string.tab_camera');
+    return $r('app.string.tab_settings');
   }
 
   /** 多选态标题文字：官方图库是「已选择 N 项」，左对齐跟在关闭钮后面。 */
-  private selectTitleText(): string {
-    return `已选择 ${this.gallerySelectedCount} 项`;
+  private selectTitleText(): ResourceStr {
+    return $r('app.string.gallery_select_title', this.gallerySelectedCount);
   }
 
   private allSelected(): boolean {
@@ -196,8 +196,8 @@ export struct MainScreen {
     return out;
   }
 
-  private filterLabel(): string {
-    return this.galleryFilter === '' ? '全部' : this.galleryFilter;
+  private filterLabel(): ResourceStr {
+    return this.galleryFilter === '' ? $r('app.string.common_all') : this.galleryFilter;
   }
 
   /** 下拉筛选项：第 0 项永远是「全部」，后面按照片里出现过的格式排列。 */
@@ -205,7 +205,7 @@ export struct MainScreen {
     const out: SelectOption[] = [];
     const list = this.formatList();
     for (const ext of list) {
-      out.push({ value: ext === '' ? '全部' : ext });
+      out.push({ value: ext === '' ? $r('app.string.common_all') : ext });
     }
     return out;
   }
@@ -347,7 +347,7 @@ export struct MainScreen {
         .layoutWeight(1)
 
       Button() {
-        Text(this.allSelected() ? '取消全选' : '全选')
+        Text(this.allSelected() ? $r('app.string.common_deselect_all') : $r('app.string.common_select_all'))
           .fontSize(FontSize.Body)
           .fontColor($r('app.color.text_primary'))
       }
@@ -403,7 +403,7 @@ export struct MainScreen {
             .onSelect((index: number) => { this.applyFilterIndex(index); })
         }
         Button() {
-          Text('选择')
+          Text($r('app.string.common_select'))
             .fontSize(FontSize.Body)
             .fontColor($r('app.color.text_primary'))
         }
@@ -423,7 +423,7 @@ export struct MainScreen {
         // 内容区的大按钮拿不到材质。不设 backgroundColor、不设 materialColor
         // 时材质取 Button 主题色（蓝），正好当主操作。
         if (this.svc.scanning) {
-          Button('扫描中')
+          Button($r('app.string.camera_main_scanning'))
             .height(ControlHeight.Pill)
             .padding({ left: 18, right: 18 })
             .fontSize(FontSize.Body)
@@ -436,7 +436,7 @@ export struct MainScreen {
               interactive: true
             }))
         } else {
-          Button(this.svc.connected ? '快速扫描' : '搜索相机')
+          Button(this.svc.connected ? $r('app.string.camera_main_quick_scan') : $r('app.string.camera_main_find'))
             .height(ControlHeight.Pill)
             .padding({ left: 18, right: 18 })
             .fontSize(FontSize.Body)
@@ -462,7 +462,7 @@ export struct MainScreen {
   }
 
   @Builder
-  TabItem(label: string, icon: Resource, index: number) {
+  TabItem(label: ResourceStr, icon: Resource, index: number) {
     Column({ space: 2 }) {
       SymbolGlyph(icon)
         .fontSize(IconSize.Large)
@@ -618,7 +618,7 @@ export struct MainScreen {
             }
           })
         }
-        .tabBar(this.TabItem('画廊', $r('sys.symbol.square_grid_2x2'), 0))
+        .tabBar(this.TabItem($r('app.string.tab_gallery'), $r('sys.symbol.square_grid_2x2'), 0))
 
         TabContent() {
           CameraPage({
@@ -627,7 +627,7 @@ export struct MainScreen {
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
           })
         }
-        .tabBar(this.TabItem('相机', $r('sys.symbol.camera'), 1))
+        .tabBar(this.TabItem($r('app.string.tab_camera'), $r('sys.symbol.camera'), 1))
 
         TabContent() {
           SettingsPage({
@@ -644,7 +644,7 @@ export struct MainScreen {
             onOpenCacheManagement: () => { this.pageInfos.pushPath({ name: 'CacheManagementPage' }); }
           })
         }
-        .tabBar(this.TabItem('设置', $r('sys.symbol.gearshape'), 2))
+        .tabBar(this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape'), 2))
       }
       .barOverlap(true)
       .barFloatingStyle({

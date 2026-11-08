@@ -21,3 +21,4 @@
 /.playwright*
 /.profile
 /build-profile.json5
+/.dsh-session-images

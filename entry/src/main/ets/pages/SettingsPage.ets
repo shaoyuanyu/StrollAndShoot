@@ -1,11 +1,14 @@
-import { ConfigurationConstant, bundleManager } from '@kit.AbilityKit';
+import { ConfigurationConstant, bundleManager, common, Want } from '@kit.AbilityKit';
+import { i18n } from '@kit.LocalizationKit';
 import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 import { SettingsStore } from '../model/SettingsStore';
+import { LanguageStore } from '../model/LanguageStore';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { L10n } from '../utils/L10n';
 import { ControlHeight, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 
 /** 深色模式下拉的取值顺序，与 DARK_OPTIONS 一一对应。 */
@@ -15,31 +18,40 @@ const DARK_VALUES: number[] = [
   ConfigurationConstant.ColorMode.COLOR_MODE_DARK
 ];
 const DARK_OPTIONS: SelectOption[] = [
-  { value: '跟随系统' },
-  { value: '浅色' },
-  { value: '深色' }
+  { value: $r('app.string.settings_dark_follow') },
+  { value: $r('app.string.settings_dark_light') },
+  { value: $r('app.string.settings_dark_dark') }
 ];
 
 const COLUMN_VALUES: number[] = [-1, 3, 4, 5, 6];
 const COLUMN_OPTIONS: SelectOption[] = [
-  { value: '自动' },
-  { value: '3 列' },
-  { value: '4 列' },
-  { value: '5 列' },
-  { value: '6 列' }
+  { value: $r('app.string.settings_columns_auto') },
+  { value: $r('app.string.settings_columns_n', 3) },
+  { value: $r('app.string.settings_columns_n', 4) },
+  { value: $r('app.string.settings_columns_n', 5) },
+  { value: $r('app.string.settings_columns_n', 6) }
 ];
 
 const DISPLAY_VALUES: string[] = ['content_first', 'file_first'];
 const DISPLAY_OPTIONS: SelectOption[] = [
-  { value: '内容优先' },
-  { value: '文件优先' }
+  { value: $r('app.string.settings_display_content_first') },
+  { value: $r('app.string.settings_display_file_first') }
+];
+
+/** 语言下拉的取值顺序，与 LANGUAGE_OPTIONS 一一对应。 */
+const LANGUAGE_VALUES: string[] = ['system', 'zh-Hans', 'zh-Hant', 'en'];
+const LANGUAGE_OPTIONS: SelectOption[] = [
+  { value: $r('app.string.settings_language_follow_system') },
+  { value: $r('app.string.settings_language_zh_hans') },
+  { value: $r('app.string.settings_language_zh_hant') },
+  { value: $r('app.string.settings_language_en') }
 ];
 
 const GPS_MODE_OPTIONS: SelectOption[] = [
-  { value: '精确' },
-  { value: '出行' },
-  { value: '日常' },
-  { value: '省电' }
+  { value: $r('app.string.settings_gps_precise') },
+  { value: $r('app.string.settings_gps_travel') },
+  { value: $r('app.string.settings_gps_daily') },
+  { value: $r('app.string.settings_gps_power') }
 ];
 
 /**
@@ -47,6 +59,12 @@ const GPS_MODE_OPTIONS: SelectOption[] = [
  * 内部码保持 0=精确 / 1=日常 / 2=省电，新增 3=出行，避免旧配置文件迁移。
  */
 const GPS_MODE_UI_TO_CODE: number[] = [0, 3, 1, 2];
+
+/** 日志条数：按行数选复数，与「清除 / 复制」按钮同一行。 */
+function logCountText(logText: string): string {
+  const count = logText ? logText.split('\n').length : 0;
+  return L10n.tr('settings_log_count', L10n.plural('log_line_count', count, count));
+}
 
 @ComponentV2
 export struct SettingsPage {
@@ -57,6 +75,8 @@ export struct SettingsPage {
   @Event onOpenGpsManagement: () => void = () => {};
   @Event onOpenCacheManagement: () => void = () => {};
   settings: SettingsStore = SettingsStore.getInstance();
+  /** 应用语言偏好；单独 PersistenceV2 key，默认跟随系统。 */
+  @Local languageStore: LanguageStore = LanguageStore.getInstance();
   /** GPS 服务的真实状态。直接读单例的 @Trace 字段，不再要页面之间传副本。 */
   @Local gps: GpsRecorder = GpsRecorder.getInstance();
   /** 开关的显示值。用 !! 双向绑定，启动失败时才能把滑块弹回去。 */
@@ -102,7 +122,75 @@ export struct SettingsPage {
     const ok = await this.gps.toggle(on);
     this.gpsOn = this.gps.running;
     if (!ok) {
-      this.toast(this.gps.lastError === '' ? '定位启动失败' : this.gps.lastError);
+      this.toast(this.gps.lastError === ''
+        ? $r('app.string.settings_toast_gps_start_failed') : this.gps.lastError);
+    }
+  }
+
+  private languageIndex(): number {
+    const index = LANGUAGE_VALUES.indexOf(this.languageStore.appLanguage);
+    return index < 0 ? 0 : index;
+  }
+
+  /**
+   * 选择语言后先写偏好，再弹重启确认。取消（按钮或点遮罩）都要把偏好退回，
+   * 否则 Select 的显示会和实际生效语言不一致。
+   */
+  private onLanguageSelect(index: number): void {
+    const value = LANGUAGE_VALUES[index];
+    if (value === undefined || value === this.languageStore.appLanguage) return;
+    const previous = this.languageStore.appLanguage;
+    this.languageStore.appLanguage = value;
+    this.getUIContext().showAlertDialog({
+      title: $r('app.string.settings_language_confirm_title'),
+      message: $r('app.string.settings_language_confirm_message'),
+      autoCancel: true,
+      cancel: () => { this.languageStore.appLanguage = previous; },
+      primaryButton: {
+        value: $r('app.string.common_cancel'),
+        action: () => { this.languageStore.appLanguage = previous; }
+      },
+      secondaryButton: {
+        value: $r('app.string.settings_language_restart'),
+        fontColor: $r('app.color.primary'),
+        action: () => { this.applyLanguage(value, previous); }
+      }
+    });
+  }
+
+  /** 设置应用偏好语言；'default' 清空偏好，恢复到跟随系统。 */
+  private applyLanguage(value: string, previous: string): void {
+    try {
+      i18n.System.setAppPreferredLanguage(value === 'system' ? 'default' : value);
+    } catch (_e) {
+      this.languageStore.appLanguage = previous;
+      this.toast($r('app.string.settings_language_failed'));
+      return;
+    }
+    this.restartApp();
+  }
+
+  /**
+   * 冷启动后资源才按新偏好重新加载（官方「应用偏好语言」约束），
+   * 因此设置成功后重启进程。用当前 Ability 的 bundle/ability 信息构造 Want，
+   * 不写死包名。
+   */
+  private restartApp(): void {
+    const host = this.getUIContext().getHostContext();
+    if (!host) {
+      this.toast($r('app.string.settings_language_restart_failed'));
+      return;
+    }
+    try {
+      const ctx = host as common.UIAbilityContext;
+      const want: Want = {
+        bundleName: ctx.abilityInfo.bundleName,
+        abilityName: ctx.abilityInfo.name,
+        moduleName: ctx.abilityInfo.moduleName
+      };
+      ctx.getApplicationContext().restartApp(want);
+    } catch (_e) {
+      this.toast($r('app.string.settings_language_restart_failed'));
     }
   }
 
@@ -119,7 +207,7 @@ export struct SettingsPage {
     }
   }
 
-  private toast(message: string): void {
+  private toast(message: ResourceStr): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message, duration: 3000 });
     } catch (_e) {
@@ -128,10 +216,10 @@ export struct SettingsPage {
   }
 
   /** 开关下面那行说明：还要区分「已启动但还没拿到定位」。 */
-  private gpsStatusText(): string {
-    if (!this.gps.running) return '关闭时不会记录位置';
-    if (this.gps.lastFix === null) return '正在等待定位…';
-    return '正在记录位置';
+  private gpsStatusText(): ResourceStr {
+    if (!this.gps.running) return $r('app.string.settings_gps_off_desc');
+    if (this.gps.lastFix === null) return $r('app.string.settings_gps_waiting');
+    return $r('app.string.settings_gps_recording');
   }
 
   private async onToggleMockGps(on: boolean): Promise<void> {
@@ -139,7 +227,7 @@ export struct SettingsPage {
     if (!on) {
       this.gps.clearMockTrack();
       this.mockGpsOn = false;
-      this.toast('模拟轨迹已清除');
+      this.toast($r('app.string.settings_toast_mock_cleared'));
       return;
     }
 
@@ -149,18 +237,23 @@ export struct SettingsPage {
     this.mockGpsOn = this.gps.hasMockTrack();
     if (!ok) {
       this.mockGpsOn = false;
-      this.toast(this.gps.lastError === '' ? '模拟轨迹生成失败' : this.gps.lastError);
+      this.toast(this.gps.lastError === ''
+        ? $r('app.string.settings_toast_mock_failed') : this.gps.lastError);
     } else {
-      this.toast(`已注入相机图案轨迹（${this.gps.mockCount()} 条模拟定位记录）`);
+      const mockCount = this.gps.mockCount();
+      this.toast($r('app.string.settings_toast_mock_injected',
+        L10n.plural('mock_record_count', mockCount, mockCount)));
     }
   }
 
-  private mockGpsStatusText(): string {
-    if (this.mockGpsBusy) return '正在获取当前位置…';
+  private mockGpsStatusText(): ResourceStr {
+    if (this.mockGpsBusy) return $r('app.string.settings_mock_gps_waiting');
     if (this.gps.hasMockTrack()) {
-      return `模拟中 · ${this.gps.mockCount()} 条模拟定位记录（仅今日显示，不改真实记录）`;
+      const count = this.gps.mockCount();
+      return $r('app.string.settings_mock_gps_active',
+        L10n.plural('mock_record_count', count, count));
     }
-    return '以当前位置为起点注入一个相机图案，仅影响今日显示，不改真实记录';
+    return $r('app.string.settings_mock_gps_desc');
   }
 
   onToggleMockCamera(enabled: boolean): void {
@@ -189,8 +282,20 @@ export struct SettingsPage {
     return this.settings.displayMode === 'content_first' ? 0 : 1;
   }
 
+  /** 已记录条数 + 保留策略清理条数；条数用复数资源，英文下不会出现 "1 records"。 */
+  private gpsRecordText(): string {
+    const count = this.gps.displayRecordCount();
+    let text = L10n.tr('settings_gps_record_count',
+      L10n.plural('record_count', count, count));
+    if (this.gps.trimmedRecords > 0) {
+      text += L10n.tr('settings_gps_trimmed',
+        L10n.plural('record_count', this.gps.trimmedRecords, this.gps.trimmedRecords));
+    }
+    return text;
+  }
+
   @Builder
-  GroupTitle(title: string) {
+  GroupTitle(title: ResourceStr) {
     Text(title)
       .fontSize(FontSize.Section)
       .fontColor($r('app.color.text_secondary'))
@@ -203,15 +308,14 @@ export struct SettingsPage {
       Column({ space: 10 }) {
 
         // ---- 外观 ----
-        this.GroupTitle('外观')
+        this.GroupTitle($r('app.string.settings_section_appearance'))
         Column() {
           // 选项类控件用 Select：它属于官方「选择类」沉浸光感组件，
           // 内容区也能拿到真材质（自制的分段按钮拿不到）。
           SettingSelectRow({
-            label: '深色模式',
+            label: $r('app.string.settings_dark_mode'),
             options: DARK_OPTIONS,
             selectedIndex: this.darkIndex(),
-            last: true,
             onSelect: (index: number) => {
               const v = DARK_VALUES[index];
               if (v !== undefined) {
@@ -219,16 +323,23 @@ export struct SettingsPage {
               }
             }
           })
+          SettingSelectRow({
+            label: $r('app.string.settings_language'),
+            options: LANGUAGE_OPTIONS,
+            selectedIndex: this.languageIndex(),
+            last: true,
+            onSelect: (index: number) => { this.onLanguageSelect(index); }
+          })
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
         .borderRadius(Radius.Card)
 
         // ---- 画廊 ----
-        this.GroupTitle('画廊')
+        this.GroupTitle($r('app.string.settings_section_gallery'))
         Column() {
           SettingSelectRow({
-            label: '默认列数',
+            label: $r('app.string.settings_columns'),
             options: COLUMN_OPTIONS,
             selectedIndex: this.columnIndex(),
             onSelect: (index: number) => {
@@ -239,7 +350,7 @@ export struct SettingsPage {
             }
           })
           SettingSelectRow({
-            label: '显示模式',
+            label: $r('app.string.settings_display_mode'),
             options: DISPLAY_OPTIONS,
             selectedIndex: this.displayIndex(),
             last: true,
@@ -256,11 +367,11 @@ export struct SettingsPage {
         .borderRadius(Radius.Card)
 
         // ---- 定位 ----
-        this.GroupTitle('定位记录')
+        this.GroupTitle($r('app.string.settings_section_location'))
         Column() {
           Row() {
             Column({ space: 2 }) {
-              Text('定位记录')
+              Text($r('app.string.settings_gps_records'))
                 .fontSize(FontSize.CardTitle)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
@@ -283,7 +394,7 @@ export struct SettingsPage {
           .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
 
           SettingSelectRow({
-            label: '记录频率',
+            label: $r('app.string.settings_gps_frequency'),
             options: GPS_MODE_OPTIONS,
             selectedIndex: this.gpsModeUiIndex(),
             onSelect: (index: number) => {
@@ -294,14 +405,11 @@ export struct SettingsPage {
 
           Row({ space: 8 }) {
             Column({ space: 2 }) {
-              Text('定位记录管理')
+              Text($r('app.string.settings_gps_manage'))
                 .fontSize(FontSize.CardTitle)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
-              Text(`已记录 ${this.gps.displayRecordCount()} 条定位记录` +
-                (this.gps.trimmedRecords > 0
-                  ? ` · 已按保留策略清理 ${this.gps.trimmedRecords} 条旧记录`
-                  : ''))
+              Text(this.gpsRecordText())
                 .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)
@@ -321,9 +429,9 @@ export struct SettingsPage {
         .borderRadius(Radius.Card)
 
         // ---- 存储 ----
-        this.GroupTitle('存储')
+        this.GroupTitle($r('app.string.settings_section_storage'))
         Row({ space: 8 }) {
-          Text('缩略图缓存')
+          Text($r('app.string.settings_cache'))
             .fontSize(FontSize.CardTitle)
             .fontColor($r('app.color.text_primary'))
             .layoutWeight(1)
@@ -337,9 +445,9 @@ export struct SettingsPage {
         .onClick(() => { this.onOpenCacheManagement(); })
 
         // ---- 关于 ----
-        this.GroupTitle('关于')
+        this.GroupTitle($r('app.string.settings_section_about'))
         Row() {
-          Text('版本')
+          Text($r('app.string.settings_version'))
             .fontSize(FontSize.CardTitle)
             .fontColor($r('app.color.text_primary'))
           Blank()
@@ -353,11 +461,11 @@ export struct SettingsPage {
 
         // ---- 调试 ----
         if (this.debugBuild) {
-          this.GroupTitle('调试')
+          this.GroupTitle($r('app.string.settings_section_debug'))
           Column({ space: 12 }) {
             Row({ space: 12 }) {
               Column({ space: 3 }) {
-                Text('模拟 GPS 轨迹')
+                Text($r('app.string.settings_mock_gps'))
                   .fontSize(FontSize.CardTitle)
                   .fontColor($r('app.color.text_primary'))
                   .alignSelf(ItemAlign.Start)
@@ -379,13 +487,14 @@ export struct SettingsPage {
 
             Row({ space: 12 }) {
               Column({ space: 3 }) {
-                Text('模拟相机设备')
+                Text($r('app.string.settings_mock_camera'))
                   .fontSize(FontSize.CardTitle)
                   .fontColor($r('app.color.text_primary'))
                   .alignSelf(ItemAlign.Start)
                 Text(this.svc.photoCount > 0
-                  ? `已连接虚拟相机，共 ${this.svc.photoCount} 张`
-                  : '开启后到「相机」页点右上角的「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片')
+                  ? $r('app.string.settings_mock_camera_connected',
+                    L10n.plural('photo_count', this.svc.photoCount, this.svc.photoCount))
+                  : $r('app.string.settings_mock_camera_desc'))
                   .fontSize(FontSize.Caption)
                   .fontColor($r('app.color.text_tertiary'))
                   .alignSelf(ItemAlign.Start)
@@ -401,17 +510,17 @@ export struct SettingsPage {
             Divider().color($r('app.color.divider'))
 
             Row({ space: 8 }) {
-              Text(`${this.logText ? this.logText.split('\n').length : 0} 条日志`)
+              Text(logCountText(this.logText))
                 .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_secondary'))
                 .layoutWeight(1)
-              Button('清除')
+              Button($r('app.string.settings_clear'))
                 .height(30)
                 .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_primary'))
                 .backgroundColor($r('app.color.filter_chip_bg'))
                 .onClick(() => { this.onClear(); })
-              Button('复制')
+              Button($r('app.string.settings_copy'))
                 .height(30)
                 .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.primary'))
@@ -459,18 +568,17 @@ export struct SettingsPage {
  */
 @ComponentV2
 struct SettingSelectRow {
-  @Param label: string = '';
+  @Param label: ResourceStr = '';
   @Param options: SelectOption[] = [];
   @Param selectedIndex: number = 0;
   @Param last: boolean = false;
   @Event onSelect: (index: number) => void = (_i: number) => {};
 
   /** Select 的按钮文字由 value() 决定，selected() 只负责菜单里的选中态。 */
-  private selectedLabel(): string {
+  private selectedLabel(): ResourceStr {
     const i = this.selectedIndex;
     if (i < 0 || i >= this.options.length) return '';
-    const v = this.options[i].value;
-    return typeof v === 'string' ? v : '';
+    return this.options[i].value;
   }
 
   build() {

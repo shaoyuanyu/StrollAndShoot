@@ -29,7 +29,7 @@ export struct GpsTrackSketch {
   @Param sketchPoints: GpsRecord[] = [];
   @Param bounds: GpsTrackBounds = EMPTY_BOUNDS;
   @Param selected: GpsRecord | null = null;
-  @Param caption: string = '';
+  @Param caption: ResourceStr = '';
   /** 说明文字距底部的距离（vp）。全屏页要避开底部明细面板。 */
   @Param captionBottom: number = 10;
   /** 顶部/底部被标题栏、明细面板遮住的高度（vp），用于把轨迹画在真正可见的区域。 */
@@ -225,7 +225,7 @@ export struct GpsTrackSketch {
           this.draw();
         })
 
-      if (this.caption.length > 0) {
+      if (this.caption !== '') {
         Stack({ alignContent: Alignment.BottomStart }) {
           Text(this.caption)
             .fontSize(FontSize.Micro)
