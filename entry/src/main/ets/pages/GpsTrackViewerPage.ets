@@ -11,6 +11,7 @@ import {
 } from '../utils/GpsFormat';
 import { WindowUtils } from '../utils/WindowUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp } from '../utils/TitleBarMetrics';
+import { FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import { MapCapability } from '../utils/MapCapability';
 import type { GpsRecord } from '../model/PhotoEntry';
 
@@ -86,18 +87,18 @@ struct GpsPointRow {
           Column({ space: 4 }) {
             Row({ space: 6 }) {
               Text(this.timeText())
-                .fontSize(17)
+                .fontSize(FontSize.CardTitle)
                 .fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.primary'))
               if (this.isFirst || this.isLast) {
                 Text(this.isFirst ? '起点' : '终点')
-                  .fontSize(10)
+                  .fontSize(FontSize.Micro)
                   .fontColor($r('app.color.text_tertiary'))
               }
               Blank()
               if (this.record.altitude !== 0) {
                 Text(formatAltitude(this.record.altitude))
-                  .fontSize(10)
+                  .fontSize(FontSize.Micro)
                   .fontColor($r('app.color.text_tertiary'))
               }
             }
@@ -105,13 +106,13 @@ struct GpsPointRow {
             .alignItems(VerticalAlign.Center)
 
             Text(formatCoordinate(this.record.latitude, this.record.longitude))
-              .fontSize(10)
+              .fontSize(FontSize.Micro)
               .fontColor($r('app.color.text_tertiary'))
               .alignSelf(ItemAlign.Start)
 
             if (this.address() !== '') {
               Text(this.address())
-                .fontSize(11)
+                .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_secondary'))
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -122,7 +123,7 @@ struct GpsPointRow {
           .alignItems(HorizontalAlign.Start)
           .padding({ left: 8, right: 8, top: 14, bottom: 14 })
           .backgroundColor($r('app.color.primary_soft'))
-          .borderRadius(16)
+          .borderRadius(Radius.Inner)
           .onClick(() => { this.onSelect(); })
         }
         .width('100%')
@@ -131,12 +132,12 @@ struct GpsPointRow {
         Row({ space: 12 }) {
           Row({ space: 6 }) {
             Text(this.timeText())
-              .fontSize(15)
+              .fontSize(FontSize.Body)
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
             if (this.isFirst || this.isLast) {
               Text(this.isFirst ? '起点' : '终点')
-                .fontSize(10)
+                .fontSize(FontSize.Micro)
                 .fontColor($r('app.color.text_tertiary'))
             }
           }
@@ -202,20 +203,20 @@ struct GpsGroupHeader {
     Column() {
       Row({ space: 10 }) {
       SymbolGlyph(this.icon())
-        .fontSize(16)
+        .fontSize(IconSize.Body)
         .fontColor([$r('app.color.primary')])
 
       Column({ space: 3 }) {
         Row({ space: 6 }) {
           Text(this.title())
-            .fontSize(15)
+            .fontSize(FontSize.CardTitle)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
           Text(this.stationary ? '停留' : '移动')
-            .fontSize(10)
+            .fontSize(FontSize.Micro)
             .fontColor($r('app.color.primary'))
             .maxLines(1)
         }
@@ -223,7 +224,7 @@ struct GpsGroupHeader {
         .alignItems(VerticalAlign.Center)
 
         Text(this.subtitle())
-          .fontSize(11)
+          .fontSize(FontSize.Caption)
           .fontColor($r('app.color.text_tertiary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -233,7 +234,7 @@ struct GpsGroupHeader {
       .alignItems(HorizontalAlign.Start)
 
       SymbolGlyph($r('sys.symbol.chevron_down'))
-        .fontSize(14)
+        .fontSize(IconSize.Body)
         .fontColor([$r('app.color.text_tertiary')])
         .rotate({ angle: this.expanded() ? 180 : 0 })
     }
@@ -242,7 +243,7 @@ struct GpsGroupHeader {
     .padding({ left: 8, right: 8, top: 13, bottom: 12 })
       .backgroundColor($r('app.color.bg_surface'))
       .border({ width: 0.5, color: $r('app.color.card_border') })
-      .borderRadius(18)
+      .borderRadius(Radius.Inner)
       .onClick(() => { this.onToggle(); })
     }
     .width('100%')
@@ -1105,7 +1106,7 @@ export struct GpsTrackViewerPage {
       Row({ space: 10 }) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(20)
+            .fontSize(IconSize.Nav)
             .fontColor([$r('app.color.text_primary')])
         }
         .width(40).height(40)
@@ -1117,7 +1118,7 @@ export struct GpsTrackViewerPage {
         // 不再用整条白色大胶囊 + backgroundBlurStyle。
         Button({ type: ButtonType.Normal, stateEffect: false }) {
           Text(this.titleDayLabel())
-            .fontSize(16)
+            .fontSize(FontSize.CardTitle)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .maxLines(1)
@@ -1125,14 +1126,14 @@ export struct GpsTrackViewerPage {
         .height(40)
         .padding({ left: 16, right: 16 })
         .backgroundColor(Color.Transparent)
-        .borderRadius(20)
+        .borderRadius(pillRadius(40))
         .systemMaterial(this.titleMaterial)
 
         Blank()
 
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.ellipsis_circle'))
-            .fontSize(20)
+            .fontSize(IconSize.Nav)
             .fontColor([$r('app.color.text_primary')])
         }
         .width(40).height(40)
@@ -1161,19 +1162,19 @@ export struct GpsTrackViewerPage {
         Column({ space: 3 }) {
           Row({ space: 6 }) {
             Text('轨迹明细')
-              .fontSize(24)
+              .fontSize(FontSize.Title)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
             if (this.isMockTrack()) {
               Text('模拟轨迹')
-                .fontSize(10)
+                .fontSize(FontSize.Micro)
                 .fontColor($r('app.color.primary'))
             }
           }
           .alignItems(VerticalAlign.Center)
 
           Text(this.sheetSubtitle())
-            .fontSize(12)
+            .fontSize(FontSize.Caption)
             .fontColor($r('app.color.text_tertiary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1183,11 +1184,11 @@ export struct GpsTrackViewerPage {
 
         if (this.selectedIndex >= 0) {
           Button('回到全程')
-            .fontSize(12)
+            .fontSize(FontSize.Caption)
             .height(30)
             .fontColor($r('app.color.primary'))
             .backgroundColor($r('app.color.primary_soft'))
-            .borderRadius(15)
+            .borderRadius(pillRadius(30))
             .padding({ left: 12, right: 12 })
             .onClick(() => { this.fitTrack(); })
         }
@@ -1198,12 +1199,12 @@ export struct GpsTrackViewerPage {
       Row() {
         Column({ space: 4 }) {
           Text(this.distanceText())
-            .fontSize(16).fontWeight(FontWeight.Medium)
+            .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.figure_walk'))
-              .fontSize(11).fontColor([$r('app.color.primary')])
-            Text('距离').fontSize(10).fontColor($r('app.color.text_tertiary'))
+              .fontSize(IconSize.Small).fontColor([$r('app.color.primary')])
+            Text('距离').fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
           }
         }
         .layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -1212,12 +1213,12 @@ export struct GpsTrackViewerPage {
 
         Column({ space: 4 }) {
           Text(formatDuration(this.track !== null ? this.track.durationMs : 0))
-            .fontSize(16).fontWeight(FontWeight.Medium)
+            .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.clock'))
-              .fontSize(11).fontColor([$r('app.color.primary')])
-            Text('时长').fontSize(10).fontColor($r('app.color.text_tertiary'))
+              .fontSize(IconSize.Small).fontColor([$r('app.color.primary')])
+            Text('时长').fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
           }
         }
         // 时长可能到「13 小时 12 分」，比距离/条数长；给中间列更多权重，
@@ -1229,12 +1230,12 @@ export struct GpsTrackViewerPage {
 
         Column({ space: 4 }) {
           Text(`${this.pointCount()}`)
-            .fontSize(16).fontWeight(FontWeight.Medium)
+            .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
-              .fontSize(11).fontColor([$r('app.color.primary')])
-            Text('定位记录').fontSize(10).fontColor($r('app.color.text_tertiary'))
+              .fontSize(IconSize.Small).fontColor([$r('app.color.primary')])
+            Text('定位记录').fontSize(FontSize.Micro).fontColor($r('app.color.text_tertiary'))
           }
         }
         .layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -1322,17 +1323,17 @@ export struct GpsTrackViewerPage {
           Column({ space: 8 }) {
             LoadingProgress().width(28).height(28)
             Text('正在读取轨迹…')
-              .fontSize(13).fontColor($r('app.color.text_secondary'))
+              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
           }
           .width('100%').height('100%')
           .justifyContent(FlexAlign.Center)
         } else if (this.track.count === 0) {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
-              .fontSize(44)
+              .fontSize(IconSize.Empty)
               .fontColor([$r('app.color.text_tertiary')])
             Text('当天无记录')
-              .fontSize(15).fontColor($r('app.color.text_secondary'))
+              .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
           }
           .width('100%').height('100%')
           .justifyContent(FlexAlign.Center)
@@ -1354,13 +1355,13 @@ export struct GpsTrackViewerPage {
               if (this.canRetryMap()) {
                 Row() {
                   Button('重试地图')
-                    .fontSize(11)
+                    .fontSize(FontSize.Caption)
                     .height(30)
                     .padding({ left: 12, right: 12 })
                     .fontColor($r('app.color.text_primary'))
                     .backgroundColor($r('app.color.glass_bg'))
                     .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-                    .borderRadius(15)
+                    .borderRadius(pillRadius(30))
                     .onClick(() => { this.retryMap(); })
                 }
                 .width('100%')
@@ -1385,11 +1386,11 @@ export struct GpsTrackViewerPage {
               Stack({ alignContent: Alignment.Center }) {
                 Row({ space: 6 }) {
                   LoadingProgress().width(16).height(16)
-                  Text('地图加载中').fontSize(10).fontColor($r('app.color.text_secondary'))
+                  Text('地图加载中').fontSize(FontSize.Micro).fontColor($r('app.color.text_secondary'))
                 }
                 .padding({ left: 10, right: 12, top: 6, bottom: 6 })
                 .backgroundColor($r('app.color.glass_bg'))
-                .borderRadius(14)
+                .borderRadius(Radius.Chip)
               }
               .width('100%').height('100%')
               .hitTestBehavior(HitTestMode.None)

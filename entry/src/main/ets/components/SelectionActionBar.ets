@@ -1,3 +1,5 @@
+import { ControlHeight, FontSize, IconSize } from '../utils/UiTokens';
+
 /**
  * 多选底部操作栏。
  *
@@ -19,17 +21,17 @@ export struct SelectionActionBar {
     Column({ space: 2 }) {
       // 图标与文字尺寸照抄底部页签的 TabItem（24fp / 10fp），两套控件才像一家人
       SymbolGlyph($r('sys.symbol.arrow_down_and_rectangle'))
-        .fontSize(24)
+        .fontSize(IconSize.Large)
         .fontColor([this.selectedCount > 0
           ? $r('app.color.text_primary') : $r('app.color.text_tertiary')])
       Text('下载')
-        .fontSize(10)
+        .fontSize(FontSize.Micro)
         .fontWeight(this.selectedCount > 0 ? FontWeight.Medium : FontWeight.Regular)
         .fontColor(this.selectedCount > 0
           ? $r('app.color.text_primary') : $r('app.color.text_tertiary'))
     }
     .width(96)
-    .height(56)
+    .height(ControlHeight.Bar)
     .justifyContent(FlexAlign.Center)
     .onClick(() => {
       if (this.selectedCount > 0) {

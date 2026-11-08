@@ -18,6 +18,7 @@ import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
+import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens';
 
 @Builder
 export function MainScreenBuilder() {
@@ -283,7 +284,7 @@ export struct MainScreen {
               }
             })
           }
-          .borderRadius(30)
+          .borderRadius(pillRadius(60))
           .position({
             top: this.screenHeightVp() * 0.5 - 63,
             left: this.handedness.leftHanded ? 12 : undefined,
@@ -299,11 +300,11 @@ export struct MainScreen {
             })
           }
           .width(96)
-          .height(56)
-          .borderRadius(28)
+          .height(ControlHeight.Bar)
+          .borderRadius(pillRadius(ControlHeight.Bar))
           .position({
             // 与底部页签完全同一基线：高 56vp，底边贴着导航手势条避让区
-            top: this.screenHeightVp() - this.navIndicatorVp() - 56,
+            top: this.screenHeightVp() - this.navIndicatorVp() - ControlHeight.Bar,
             left: (this.screenWidthVp() - 96) / 2
           })
           .systemMaterial(this.floatMaterial)
@@ -325,11 +326,11 @@ export struct MainScreen {
     Row({ space: 8 }) {
       Button({ type: ButtonType.Circle }) {
         SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(18)
+          .fontSize(IconSize.Nav)
           .fontColor([$r('app.color.text_primary')])
       }
-      .width(40)
-      .height(40)
+      .width(ControlHeight.Pill)
+      .height(ControlHeight.Pill)
       .backgroundColor(Color.Transparent)
       .systemMaterial(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
@@ -338,7 +339,7 @@ export struct MainScreen {
       .onClick(() => { this.exitSelectMode(); })
 
       Text(this.selectTitleText())
-        .fontSize(22)
+        .fontSize(FontSize.Title)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
         .maxLines(1)
@@ -347,13 +348,13 @@ export struct MainScreen {
 
       Button() {
         Text(this.allSelected() ? '取消全选' : '全选')
-          .fontSize(15)
+          .fontSize(FontSize.Body)
           .fontColor($r('app.color.text_primary'))
       }
-      .height(40)
+      .height(ControlHeight.Pill)
       .padding({ left: 16, right: 16 })
       .backgroundColor(Color.Transparent)
-      .borderRadius(20)
+      .borderRadius(pillRadius(ControlHeight.Pill))
       .systemMaterial(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
         interactive: true
@@ -370,7 +371,7 @@ export struct MainScreen {
   NormalTitleRow() {
     Row() {
       Text(this.tabTitle())
-        .fontSize(28)
+        .fontSize(FontSize.Display)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
         .maxLines(1)
@@ -383,14 +384,14 @@ export struct MainScreen {
           Select(this.filterOptions())
             .selected(this.filterSelectedIndex())
             .value(this.filterLabel())
-            .font({ size: 15, weight: FontWeight.Medium })
+            .font({ size: FontSize.Body, weight: FontWeight.Medium })
             .fontColor($r('app.color.text_primary'))
-            .selectedOptionFont({ size: 15, weight: FontWeight.Medium })
+            .selectedOptionFont({ size: FontSize.Body, weight: FontWeight.Medium })
             .selectedOptionFontColor($r('app.color.primary'))
-            .optionFont({ size: 15 })
+            .optionFont({ size: FontSize.Body })
             .optionFontColor($r('app.color.text_primary'))
-            .height(40)
-            .borderRadius(20)
+            .height(ControlHeight.Pill)
+            .borderRadius(pillRadius(ControlHeight.Pill))
             .backgroundColor(Color.Transparent)
             .margin({ right: 8 })
             .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
@@ -403,13 +404,13 @@ export struct MainScreen {
         }
         Button() {
           Text('选择')
-            .fontSize(15)
+            .fontSize(FontSize.Body)
             .fontColor($r('app.color.text_primary'))
         }
-        .height(40)
+        .height(ControlHeight.Pill)
         .padding({ left: 16, right: 16 })
         .backgroundColor(Color.Transparent)
-        .borderRadius(20)
+        .borderRadius(pillRadius(ControlHeight.Pill))
         .systemMaterial(new uiMaterial.ImmersiveMaterial({
           style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
           interactive: true
@@ -423,12 +424,12 @@ export struct MainScreen {
         // 时材质取 Button 主题色（蓝），正好当主操作。
         if (this.svc.scanning) {
           Button('扫描中')
-            .height(40)
+            .height(ControlHeight.Pill)
             .padding({ left: 18, right: 18 })
-            .fontSize(15)
+            .fontSize(FontSize.Body)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_on_primary'))
-            .borderRadius(20)
+            .borderRadius(pillRadius(ControlHeight.Pill))
             .opacity(0.6)
             .systemMaterial(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
@@ -436,12 +437,12 @@ export struct MainScreen {
             }))
         } else {
           Button(this.svc.connected ? '快速扫描' : '搜索相机')
-            .height(40)
+            .height(ControlHeight.Pill)
             .padding({ left: 18, right: 18 })
-            .fontSize(15)
+            .fontSize(FontSize.Body)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_on_primary'))
-            .borderRadius(20)
+            .borderRadius(pillRadius(ControlHeight.Pill))
             .systemMaterial(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true
@@ -464,11 +465,11 @@ export struct MainScreen {
   TabItem(label: string, icon: Resource, index: number) {
     Column({ space: 2 }) {
       SymbolGlyph(icon)
-        .fontSize(24)
+        .fontSize(IconSize.Large)
         .fontColor([this.currentTab === index
           ? $r('app.color.primary') : $r('app.color.text_tertiary')])
       Text(label)
-        .fontSize(10)
+        .fontSize(FontSize.Micro)
         .fontWeight(this.currentTab === index ? FontWeight.Medium : FontWeight.Regular)
         .fontColor(this.currentTab === index
           ? $r('app.color.primary') : $r('app.color.text_tertiary'))
@@ -662,7 +663,7 @@ export struct MainScreen {
       .animationDuration(220)
       // 多选时页签栏让位给底部操作栏：高度置 0，操作栏占据同一位置。
       // 非多选态恢复系统默认高度，悬浮样式（barFloatingStyle 的材质与圆角）不受影响。
-      .barHeight(this.gallerySelectMode ? 0 : 56)
+      .barHeight(this.gallerySelectMode ? 0 : ControlHeight.Bar)
       .onChange((idx: number) => {
         this.currentTab = idx;
         this.uiState.lastTab = idx;

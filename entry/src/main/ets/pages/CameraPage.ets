@@ -1,5 +1,6 @@
 import { CameraService } from '../services/CameraService';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 
 /**
  * 相机页。
@@ -26,20 +27,20 @@ export struct CameraPage {
     Column({ space: 14 }) {
       Row({ space: 10 }) {
         Row()
-          .width(8).height(8).borderRadius(4)
+          .width(8).height(8).borderRadius(pillRadius(8))
           .backgroundColor(this.statusColor())
         Text(this.svc.connected ? '已连接' : (this.svc.statusText || '未连接相机'))
-          .fontSize(17)
+          .fontSize(FontSize.CardTitle)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
         Blank()
         if (this.svc.connected && this.svc.photoCount > 0) {
           Text(`${this.svc.photoCount} 张`)
-            .fontSize(13)
+            .fontSize(FontSize.Caption)
             .fontColor($r('app.color.primary'))
             .padding({ left: 10, right: 10, top: 4, bottom: 4 })
             .backgroundColor($r('app.color.primary_soft'))
-            .borderRadius(12)
+            .borderRadius(Radius.Chip)
         }
       }
       .width('100%')
@@ -47,12 +48,12 @@ export struct CameraPage {
       if (this.svc.connected) {
         Column({ space: 4 }) {
           Text(this.svc.cameraName)
-            .fontSize(15)
+            .fontSize(FontSize.Body)
             .fontColor($r('app.color.text_primary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(this.svc.cameraIdentity)
-            .fontSize(11)
+            .fontSize(FontSize.Caption)
             .fontColor($r('app.color.text_tertiary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -73,10 +74,10 @@ export struct CameraPage {
             .backgroundColor($r('app.color.divider'))
           Row() {
             Text(this.svc.scanPhaseText || '正在扫描')
-              .fontSize(11).fontColor($r('app.color.text_secondary'))
+              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
             Blank()
             Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
-              .fontSize(11).fontColor($r('app.color.text_secondary'))
+              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
           }
           .width('100%')
         }
@@ -85,15 +86,15 @@ export struct CameraPage {
 
       if (this.svc.scanStatsText) {
         Text(this.svc.scanStatsText)
-          .fontSize(11)
+          .fontSize(FontSize.Caption)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
       }
     }
     .width('100%')
-    .padding(20)
+    .padding(16)
     .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(24)
+    .borderRadius(Radius.Card)
   }
 
   /** 未连接时的空态：不再放整块大按钮，主操作在标题栏右上角。 */
@@ -101,15 +102,15 @@ export struct CameraPage {
   EmptyCard() {
     Column({ space: 10 }) {
       SymbolGlyph($r('sys.symbol.camera'))
-        .fontSize(44)
+        .fontSize(IconSize.Empty)
         .fontColor([$r('app.color.text_tertiary')])
       Text('未连接相机')
-        .fontSize(17)
+        .fontSize(FontSize.CardTitle)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .margin({ top: 2 })
       Text('用 USB 数据线连接相机，并选择 PTP 传输模式\n然后点右上角的「搜索相机」')
-        .fontSize(13)
+        .fontSize(FontSize.Caption)
         .lineHeight(20)
         .textAlign(TextAlign.Center)
         .fontColor($r('app.color.text_secondary'))
@@ -117,7 +118,7 @@ export struct CameraPage {
     .width('100%')
     .padding({ left: 24, right: 24, top: 48, bottom: 48 })
     .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(24)
+    .borderRadius(Radius.Card)
   }
 
   @Builder
@@ -136,7 +137,7 @@ export struct CameraPage {
     .width('100%')
     .padding({ left: 16, right: 16 })
     .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(24)
+    .borderRadius(Radius.Card)
   }
 
   /** 次要操作单独一张卡：全量扫描（会丢缓存）与断开连接。 */
@@ -159,7 +160,7 @@ export struct CameraPage {
     .width('100%')
     .padding({ left: 16, right: 16 })
     .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(24)
+    .borderRadius(Radius.Card)
   }
 
   build() {
@@ -195,11 +196,11 @@ struct CameraInfoRow {
   build() {
     Row() {
       Text(this.label)
-        .fontSize(15)
+        .fontSize(FontSize.Body)
         .fontColor($r('app.color.text_secondary'))
         .flexShrink(0)
       Text(this.value)
-        .fontSize(15)
+        .fontSize(FontSize.Body)
         .fontColor($r('app.color.text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -208,7 +209,7 @@ struct CameraInfoRow {
         .margin({ left: 16 })
     }
     .width('100%')
-    .height(52)
+    .height(RowHeight.Single)
     .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
   }
 }
@@ -227,12 +228,12 @@ struct CameraActionRow {
     Row({ space: 8 }) {
       Column({ space: 2 }) {
         Text(this.label)
-          .fontSize(16)
+          .fontSize(FontSize.CardTitle)
           .fontColor(this.danger ? $r('app.color.button_danger') : $r('app.color.text_primary'))
           .alignSelf(ItemAlign.Start)
         if (this.subtitle !== '') {
           Text(this.subtitle)
-            .fontSize(11)
+            .fontSize(FontSize.Caption)
             .fontColor($r('app.color.text_tertiary'))
             .alignSelf(ItemAlign.Start)
         }
@@ -242,7 +243,7 @@ struct CameraActionRow {
 
       if (!this.danger) {
         SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(16)
+          .fontSize(IconSize.Body)
           .fontColor([$r('app.color.text_tertiary')])
       }
     }

@@ -14,6 +14,7 @@ import {
 } from '../CustomTransition/PhotoMorph';
 import { RectInfoInPx } from '../utils/ComponentAttrUtils';
 import { WindowUtils } from '../utils/WindowUtils';
+import { FontSize, IconSize, Radius } from '../utils/UiTokens';
 
 const TAG = 'PhotoViewer';
 const DOMAIN = 0x0001;
@@ -566,16 +567,16 @@ struct MainImageView {
         } else {
           Column() {
             Text(this.photo.filename)
-              .fontSize(14).fontColor('#aaa')
+              .fontSize(FontSize.Body).fontColor($r('app.color.viewer_text_secondary'))
               .maxLines(2).textAlign(TextAlign.Center)
             if (this.svc.scanning) {
               Text(this.svc.lastDecodedHandle >= 0 ? '正在解码缩略图…' : '等待扫描…')
-                .fontSize(12).fontColor('#888').margin({ top: 8 })
+                .fontSize(FontSize.Caption).fontColor($r('app.color.viewer_text_tertiary')).margin({ top: 8 })
             }
           }
           .width('100%').height('100%')
           .justifyContent(FlexAlign.Center)
-          .backgroundColor('#222')
+          .backgroundColor($r('app.color.viewer_placeholder_bg'))
           .onClick(() => { this.onOverlayToggle(); })
         }
       }
@@ -583,24 +584,24 @@ struct MainImageView {
       if (this.state !== null && this.state.spinnerOn) {
         Column() {
           LoadingProgress()
-            .color(Color.White)
+            .color($r('app.color.text_on_dark'))
             .width(48).height(48)
         }
         .width('100%').height('100%')
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('rgba(0,0,0,0.3)')
+        .backgroundColor($r('app.color.viewer_scrim'))
         .hitTestBehavior(HitTestMode.None)
       }
 
       // Scanning banner — shown when scanning and no full-res loaded yet
       if (this.svc.scanning && !this.hasFullRes() && this.svc.scanTotal > 0) {
         Text(this.scanText())
-          .fontSize(12)
-          .fontColor('rgba(255,255,255,0.8)')
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.viewer_text_on_dark_80'))
           .textAlign(TextAlign.Center)
           .width('100%')
           .padding({ top: 4, bottom: 4 })
-          .backgroundColor('rgba(0,0,0,0.4)')
+          .backgroundColor($r('app.color.viewer_banner_bg'))
           .position({ bottom: 0 })
           .hitTestBehavior(HitTestMode.None)
       }
@@ -674,19 +675,19 @@ struct ThumbCellView {
           .draggable(false)
           .objectFit(ImageFit.Cover)
           .width('100%').height('100%')
-          .borderRadius(4)
-          .border({ width: this.borderWeight * 2, color: '#2196F3', radius: 4 })
+          .borderRadius(Radius.Thumb)
+          .border({ width: this.borderWeight * 2, color: $r('app.color.viewer_accent'), radius: Radius.Thumb })
       } else if (this.realIdx >= 0) {
         Column()
           .width('100%').height('100%')
-          .borderRadius(4)
-          .backgroundColor('#444')
+          .borderRadius(Radius.Thumb)
+          .backgroundColor($r('app.color.viewer_placeholder_image'))
           .justifyContent(FlexAlign.Center)
       }
     }
     .width('100%').aspectRatio(1)
-    .borderRadius(4)
-    .backgroundColor(this.realIdx < 0 ? Color.Transparent : '#333')
+    .borderRadius(Radius.Thumb)
+    .backgroundColor(this.realIdx < 0 ? Color.Transparent : $r('app.color.viewer_placeholder_thumb'))
     .justifyContent(FlexAlign.Center)
     .offset({ x: this.ox })
     .scale({ x: this.s, y: this.s })
@@ -1504,21 +1505,21 @@ export struct PhotoViewerScreen {
       // Back button
       Button({ type: ButtonType.Circle }) {
         SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(22)
-          .fontColor([Color.White])
+          .fontSize(IconSize.Nav)
+          .fontColor([$r('app.color.text_on_dark')])
       }
       .width(36).height(36)
-      .backgroundColor('rgba(255,255,255,0.15)')
+      .backgroundColor($r('app.color.viewer_glass_button'))
       .onClick(() => { this.handleBack(); })
 
       // Title block
       Column() {
         Text(this.getMainTitle())
-          .fontSize(17).fontWeight(FontWeight.Medium).fontColor(Color.White)
+          .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_on_dark'))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
         Text(this.getSubTitle())
-          .fontSize(11).fontColor('rgba(255,255,255,0.7)')
+          .fontSize(FontSize.Caption).fontColor($r('app.color.viewer_text_on_dark_70'))
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
           .margin({ top: 1 })
@@ -1529,7 +1530,7 @@ export struct PhotoViewerScreen {
 
       // Current index indicator
       Text(`${this.mainIdx + 1}/${this._realTotal}`)
-        .fontSize(12).fontColor('rgba(255,255,255,0.7)')
+        .fontSize(FontSize.Caption).fontColor($r('app.color.viewer_text_on_dark_70'))
         .margin({ right: 4 })
     }
     .width('100%')
@@ -1882,7 +1883,7 @@ export struct PhotoViewerScreen {
    * 缩放卡顿的主要渲染成本，此时退化为稍深的半透明纯色，观感差别只在运动瞬间。
    */
   private chromeBg(): ResourceColor {
-    return this.chromeMotion ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.35)';
+    return this.chromeMotion ? $r('app.color.viewer_chrome_motion') : $r('app.color.viewer_chrome');
   }
 
   private chromeBlur(): BlurStyle {

@@ -1,6 +1,8 @@
 # 页面设计与组件
 
 > 本文覆盖主界面/画廊/多选、相机/设置/缓存、预览器/一镜到底转场、定位记录/轨迹页与复用组件。ArkUI 通用规则见 [AGENTS.md](AGENTS.md)，业务服务见 [SERVICES.md](SERVICES.md)，调试与验收见 [AGENTS.md](AGENTS.md)。
+>
+> 所有字号、圆角、行高、图标尺寸一律取 `entry/src/main/ets/utils/UiTokens.ets`，不要在页面里手写数字；令牌清单与取值规则见 [AGENTS.md](AGENTS.md) 的「UI 令牌」。
 
 ## 主界面与画廊
 
@@ -72,14 +74,14 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 ### CameraPage.ets
 
 - 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `currentTab === 1` 分支）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
-- 内容区只有三张 24vp 圆角白卡：状态卡（连接状态、相机名、扫描进度与统计）、设备信息卡（9 行 52vp）、操作卡（全量扫描 + 红色断开连接）。未连接时状态卡换成空态卡（图标 + 说明 + 指向右上角「搜索相机」）。
+- 内容区只有三张 24vp 圆角白卡、内边距 16vp：状态卡（连接状态、相机名、扫描进度与统计）、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。未连接时状态卡换成空态卡（图标 + 说明 + 指向右上角「搜索相机」）。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
 
 扫描阶段、缓存与快速扫描的细节见 [SERVICES.md](SERVICES.md)。
 
 ### SettingsPage.ets
 
-- 分组卡片统一 24vp 圆角、无描边、行高 56vp；分组标题 13fp 次级色。
+- 分组卡片统一 24vp 圆角、无描边；单行 56vp、双行 64vp；分组标题 13fp 次级色。
 - 选项类（深色模式 / 默认列数 / 显示模式 / 记录频率）全是**右侧 `Select` 玻璃胶囊**（`SettingSelectRow`），不要再用自制的「灰底 + 蓝胶囊」分段按钮——那东西在内容区拿不到材质。
 - 开关（GPS 记录、模拟相机）用 `Toggle(Switch)`，**不要设 `selectedColor`**，否则会覆盖系统预设的沉浸光感样式。
 - 导航类行带 `chevron_right`（定位记录管理、缩略图缓存）。删除定位记录统一放在「定位记录管理」页（多选批量删除，或全屏轨迹页「更多」里删当天），设置页不再提供「清除定位记录」入口，避免误触。
@@ -90,7 +92,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 ### CacheManagementPage.ets
 
-- 列出每个相机的缓存体积、条目数、开关、删除、清空全部。
+- 列出每个相机的缓存体积、条目数、开关、删除、清空全部。卡片 24vp 圆角、无描边，与相机/设置页一致。
 
 缓存实现见 [SERVICES.md](SERVICES.md) 的「ThumbnailCache」与「扫描的四个阶段」。
 

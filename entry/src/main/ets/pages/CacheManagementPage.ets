@@ -7,6 +7,7 @@
 import { PageHeader } from '../components/PageHeader';
 import { CameraCachePrefs, type CameraCachePref } from '../services/CameraCachePrefs';
 import { ThumbnailCache, type CacheInfo } from '../services/ThumbnailCache';
+import { FontSize, IconSize, Radius } from '../utils/UiTokens';
 
 @Builder
 export function CacheManagementPageBuilder() {
@@ -133,10 +134,10 @@ export struct CacheManagementPage {
       if (this.cameras.length === 0) {
         Column() {
           Text('暂无缓存记录')
-            .fontSize(14).fontColor($r('app.color.text_secondary'))
+            .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
             .margin({ top: 80 })
           Text('连接相机并启用缓存后将在此显示')
-            .fontSize(12).fontColor($r('app.color.text_secondary'))
+            .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
             .margin({ top: 6 })
         }
         .width('100%').layoutWeight(1)
@@ -150,10 +151,10 @@ export struct CacheManagementPage {
                     // Camera info
                     Column() {
                       Text(ri.item.friendlyName)
-                        .fontSize(15).fontWeight(FontWeight.Medium)
+                        .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
                         .fontColor($r('app.color.text_primary'))
                       Text(`${ri.item.entryCount} 张 | ${this.formatSize(ri.item.cacheSizeBytes)} | 上次连接: ${this.formatDate(ri.item.lastSeen)}`)
-                        .fontSize(12).fontColor($r('app.color.text_secondary'))
+                        .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
                         .margin({ top: 2 })
                     }
                     .alignItems(HorizontalAlign.Start)
@@ -169,7 +170,7 @@ export struct CacheManagementPage {
                     // Delete
                     Button({ type: ButtonType.Circle }) {
                       SymbolGlyph($r('sys.symbol.trash'))
-                        .fontSize(16)
+                        .fontSize(IconSize.Body)
                         .fontColor([$r('app.color.button_danger')])
                     }
                     .width(32).height(32)
@@ -182,8 +183,7 @@ export struct CacheManagementPage {
                 }
                 .width('100%').padding(16)
                 .backgroundColor($r('app.color.bg_surface'))
-                .borderRadius(16)
-                .border({ width: 1, color: $r('app.color.card_border') })
+                .borderRadius(Radius.Card)
               }
               .margin({ bottom: 8 })
             })
@@ -198,7 +198,7 @@ export struct CacheManagementPage {
       if (this.cameras.length > 0) {
         Button('清除所有缓存')
           .width('90%').height(44).margin({ bottom: 24, top: 8 })
-          .fontSize(15)
+          .fontSize(FontSize.Body)
           .fontColor($r('app.color.button_danger'))
           .backgroundColor($r('app.color.primary_soft'))
           .onClick(() => { this.clearAllCaches(); })

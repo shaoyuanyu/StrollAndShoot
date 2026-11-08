@@ -4,6 +4,7 @@ import type { PhotoEntry, DownloadProgress, DisplayGroup } from '../model/PhotoE
 import { getExt, buildDisplayGroups } from '../utils/PhotoGroupUtil';
 import { GalleryZoom } from '../utils/GalleryZoom';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 
 class FlatItem {
   kind: 'header' | 'row' | 'tail' = 'tail';
@@ -460,12 +461,12 @@ export struct GalleryPage {
           Stack() {
             if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
               SymbolGlyph($r('sys.symbol.checkmark'))
-                .fontSize(12)
+                .fontSize(IconSize.Small)
                 .fontColor([$r('app.color.text_on_primary')])
             }
           }
           .width(20).height(20)
-          .borderRadius(10)
+          .borderRadius(pillRadius(20))
           .backgroundColor(this.selectedHandles.has(cellRi.item!.displayPhoto.handle)
             ? $r('app.color.primary') : $r('app.color.scrim'))
           .border({
@@ -477,7 +478,7 @@ export struct GalleryPage {
         }
         if (this.isDownloaded(cellRi.item!.displayPhoto)) {
           Stack()
-            .width(10).height(10).borderRadius(5)
+            .width(10).height(10).borderRadius(pillRadius(10))
             .backgroundColor($r('app.color.status_connected'))
             .border({ width: 1.5, color: $r('app.color.text_on_dark') })
             .position({ top: 5, right: 5 })
@@ -552,10 +553,10 @@ export struct GalleryPage {
           .backgroundColor($r('app.color.divider'))
         Row() {
           Text(this.svc.scanPhaseText || '正在扫描')
-            .fontSize(11).fontColor($r('app.color.text_secondary'))
+            .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
           Blank()
           Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
-            .fontSize(11).fontColor($r('app.color.text_secondary'))
+            .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
         }
         .width('100%')
       }
@@ -595,17 +596,17 @@ export struct GalleryPage {
       if (this.svc.photos.length === 0) {
         Column({ space: 12 }) {
           SymbolGlyph($r('sys.symbol.camera'))
-            .fontSize(48)
+            .fontSize(IconSize.Empty)
             .fontColor([$r('app.color.text_tertiary')])
           if (this.svc.scanning) {
             LoadingProgress().width(28).height(28).color($r('app.color.primary'))
             Text('正在扫描相机…')
-              .fontSize(14).fontColor($r('app.color.text_secondary'))
+              .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
           } else {
             Text('连接相机以浏览照片')
-              .fontSize(14).fontColor($r('app.color.text_secondary'))
+              .fontSize(FontSize.Body).fontColor($r('app.color.text_secondary'))
             Text('在「相机」页搜索并连接 PTP 设备')
-              .fontSize(12).fontColor($r('app.color.text_tertiary'))
+              .fontSize(FontSize.Caption).fontColor($r('app.color.text_tertiary'))
           }
         }
         .width('100%').layoutWeight(1)
@@ -625,7 +626,7 @@ export struct GalleryPage {
                     // 上下各 24vp 留白，照片贴边后组与组之间才有呼吸感。
                     Row() {
                       Text(this.dateHeaderLabel(ri.item.dateKey))
-                        .fontSize(16)
+                        .fontSize(FontSize.CardTitle)
                         .fontWeight(FontWeight.Bold)
                         .fontColor($r('app.color.text_primary'))
                         .layoutWeight(1)
@@ -633,17 +634,17 @@ export struct GalleryPage {
                         Stack() {
                           if (this.dateSelectState(ri.item.dateKey) === 2) {
                             SymbolGlyph($r('sys.symbol.checkmark'))
-                              .fontSize(12)
+                              .fontSize(IconSize.Small)
                               .fontColor([$r('app.color.text_on_primary')])
                           } else if (this.dateSelectState(ri.item.dateKey) === 1) {
                             Row()
                               .width(9).height(1.6)
-                              .borderRadius(1)
+                              .borderRadius(Radius.Line)
                               .backgroundColor($r('app.color.text_on_primary'))
                           }
                         }
                         .width(20).height(20)
-                        .borderRadius(10)
+                        .borderRadius(pillRadius(20))
                         .backgroundColor(this.dateSelectState(ri.item.dateKey) > 0
                           ? $r('app.color.primary') : Color.Transparent)
                         .border({
@@ -762,7 +763,7 @@ struct ThumbImage {
       } else {
         Column() {
           SymbolGlyph($r('sys.symbol.camera'))
-            .fontSize(20)
+            .fontSize(IconSize.Nav)
             .fontColor([$r('app.color.text_tertiary')])
         }
         .width('100%').height('100%')

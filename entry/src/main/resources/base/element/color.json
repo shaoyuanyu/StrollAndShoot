@@ -37,10 +37,6 @@
       "value": "#F1F3F5"
     },
     {
-      "name": "bg_elevated",
-      "value": "#FFFFFF"
-    },
-    {
       "name": "bg_debug_log",
       "value": "#F7F8FA"
     },
@@ -61,20 +57,12 @@
       "value": "#FFFFFF"
     },
     {
-      "name": "tab_bar_bg",
-      "value": "#B3FFFFFF"
-    },
-    {
       "name": "divider",
       "value": "#1A000000"
     },
     {
       "name": "card_border",
       "value": "#14000000"
-    },
-    {
-      "name": "list_bg",
-      "value": "#FFFFFF"
     },
     {
       "name": "log_text",
@@ -91,14 +79,6 @@
     {
       "name": "thumbnail_placeholder",
       "value": "#E8EAED"
-    },
-    {
-      "name": "action_bar_bg",
-      "value": "#F2FFFFFF"
-    },
-    {
-      "name": "detail_bg",
-      "value": "#000000"
     },
     {
       "name": "text_on_dark",
@@ -133,8 +113,56 @@
       "value": "#8CFFFFFF"
     },
     {
-      "name": "sheet_bg",
-      "value": "#E8FFFFFF"
+      "name": "viewer_scrim",
+      "value": "#4D000000"
+    },
+    {
+      "name": "viewer_banner_bg",
+      "value": "#66000000"
+    },
+    {
+      "name": "viewer_text_on_dark_80",
+      "value": "#CCFFFFFF"
+    },
+    {
+      "name": "viewer_text_on_dark_70",
+      "value": "#B3FFFFFF"
+    },
+    {
+      "name": "viewer_glass_button",
+      "value": "#26FFFFFF"
+    },
+    {
+      "name": "viewer_chrome",
+      "value": "#59000000"
+    },
+    {
+      "name": "viewer_chrome_motion",
+      "value": "#8C000000"
+    },
+    {
+      "name": "viewer_placeholder_bg",
+      "value": "#222222"
+    },
+    {
+      "name": "viewer_placeholder_thumb",
+      "value": "#333333"
+    },
+    {
+      "name": "viewer_placeholder_image",
+      "value": "#444444"
+    },
+    {
+      "name": "viewer_text_secondary",
+      "value": "#AAAAAA"
+    },
+    {
+      "name": "viewer_text_tertiary",
+      "value": "#888888"
+    },
+    {
+      "name": "viewer_accent",
+      "value": "#4C91FF"
     }
   ]
 }

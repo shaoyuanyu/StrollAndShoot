@@ -1,4 +1,5 @@
 import type { DownloadProgress } from '../model/PhotoEntry';
+import { FontSize, IconSize, pillRadius } from '../utils/UiTokens';
 
 /**
  * 批量下载的进度浮岛。
@@ -81,27 +82,27 @@ export struct DownloadProgressBar {
           .style(this.ringStyle)
         if (this.progress.phase === 'complete') {
           SymbolGlyph($r('sys.symbol.checkmark'))
-            .fontSize(17)
+            .fontSize(IconSize.Body)
             .fontColor([$r('app.color.primary')])
         } else if (this.countIsLong()) {
           // 上千张时「1234/5678」一行塞不进 44vp 的环，拆成两行：
           // 上行是已传张数（用户真正关心的），下行是总数，弱化处理
           Column({ space: 0 }) {
             Text(`${this.progress.downloadedCount}`)
-              .fontSize(11)
+              .fontSize(FontSize.Micro)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.failed()
                 ? $r('app.color.status_error') : $r('app.color.text_primary'))
               .maxLines(1)
             Text(`/${this.progress.totalCount}`)
-              .fontSize(9)
+              .fontSize(FontSize.Micro)
               .fontColor(this.failed()
                 ? $r('app.color.status_error') : $r('app.color.text_secondary'))
               .maxLines(1)
           }
         } else {
           Text(this.countText())
-            .fontSize(10)
+            .fontSize(FontSize.Micro)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.failed()
               ? $r('app.color.status_error') : $r('app.color.text_primary'))
@@ -112,7 +113,7 @@ export struct DownloadProgressBar {
       .height(44)
 
       Text(this.phaseText())
-        .fontSize(10)
+        .fontSize(FontSize.Micro)
         .fontColor(this.failed()
           ? $r('app.color.status_error') : $r('app.color.text_secondary'))
         .maxLines(1)
@@ -120,7 +121,7 @@ export struct DownloadProgressBar {
       if (this.running()) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(15)
+            .fontSize(IconSize.Body)
             .fontColor([$r('app.color.text_secondary')])
         }
         .width(32)
@@ -132,7 +133,7 @@ export struct DownloadProgressBar {
     }
     .width(60)
     .padding({ top: 10, bottom: 10 })
-    .borderRadius(30)
+    .borderRadius(pillRadius(60))
     // 背景与磨砂完全不画：宿主（MainScreen.TitleBar 的浮岛层）会设置
     // systemMaterial，材质会接管 backgroundColor / border / shadow。
     // 自己再铺一层半透明底会把材质整个盖住。

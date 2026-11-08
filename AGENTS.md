@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.18.0 / 1018000 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.18.1 / 1018001 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -267,8 +267,8 @@ devecocli check lint entry/src/main/ets
 ```json5
 {
   "app": {
-    "versionName": "1.18.0",  // 语义化版本字符串
-    "versionCode": 1018000    // 整数编码，用于程序化比较
+    "versionName": "1.18.1",  // 语义化版本字符串
+    "versionCode": 1018001    // 整数编码，用于程序化比较
   }
 }
 ```
@@ -291,12 +291,12 @@ devecocli check lint entry/src/main/ets
 6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`，并同步 `build-profile.json5` 里 `default` 的 `versionName`
 
 - `versionCode` / `versionName` 定义在 `AppScope/app.json5`：前者是整数（0~2147483647，只用于比较新旧，每次发布递增），后者是展示串，设置页「关于 → 版本」直接显示 `versionName`。
-- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.18.0{debug}`），发布包用纯数字（`1.17.0`）。
+- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.18.1{debug}`），发布包用纯数字（`1.17.0`）。
 - `versionName` 只接受两种形态 —— ① 只有数字和点；② 同时包含 `{` 和 `}`、字符集为数字/字母/下划线/点/花括号。打包工具的校验正则是 `^[0-9.]+|(?=.*[{])(?=.*[}])[0-9a-zA-Z_.{}]+$`，所以 `1.17.0-beta`、`1.17.0 Debug`、`v1.17.0` 都不合法。`{debug}` 会**原样**显示在「关于」页，这是预期行为。
 - 调试标记写在 **product 级** `build-profile.json5` 的 `products[]` 里，只配 `default`：
 
   ```json5
-  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.18.0{debug}", ... }
+  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.18.1{debug}", ... }
   ```
 
   `AppScope/app.json5` 被两个 product 共用，写在那里会让发布包也带上 `{debug}`；`dist` 不要配 `versionName`，沿用 `app.json5` 的干净版本号。反过来（`app.json5` 写 `{debug}`、`dist` 覆盖）一旦忘了覆盖，发布包就会带调试标记，不要这么干。
@@ -755,9 +755,29 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - `$r('app.type.name')` 从 `entry/src/main/resources/` 解析。浅色在 `base/element/`，深色在 `dark/element/`。
 - 颜色模式跟随系统：`COLOR_MODE_NOT_SET`（值为 -1）表示不设置，`COLOR_MODE_LIGHT` / `COLOR_MODE_DARK` 为显式指定。
 
+#### UI 令牌
+
+字号、圆角、行高、图标尺寸统一定义在 `entry/src/main/ets/utils/UiTokens.ets`，页面和组件一律引用，不再手写数字：
+
+| 类别 | 取值 |
+|---|---|
+| 字号 `FontSize` | Display 28 / Title 22 / PageTitle 20 / CardTitle 16 / Body 15 / Section 13 / Caption 12 / Micro 10 |
+| 图标 `IconSize` | Small 12 / Body 16 / Nav 20 / Large 24 / Empty 44 |
+| 圆角 `Radius` | Card 24 / Inner 18 / Chip 12 / Thumb 4 / Line 1 |
+| 行高 `RowHeight` | Single 56 / Double 64 |
+| 控件高度 `ControlHeight` | Pill 40 / Bar 56 |
+
+- 胶囊/圆形按钮的圆角一律用 `pillRadius(height)`，不要写死半高。
+- 卡片 24、卡内嵌块 18、小胶囊 12 是三档静态圆角；新增页面先选角色，再取值。
+- 字号按角色取值，不按页面取值；同一语义在不同页面必须用同一个令牌。
+
 #### 颜色资源
 
-颜色资源成体系，共 34 条（`base/element/color.json` 与 `dark/element/color.json` 各一份），命名如 `primary`、`bg_page`、`bg_surface`、`text_primary`、`text_secondary`、`text_tertiary`、`divider`、`card_border`、`primary_soft`、`scrim`、`nav_bg`、`tab_bar_bg`、`glass_bg`、`sheet_bg`、`progress_track`。
+颜色资源共 41 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
+
+- 品牌与语义：`primary`、`primary_light`、`primary_soft`、`status_connected`、`status_disconnected`、`status_error`、`button_danger`
+- 背景、材质与文本：`bg_page`、`bg_surface`、`bg_debug_log`、`thumbnail_placeholder`、`glass_bg`、`nav_bg`、`nav_bg_mid`、`nav_bg_weak`、`bg_page_fade`、`progress_track`、`scrim`、`filter_chip_bg`、`card_border`、`divider`、`text_primary`、`text_secondary`、`text_tertiary`、`text_on_primary`、`text_on_dark`、`log_text`
+- 预览器专用（始终深色）：`viewer_scrim`、`viewer_banner_bg`、`viewer_text_on_dark_80`、`viewer_text_on_dark_70`、`viewer_glass_button`、`viewer_chrome`、`viewer_chrome_motion`、`viewer_placeholder_bg`、`viewer_placeholder_thumb`、`viewer_placeholder_image`、`viewer_text_secondary`、`viewer_text_tertiary`、`viewer_accent`
 
 设计语言为 HarmonyOS 沉浸光感：
 
@@ -766,7 +786,10 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - 品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态
 - 底栏与预览器标题栏使用半透明模糊材质
 
-**新增界面一律引用资源，不要写定颜色值。**
+**新增界面一律引用颜色资源与 UiTokens，不要写定颜色、字号、圆角、行高或图标尺寸。**
+
+- 已删除的死 token：`bg_elevated`、`tab_bar_bg`、`list_bg`、`action_bar_bg`、`detail_bg`、`sheet_bg`。
+- 裸色只有两处例外，均因 API 不接受 `Resource`：`WindowUtils` 的系统栏颜色字符串、`GpsTrackSketch` 的 Canvas `fillStyle`。两处取值与 `color.json` 手工保持一致，改 token 时必须同步。
 
 #### 字符串资源
 
@@ -792,7 +815,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 ## 当前进度
 
-已完成：PTP/USB 通信、画廊与多选、预览器与一镜到底转场、缩略图缓存与快速扫描、批量下载与 EXIF/GPS、GPS 连续定位与轨迹地图、深色模式、缓存管理、V2 状态管理迁移。
+已完成：PTP/USB 通信、画廊与多选、预览器与一镜到底转场、缩略图缓存与快速扫描、批量下载与 EXIF/GPS、GPS 连续定位与轨迹地图、深色模式、缓存管理、V2 状态管理迁移、UI 令牌化与全局统一。
 
 未实现：边框、水印、LUT、滤镜、美颜（只有 `string.json` 里的两条占位字符串）。
 

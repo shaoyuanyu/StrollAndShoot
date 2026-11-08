@@ -1,6 +1,7 @@
 import type { GpsRecord } from '../model/PhotoEntry';
 import { type GpsTrackBounds } from '../utils/GpsTrack';
 import { WindowUtils } from '../utils/WindowUtils';
+import { FontSize, Radius } from '../utils/UiTokens';
 
 /** 归一化后的屏幕坐标（vp，相对本组件左上角）。 */
 interface SketchPoint {
@@ -9,8 +10,6 @@ interface SketchPoint {
 }
 
 const EMPTY_BOUNDS: GpsTrackBounds = { minLat: 0, maxLat: 0, minLon: 0, maxLon: 0 };
-const START_COLOR: string = '#34C759';
-const SELECTED_COLOR: string = '#FF3B30';
 
 /**
  * 无地图时的轨迹示意图。
@@ -52,8 +51,17 @@ export struct GpsTrackSketch {
     return WindowUtils.isDarkMode(this.getUIContext().getHostContext());
   }
 
+  /** Canvas 的 fillStyle 不吃 Resource，这里手写与 color.json 相同的值。 */
   private primaryColor(): string {
     return this.isDark() ? '#4C91FF' : '#0A59F7';
+  }
+
+  private startColor(): string {
+    return this.isDark() ? '#3CCB7F' : '#1FA971';
+  }
+
+  private selectedColor(): string {
+    return this.isDark() ? '#FF6B5E' : '#E84026';
   }
 
   private casingColor(): string {
@@ -149,7 +157,7 @@ export struct GpsTrackSketch {
       if (points.length === 1) {
         this.fillDot(ctx, points[0].x, points[0].y, 5, this.primaryColor());
       } else {
-        this.fillDot(ctx, points[0].x, points[0].y, 4.5, START_COLOR);
+        this.fillDot(ctx, points[0].x, points[0].y, 4.5, this.startColor());
         this.fillDot(ctx, points[points.length - 1].x, points[points.length - 1].y,
           4.5, this.primaryColor());
       }
@@ -157,7 +165,7 @@ export struct GpsTrackSketch {
 
     if (this.selected !== null) {
       const p = this.pointFor(this.selected.latitude, this.selected.longitude);
-      this.fillDot(ctx, p.x, p.y, 6, SELECTED_COLOR);
+      this.fillDot(ctx, p.x, p.y, 6, this.selectedColor());
     }
   }
 
@@ -220,13 +228,13 @@ export struct GpsTrackSketch {
       if (this.caption.length > 0) {
         Stack({ alignContent: Alignment.BottomStart }) {
           Text(this.caption)
-            .fontSize(9)
+            .fontSize(FontSize.Micro)
             .fontColor($r('app.color.text_tertiary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .padding({ left: 10, right: 10, top: 5, bottom: 5 })
             .backgroundColor($r('app.color.glass_bg'))
-            .borderRadius(10)
+            .borderRadius(Radius.Chip)
             .margin({ left: 10, bottom: this.captionBottom })
         }
         .width('100%')

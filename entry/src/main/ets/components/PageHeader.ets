@@ -1,4 +1,5 @@
 import { WindowUtils } from '../utils/WindowUtils';
+import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens';
 
 /**
  * 二级页头部：返回键 + 主标题 + 副标题。
@@ -25,24 +26,24 @@ export struct PageHeader {
     Row({ space: 8 }) {
       Button() {
         SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(22)
+          .fontSize(IconSize.Nav)
           .fontColor([$r('app.color.text_primary')])
       }
-      .width(40)
-      .height(40)
+      .width(ControlHeight.Pill)
+      .height(ControlHeight.Pill)
       .backgroundColor(Color.Transparent)
-      .borderRadius(20)
+      .borderRadius(pillRadius(ControlHeight.Pill))
       .onClick(() => { this.onBack(); })
 
       Column({ space: 2 }) {
         Text(this.title)
-          .fontSize(20)
+          .fontSize(FontSize.PageTitle)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
         if (this.subtitle.length > 0) {
           Text(this.subtitle)
-            .fontSize(12)
+            .fontSize(FontSize.Caption)
             .fontColor($r('app.color.text_secondary'))
             .maxLines(1)
         }
@@ -52,10 +53,10 @@ export struct PageHeader {
 
       if (this.actionText.length > 0) {
         Button(this.actionText)
-          .fontSize(14)
+          .fontSize(FontSize.Body)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.primary'))
-          .height(40)
+          .height(ControlHeight.Pill)
           .padding({ left: 12, right: 12 })
           .backgroundColor(Color.Transparent)
           .onClick(() => { this.onAction(); })

@@ -5,6 +5,7 @@ import { GpsTrackCache } from '../services/GpsTrackCache';
 import { WindowUtils } from '../utils/WindowUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp } from '../utils/TitleBarMetrics';
 import { type GpsDayTrack } from '../utils/GpsTrack';
+import { ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
 
 @Builder
@@ -81,19 +82,19 @@ struct GpsDayCard {
         Column({ space: 3 }) {
           Row({ space: 6 }) {
             Text(this.day)
-              .fontSize(16).fontWeight(FontWeight.Medium)
+              .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
             if (this.isMock()) {
               // 不再做胶囊徽章；一个轻量文字标识即可
               Text('模拟')
-                .fontSize(10)
+                .fontSize(FontSize.Micro)
                 .fontColor($r('app.color.primary'))
             }
           }
           .alignItems(VerticalAlign.Center)
 
           Text(`${this.countText()} · ${this.timeRange()}`)
-            .fontSize(11).fontColor($r('app.color.text_tertiary'))
+            .fontSize(FontSize.Caption).fontColor($r('app.color.text_tertiary'))
             .alignSelf(ItemAlign.Start)
         }
         .layoutWeight(1)
@@ -108,14 +109,14 @@ struct GpsDayCard {
               .strokeWidth(1.5)
             if (this.selected()) {
               SymbolGlyph($r('sys.symbol.checkmark'))
-                .fontSize(12)
+                .fontSize(IconSize.Small)
                 .fontColor([$r('app.color.text_on_primary')])
             }
           }
           .width(22).height(22)
         } else {
           SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(16)
+            .fontSize(IconSize.Body)
             .fontColor([$r('app.color.text_tertiary')])
             .rotate({ angle: this.expanded() ? 180 : 0 })
         }
@@ -140,13 +141,13 @@ struct GpsDayCard {
         .width('100%')
         .height(190)
         .padding({ left: 12, right: 12, bottom: 12 })
-        .borderRadius(18)
+        .borderRadius(Radius.Inner)
         .clip(true)
       }
     }
     .width('100%')
     .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(24)
+    .borderRadius(Radius.Card)
     .border({
       width: this.selectMode && this.selected() ? 1.5 : 0,
       color: $r('app.color.primary')
@@ -214,7 +215,7 @@ export struct GpsManagementPage {
     const heightPx = WindowUtils.windowHeightPx;
     if (heightPx <= 0) return 0;
     const heightVp = this.getUIContext().px2vp(heightPx);
-    return Math.max(0, heightVp - this.navIndicatorVp() - 56 - 12);
+    return Math.max(0, heightVp - this.navIndicatorVp() - ControlHeight.Bar - 12);
   }
 
   private applyDefaultExpansion(): void {
@@ -350,33 +351,33 @@ export struct GpsManagementPage {
   SelectBottomBar() {
     Row({ space: 8 }) {
       Text(`已选 ${this.selectedDays.length} 天`)
-        .fontSize(13)
+        .fontSize(FontSize.Caption)
         .fontColor($r('app.color.text_secondary'))
         .layoutWeight(1)
 
       Button(this.selectedDays.length === this.groupsFor(this.gps.recordsVersion).length
         ? '取消全选' : '全选')
-        .fontSize(14)
+        .fontSize(FontSize.Body)
         .height(36)
         .fontColor($r('app.color.primary'))
         .backgroundColor(Color.Transparent)
         .onClick(() => { this.toggleSelectAll(); })
 
       Button('删除')
-        .fontSize(14)
+        .fontSize(FontSize.Body)
         .height(36)
         .padding({ left: 18, right: 18 })
         .fontColor($r('app.color.text_on_primary'))
         .backgroundColor($r('app.color.button_danger'))
-        .borderRadius(18)
+        .borderRadius(pillRadius(36))
         .enabled(this.selectedDays.length > 0)
         .opacity(this.selectedDays.length > 0 ? 1 : 0.35)
         .onClick(() => { this.deleteSelected(); })
     }
     .width('100%')
-    .height(56)
+    .height(ControlHeight.Bar)
     .padding({ left: 16, right: 10 })
-    .borderRadius(28)
+    .borderRadius(pillRadius(ControlHeight.Bar))
     .systemMaterial(this.floatMaterial)
   }
 
@@ -408,23 +409,23 @@ export struct GpsManagementPage {
         Row({ space: 8 }) {
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.chevron_left'))
-              .fontSize(20)
+              .fontSize(IconSize.Nav)
               .fontColor([$r('app.color.text_primary')])
           }
           .width(40).height(40)
           .backgroundColor(Color.Transparent)
-          .borderRadius(20)
+          .borderRadius(pillRadius(40))
           .systemMaterial(this.titleMaterial)
           .onClick(() => { this.pageInfos.pop(); })
 
           Column({ space: 1 }) {
             Text('定位记录')
-              .fontSize(20)
+              .fontSize(FontSize.PageTitle)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)
             Text(`共 ${this.gps.displayRecordCount()} 条定位记录`)
-              .fontSize(10)
+              .fontSize(FontSize.Micro)
               .fontColor($r('app.color.text_secondary'))
               .maxLines(1)
           }
@@ -433,13 +434,13 @@ export struct GpsManagementPage {
 
           if (this.headerActionText().length > 0) {
             Button(this.headerActionText())
-              .fontSize(13)
+              .fontSize(FontSize.Body)
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
               .height(36)
               .padding({ left: 16, right: 16 })
               .backgroundColor(Color.Transparent)
-              .borderRadius(18)
+              .borderRadius(pillRadius(36))
               .systemMaterial(this.titleMaterial)
               .onClick(() => { this.onHeaderAction(); })
           }
@@ -471,13 +472,13 @@ export struct GpsManagementPage {
         if (this.groupsFor(this.gps.recordsVersion).length === 0) {
           Column({ space: 8 }) {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
-              .fontSize(44)
+              .fontSize(IconSize.Empty)
               .fontColor([$r('app.color.text_tertiary')])
             Text('还没有定位记录')
-              .fontSize(15)
+              .fontSize(FontSize.Body)
               .fontColor($r('app.color.text_secondary'))
             Text('在设置页打开「定位记录」后，应用会按设定的频率记录定位')
-              .fontSize(12)
+              .fontSize(FontSize.Caption)
               .fontColor($r('app.color.text_tertiary'))
               .textAlign(TextAlign.Center)
               .padding({ left: 32, right: 32 })

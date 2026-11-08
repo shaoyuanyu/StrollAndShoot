@@ -6,6 +6,7 @@ import { GpsRecorder } from '../services/GpsRecorder';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { ControlHeight, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 
 /** 深色模式下拉的取值顺序，与 DARK_OPTIONS 一一对应。 */
 const DARK_VALUES: number[] = [
@@ -191,7 +192,7 @@ export struct SettingsPage {
   @Builder
   GroupTitle(title: string) {
     Text(title)
-      .fontSize(13)
+      .fontSize(FontSize.Section)
       .fontColor($r('app.color.text_secondary'))
       .width('100%')
       .padding({ left: 4, top: 6 })
@@ -221,7 +222,7 @@ export struct SettingsPage {
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(24)
+        .borderRadius(Radius.Card)
 
         // ---- 画廊 ----
         this.GroupTitle('画廊')
@@ -252,7 +253,7 @@ export struct SettingsPage {
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(24)
+        .borderRadius(Radius.Card)
 
         // ---- 定位 ----
         this.GroupTitle('定位记录')
@@ -260,11 +261,11 @@ export struct SettingsPage {
           Row() {
             Column({ space: 2 }) {
               Text('定位记录')
-                .fontSize(16)
+                .fontSize(FontSize.CardTitle)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
               Text(this.gpsStatusText())
-                .fontSize(11)
+                .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)
             }
@@ -278,7 +279,7 @@ export struct SettingsPage {
             Toggle({ type: ToggleType.Switch, isOn: this.gpsOn!! })
               .onChange((on: boolean) => { this.onToggleGps(on); })
           }
-          .width('100%').height(64)
+          .width('100%').height(RowHeight.Double)
           .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
 
           SettingSelectRow({
@@ -294,14 +295,14 @@ export struct SettingsPage {
           Row({ space: 8 }) {
             Column({ space: 2 }) {
               Text('定位记录管理')
-                .fontSize(16)
+                .fontSize(FontSize.CardTitle)
                 .fontColor($r('app.color.text_primary'))
                 .alignSelf(ItemAlign.Start)
               Text(`已记录 ${this.gps.displayRecordCount()} 条定位记录` +
                 (this.gps.trimmedRecords > 0
                   ? ` · 已按保留策略清理 ${this.gps.trimmedRecords} 条旧记录`
                   : ''))
-                .fontSize(11)
+                .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_tertiary'))
                 .alignSelf(ItemAlign.Start)
             }
@@ -309,46 +310,46 @@ export struct SettingsPage {
             .alignItems(HorizontalAlign.Start)
 
             SymbolGlyph($r('sys.symbol.chevron_right'))
-              .fontSize(16)
+              .fontSize(IconSize.Body)
               .fontColor([$r('app.color.text_tertiary')])
           }
-          .width('100%').height(60)
+          .width('100%').height(RowHeight.Double)
           .onClick(() => { this.gotoManage(); })
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(24)
+        .borderRadius(Radius.Card)
 
         // ---- 存储 ----
         this.GroupTitle('存储')
         Row({ space: 8 }) {
           Text('缩略图缓存')
-            .fontSize(16)
+            .fontSize(FontSize.CardTitle)
             .fontColor($r('app.color.text_primary'))
             .layoutWeight(1)
           SymbolGlyph($r('sys.symbol.chevron_right'))
-            .fontSize(16)
+            .fontSize(IconSize.Body)
             .fontColor([$r('app.color.text_tertiary')])
         }
-        .width('100%').height(56).padding({ left: 16, right: 16 })
+        .width('100%').height(RowHeight.Single).padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(24)
+        .borderRadius(Radius.Card)
         .onClick(() => { this.onOpenCacheManagement(); })
 
         // ---- 关于 ----
         this.GroupTitle('关于')
         Row() {
           Text('版本')
-            .fontSize(16)
+            .fontSize(FontSize.CardTitle)
             .fontColor($r('app.color.text_primary'))
           Blank()
           Text(this.versionName)
-            .fontSize(15)
+            .fontSize(FontSize.Body)
             .fontColor($r('app.color.text_secondary'))
         }
-        .width('100%').height(56).padding({ left: 16, right: 16 })
+        .width('100%').height(RowHeight.Single).padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
-        .borderRadius(24)
+        .borderRadius(Radius.Card)
 
         // ---- 调试 ----
         if (this.debugBuild) {
@@ -357,11 +358,11 @@ export struct SettingsPage {
             Row({ space: 12 }) {
               Column({ space: 3 }) {
                 Text('模拟 GPS 轨迹')
-                  .fontSize(16)
+                  .fontSize(FontSize.CardTitle)
                   .fontColor($r('app.color.text_primary'))
                   .alignSelf(ItemAlign.Start)
                 Text(this.mockGpsStatusText())
-                  .fontSize(11)
+                  .fontSize(FontSize.Caption)
                   .fontColor($r('app.color.text_tertiary'))
                   .alignSelf(ItemAlign.Start)
               }
@@ -379,13 +380,13 @@ export struct SettingsPage {
             Row({ space: 12 }) {
               Column({ space: 3 }) {
                 Text('模拟相机设备')
-                  .fontSize(16)
+                  .fontSize(FontSize.CardTitle)
                   .fontColor($r('app.color.text_primary'))
                   .alignSelf(ItemAlign.Start)
                 Text(this.svc.photoCount > 0
                   ? `已连接虚拟相机，共 ${this.svc.photoCount} 张`
                   : '开启后到「相机」页点右上角的「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片')
-                  .fontSize(11)
+                  .fontSize(FontSize.Caption)
                   .fontColor($r('app.color.text_tertiary'))
                   .alignSelf(ItemAlign.Start)
               }
@@ -401,18 +402,18 @@ export struct SettingsPage {
 
             Row({ space: 8 }) {
               Text(`${this.logText ? this.logText.split('\n').length : 0} 条日志`)
-                .fontSize(12)
+                .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_secondary'))
                 .layoutWeight(1)
               Button('清除')
                 .height(30)
-                .fontSize(12)
+                .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.text_primary'))
                 .backgroundColor($r('app.color.filter_chip_bg'))
                 .onClick(() => { this.onClear(); })
               Button('复制')
                 .height(30)
-                .fontSize(12)
+                .fontSize(FontSize.Caption)
                 .fontColor($r('app.color.primary'))
                 .backgroundColor($r('app.color.primary_soft'))
                 .onClick(() => { this.onCopy(); })
@@ -421,7 +422,7 @@ export struct SettingsPage {
 
             Scroll() {
               Text(this.logText)
-                .fontSize(11)
+                .fontSize(FontSize.Caption)
                 .fontFamily('monospace')
                 .fontColor($r('app.color.log_text'))
                 .width('100%')
@@ -430,12 +431,12 @@ export struct SettingsPage {
             .width('100%')
             .height(240)
             .backgroundColor($r('app.color.bg_debug_log'))
-            .borderRadius(12)
+            .borderRadius(Radius.Chip)
             .align(Alignment.Top)
           }
           .width('100%').padding(16)
           .backgroundColor($r('app.color.bg_surface'))
-          .borderRadius(24)
+          .borderRadius(Radius.Card)
         }
       }
       .width('100%')
@@ -475,20 +476,20 @@ struct SettingSelectRow {
   build() {
     Row() {
       Text(this.label)
-        .fontSize(16)
+        .fontSize(FontSize.CardTitle)
         .fontColor($r('app.color.text_primary'))
         .layoutWeight(1)
       Select(this.options)
         .selected(this.selectedIndex)
         .value(this.selectedLabel())
-        .font({ size: 15, weight: FontWeight.Medium })
+        .font({ size: FontSize.Body, weight: FontWeight.Medium })
         .fontColor($r('app.color.text_secondary'))
-        .selectedOptionFont({ size: 15, weight: FontWeight.Medium })
+        .selectedOptionFont({ size: FontSize.Body, weight: FontWeight.Medium })
         .selectedOptionFontColor($r('app.color.primary'))
-        .optionFont({ size: 15 })
+        .optionFont({ size: FontSize.Body })
         .optionFontColor($r('app.color.text_primary'))
-        .height(40)
-        .borderRadius(20)
+        .height(ControlHeight.Pill)
+        .borderRadius(pillRadius(ControlHeight.Pill))
         .backgroundColor(Color.Transparent)
         .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
           .fontColor([$r('app.color.text_secondary')]))
@@ -499,7 +500,7 @@ struct SettingSelectRow {
         .onSelect((index: number) => { this.onSelect(index); })
     }
     .width('100%')
-    .height(56)
+    .height(RowHeight.Single)
     .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
   }
 }

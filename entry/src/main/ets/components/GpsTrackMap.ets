@@ -6,6 +6,7 @@ import { formatDistanceCompact, formatDurationCompact } from '../utils/GpsFormat
 import { WindowUtils } from '../utils/WindowUtils';
 import type { GpsRecord } from '../model/PhotoEntry';
 import { MapCapability } from '../utils/MapCapability';
+import { FontSize, IconSize, Radius } from '../utils/UiTokens';
 
 /** 预览图上的折线最多保留多少个点；缩略图只有 190vp 高，再多也看不出来。 */
 const PREVIEW_MAX_POINTS = 1200;
@@ -330,11 +331,11 @@ export struct GpsTrackMap {
         Stack({ alignContent: Alignment.Center }) {
           Row({ space: 6 }) {
             LoadingProgress().width(16).height(16)
-            Text('地图加载中').fontSize(10).fontColor($r('app.color.text_secondary'))
+            Text('地图加载中').fontSize(FontSize.Micro).fontColor($r('app.color.text_secondary'))
           }
           .padding({ left: 10, right: 12, top: 6, bottom: 6 })
           .backgroundColor($r('app.color.glass_bg'))
-          .borderRadius(14)
+          .borderRadius(Radius.Chip)
         }
         .width('100%')
         .height('100%')
@@ -345,16 +346,16 @@ export struct GpsTrackMap {
         Stack({ alignContent: Alignment.TopStart }) {
           Row({ space: 5 }) {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
-              .fontSize(11)
+              .fontSize(IconSize.Small)
               .fontColor([$r('app.color.text_secondary')])
             Text(this.statsText())
-              .fontSize(10)
+              .fontSize(FontSize.Micro)
               .fontColor($r('app.color.text_secondary'))
           }
           .padding({ left: 9, right: 10, top: 5, bottom: 5 })
           .backgroundColor($r('app.color.glass_bg'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-          .borderRadius(12)
+          .borderRadius(Radius.Chip)
           .margin({ left: 10, top: 10 })
         }
         .width('100%')
@@ -364,16 +365,16 @@ export struct GpsTrackMap {
         Stack({ alignContent: Alignment.BottomEnd }) {
           Row({ space: 4 }) {
             SymbolGlyph($r('sys.symbol.arrow_up_left_and_arrow_down_right'))
-              .fontSize(12)
+              .fontSize(IconSize.Small)
               .fontColor([$r('app.color.text_primary')])
             Text('全屏')
-              .fontSize(10)
+              .fontSize(FontSize.Micro)
               .fontColor($r('app.color.text_primary'))
           }
           .padding({ left: 8, right: 10, top: 5, bottom: 5 })
           .backgroundColor($r('app.color.glass_bg'))
           .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
-          .borderRadius(12)
+          .borderRadius(Radius.Chip)
           .margin({ right: 10, bottom: 10 })
           .onClick(() => { this.onOpen(); })
         }
