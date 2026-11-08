@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.20.0 / 1020000 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.20.1 / 1020001 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -267,8 +267,8 @@ devecocli check lint entry/src/main/ets
 ```json5
 {
   "app": {
-    "versionName": "1.20.0",  // 语义化版本字符串
-    "versionCode": 1020000    // 整数编码，用于程序化比较
+    "versionName": "1.20.1",  // 语义化版本字符串
+    "versionCode": 1020001    // 整数编码，用于程序化比较
   }
 }
 ```
@@ -291,12 +291,12 @@ devecocli check lint entry/src/main/ets
 6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`，并同步 `build-profile.json5` 里 `default` 的 `versionName`
 
 - `versionCode` / `versionName` 定义在 `AppScope/app.json5`：前者是整数（0~2147483647，只用于比较新旧，每次发布递增），后者是展示串，设置页「关于 → 版本」直接显示 `versionName`。
-- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.20.0{debug}`），发布包用纯数字（`1.17.0`）。
+- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.20.1{debug}`），发布包用纯数字（`1.17.0`）。
 - `versionName` 只接受两种形态 —— ① 只有数字和点；② 同时包含 `{` 和 `}`、字符集为数字/字母/下划线/点/花括号。打包工具的校验正则是 `^[0-9.]+|(?=.*[{])(?=.*[}])[0-9a-zA-Z_.{}]+$`，所以 `1.17.0-beta`、`1.17.0 Debug`、`v1.17.0` 都不合法。`{debug}` 会**原样**显示在「关于」页，这是预期行为。
 - 调试标记写在 **product 级** `build-profile.json5` 的 `products[]` 里，只配 `default`：
 
   ```json5
-  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.20.0{debug}", ... }
+  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.20.1{debug}", ... }
   ```
 
   `AppScope/app.json5` 被两个 product 共用，写在那里会让发布包也带上 `{debug}`；`dist` 不要配 `versionName`，沿用 `app.json5` 的干净版本号。反过来（`app.json5` 写 `{debug}`、`dist` 覆盖）一旦忘了覆盖，发布包就会带调试标记，不要这么干。
@@ -662,12 +662,13 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 **注意**：`thumbnailPixelMapMap`、`orientedDisplaySizes`、`compressedCache` 是普通 `Map`，不参与自动追踪。界面能刷新依靠 `thumbnailVersion`、`lastDecodedHandle`、`photosVersion` 这类手工计数被 `build()` 读到。改动缩略图与原图加载逻辑时，必须同时维护这些计数。
 
-#### 两个必须记住的刷新坑
+#### 三个必须记住的刷新坑
 
-2026-11-05 实测：
+2026-11-05 / 2026-11-08 实测：
 
 1. `Repeat` 命中相同 key **不会重跑 `each`**。把 `Image(pm)` 直接写在 `@Builder` 里，缩略图解码完成后单元格会永远停在占位图。正确做法是把单元格内容抽成独立 `@ComponentV2`（见 `GalleryPage.ets` 末尾的 `ThumbImage`），并在 `build()` 里调 `svc.thumbForRender(handle)`——该方法内部先读一次 `thumbnailVersion`，从而让组件订阅材质变化（Map 本身不可观测）。
 2. `@Builder` 的**值参数不会刷新**。例如 `WideChip(label, selected, onTap)` 这种写法，点击后 `selected` 变了但高亮不跟随。凡是会变化的状态，都要在构建期直接读（`this.settings.darkMode === ...`），不要经由 `@Builder` 形参传入。
+3. `Tabs.onChange` 在**切换动画结束后**才触发（本项目动画 220ms）。用它驱动标题栏、自定义底部页签、浮岛等视觉状态，旧页的按钮会在新页上停留整个动画时长。视觉索引要用独立的 `visualTab`，在 `Tabs.onSelected`（点击页签 / 滑动离手开始切换动画时触发）里更新；`onChange` 只负责 `Tabs({ index })` 的受控索引与持久化。官方 `Tabs` 示例 17 与 `onChange` 说明就是这个用法；`onSelected` 里不能回写 `Tabs` 的受控 `index`，所以两个索引必须分开。
 
 更多按页面的应用方式见 [PAGES.md](PAGES.md)。
 
@@ -822,6 +823,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - USB 单次 `bulkTransfer` 小于 200KB：官方 `usbManager` 参考里没有写这个数值，属于本项目实测，改动缓冲区必须在真机验证。
 - `@SyncMonitor`：官方文档写明从 API 23 开始支持，`@Monitor` 从 API 12 开始支持。
 - `Repeat`：`LazyForEach` 的官方迁移写法是 `Repeat(data).virtualScroll()`，没有 `RepeatForEach` 这个组件。
+- `Tabs.onChange` 在 Tab 页签切换后触发，滑动时是滑动动画结束后；自定义页签 / 标题栏联动应在 `onSelected`（API 18+，点击或滑动离手开始动画时触发）或 `onAnimationStart` 中更新视觉索引。`onSelected` 回调里不能通过 `index` / `changeIndex()` 改 Tabs 当前页，所以视觉索引必须独立。
 - 应用偏好语言：`i18n.System.setAppPreferredLanguage()` 设置应用语言，传 `'default'` 恢复跟随系统；官方写明资源在**冷启动**时按偏好语言加载，所以本项目设置后用 `ApplicationContext.restartApp()` 重启进程。`getAppPreferredLanguage()` 用于读取偏好。
 - EXIF Orientation：官方 FAQ 给出 8 个取值与字符串表示的对应关系（1 = `Top-left`，……，8 = `Left-bottom`），读取时返回字符串，未写入该字段的图片按不旋转处理。
 - GPS 经纬度：官方把 `GPSLatitude` / `GPSLongitude` 定义为三个 RATIONAL 值（度、分、秒），典型写法是 `dd/1,mm/1,ss/1`；本项目写入的是逗号分隔的度分秒（如 `43,49,23.16`），写完读回验证。
@@ -856,6 +858,10 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 ## 已知问题与历史
 
 2026-10-14 审视代码时定位的问题，2026-11-05 已全部修复，当前无已知缺陷。
+
+### 2026-11-08
+
+- 快速在相机 / 设置间切换时，标题栏「搜索相机」在设置页停留约 220ms → 标题栏、底部页签、浮岛改用独立 `visualTab`，在 `Tabs.onSelected` 提前更新；`currentTab` 只保留给 `Tabs.index` 与 `onChange`。根因与官方建议见「三个必须记住的刷新坑」第 3 条。
 
 ### 2026-11-05 第二批
 

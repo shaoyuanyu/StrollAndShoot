@@ -14,6 +14,8 @@
 
 NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时取该缩略图的屏幕矩形（`getRectangleById('thumb_<handle>')`，px）与附近 81 个单元格的位置缓存，连同 `positionLookup` 回调一起作为 NavPathStack 参数传给预览器，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。缩略图位图不必传：预览器自己从 `svc.thumbnailPixelMapMap` 取。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。
 
+标签页索引拆成两个：`currentTab` 是 `Tabs({ index })` 的受控索引，只在 `onChange`（切换动画结束后）更新；`visualTab` 是标题栏、底部页签、浮岛等视觉状态用的索引，在 `Tabs.onSelected`（点击页签 / 滑动离手开始切换动画时）更新。**不要把 `currentTab` 用于标题栏条件**，否则旧页的按钮会在新页上停留整个 220ms 动画。官方 `Tabs` 的 `onChange` 说明与示例 17 就是这个用法。
+
 导航骨架、标题栏与材质规则见 [AGENTS.md](AGENTS.md) 的「导航、标题栏与沉浸光感」。
 
 ### GalleryPage.ets
@@ -27,7 +29,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 长按进入多选（或点标题栏的「选择」胶囊）。多选态标题栏左叉 + 左对齐「已选择 N 项」+ 全选胶囊，底部悬浮胶囊操作栏只有「下载」一项。详见下文「多选模式」。
 - 缩略图按整行显示：一行（当前列数）全部解码完成才同时出现，否则该行显示占位。
 - `buildFlatItems()` 把日期标题与行拍平成一个数组交给 `Repeat` + `.virtualScroll()`，按 `photosVersion`、显示模式、筛选值、**当前列数**、宽度做缓存。日期分组另外缓存在 `ensureGrouping()` 里（只依赖照片与筛选）：捏合换列只需要重新分行，不要再扫一遍全量照片。
-- 缩略图单元格抽成独立 `@ComponentV2 ThumbImage`，内部调 `svc.thumbForRender(handle)` 建立 V2 依赖（原因见 [AGENTS.md](AGENTS.md) 的两个刷新坑）。
+- 缩略图单元格抽成独立 `@ComponentV2 ThumbImage`，内部调 `svc.thumbForRender(handle)` 建立 V2 依赖（原因见 [AGENTS.md](AGENTS.md) 的三个刷新坑）。
 - 末尾有 `FlatItem.tail()` 占位项（104vp），给悬浮页签留滚动空间；`ListItem` 的 `key` 必须保持稳定，把「行是否加载完成」编进 `key` 会让 `virtualScroll` 的复用项失效、整行渲染成空白。
 - `List` 用 `.contentStartOffset(this.listTopInset())` 让首行避开标题栏，并设 `.clip(false)` + `.cachedCount(6, true)` 让滚动中的照片能穿到标题栏下方被模糊；扫描横幅显示时它自己就在内容顶部，此时 `listTopInset()` 归零（原因见 [AGENTS.md](AGENTS.md) 的「顶部标题栏」）。
 
@@ -73,7 +75,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 ### CameraPage.ets
 
-- 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `currentTab === 1` 分支）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
+- 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `visualTab === 1` 分支，不是 `currentTab`）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
 - 内容区只有三张 24vp 圆角白卡、内边距 16vp：状态卡（连接状态、相机名、扫描进度与统计）、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。未连接时状态卡换成空态卡（图标 + 说明 + 指向右上角「搜索相机」）。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
 

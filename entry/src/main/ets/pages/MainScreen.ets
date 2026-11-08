@@ -31,7 +31,18 @@ export struct MainScreen {
   private pageId: number = -1;
   private tabsController: TabsController = new TabsController();
   @Local svc: CameraService = CameraService.getInstance();
+  /**
+   * Tabs 的受控索引，只用于 Tabs({ index }) 与内容逻辑。
+   * 它由 onChange 更新，而 onChange 在切换动画结束后才触发；不要拿它驱动
+   * 标题栏、底部页签、浮岛等视觉状态，否则旧页的控件会在新页上停留整个动画时长。
+   */
   @Local currentTab: number = 1;
+  /**
+   * 视觉索引：标题栏、底部页签、浮岛等“属于当前页”的 UI 都用它。
+   * 在 Tabs 的 onSelected（点击页签 / 滑动离手开始切换动画时）同步更新，
+   * 和内容切换同时发生，不等 onChange。
+   */
+  @Local visualTab: number = 1;
   @Local logText: string = '';
   @Local downloadProgress: DownloadProgress | null = null;
   @Local downloadedKeys: string[] = [];
@@ -75,6 +86,7 @@ export struct MainScreen {
   aboutToAppear(): void {
     const tab = this.uiState.lastTab;
     this.currentTab = tab >= 0 && tab <= 2 ? tab : 1;
+    this.visualTab = this.currentTab;
     this.galleryFilter = this.uiState.galleryFilter;
     // 智感握姿：订阅握持手，下载浮岛贴到拇指易触及的一侧。
     // 机型不支持时服务内部会静默降级为固定右侧。
@@ -141,8 +153,8 @@ export struct MainScreen {
   }
 
   private tabTitle(): ResourceStr {
-    if (this.currentTab === 0) return $r('app.string.tab_gallery');
-    if (this.currentTab === 1) return $r('app.string.tab_camera');
+    if (this.visualTab === 0) return $r('app.string.tab_gallery');
+    if (this.visualTab === 1) return $r('app.string.tab_camera');
     return $r('app.string.tab_settings');
   }
 
@@ -255,7 +267,7 @@ export struct MainScreen {
         // 标题停在状态栏下方（渐隐区顶部），衰减在标题下方继续
         Blank().height(titleBarInsetVp() - TITLE_BAR_HEIGHT)
 
-        if (this.currentTab === 0 && this.gallerySelectMode) {
+        if (this.visualTab === 0 && this.gallerySelectMode) {
           this.SelectTitleRow()
         } else {
           this.NormalTitleRow()
@@ -271,7 +283,7 @@ export struct MainScreen {
       // 底部 —— 组件树的归属还在标题栏内，材质就还是真的。
       // position 的原点是标题栏顶部（也是屏幕顶部，因为 windowLayoutFullScreen），
       // 所以这里可以直接用屏幕绝对坐标。
-      if (this.currentTab === 0) {
+      if (this.visualTab === 0) {
         if (this.downloadProgress !== null && this.downloadProgress.phase !== 'idle') {
           // 自定义组件不能直接链式挂通用属性，包一层 Column 承载 position / 材质
           Column() {
@@ -377,7 +389,7 @@ export struct MainScreen {
         .maxLines(1)
         .layoutWeight(1)
 
-      if (this.currentTab === 0 && this.svc.photos.length > 0) {
+      if (this.visualTab === 0 && this.svc.photos.length > 0) {
         if (this.settings.displayMode === 'file_first') {
           // 格式筛选用 Select（官方选择类控件）：点开是带勾选态的下拉菜单。
           // 以前是「点一下换下一个格式」的循环按钮，用户根本猜不到下一下会到哪。
@@ -418,7 +430,7 @@ export struct MainScreen {
         .onClick(() => { this.toggleSelectVersion++; })
       }
 
-      if (this.currentTab === 1) {
+      if (this.visualTab === 1) {
         // 相机页的主操作放在标题栏里：真·沉浸光感只在标题栏内生效，
         // 内容区的大按钮拿不到材质。不设 backgroundColor、不设 materialColor
         // 时材质取 Button 主题色（蓝），正好当主操作。
@@ -466,12 +478,12 @@ export struct MainScreen {
     Column({ space: 2 }) {
       SymbolGlyph(icon)
         .fontSize(IconSize.Large)
-        .fontColor([this.currentTab === index
+        .fontColor([this.visualTab === index
           ? $r('app.color.primary') : $r('app.color.text_tertiary')])
       Text(label)
         .fontSize(FontSize.Micro)
-        .fontWeight(this.currentTab === index ? FontWeight.Medium : FontWeight.Regular)
-        .fontColor(this.currentTab === index
+        .fontWeight(this.visualTab === index ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.visualTab === index
           ? $r('app.color.primary') : $r('app.color.text_tertiary'))
     }
     .width('100%').height('100%')
@@ -664,7 +676,15 @@ export struct MainScreen {
       // 多选时页签栏让位给底部操作栏：高度置 0，操作栏占据同一位置。
       // 非多选态恢复系统默认高度，悬浮样式（barFloatingStyle 的材质与圆角）不受影响。
       .barHeight(this.gallerySelectMode ? 0 : ControlHeight.Bar)
+      // 视觉索引必须在切换动画开始时就跟上：onChange 是动画结束后才触发，
+      // 用它驱动标题栏会让旧页的按钮在目标页上停留整个动画时长（实测 220ms）。
+      // onSelected 在点击页签 / 滑动离手开始切换动画时触发，和内容切换同时发生。
+      .onSelected((idx: number) => {
+        this.visualTab = idx;
+      })
       .onChange((idx: number) => {
+        // onChange 在切换动画结束后触发，只更新 Tabs 的受控索引与持久化；
+        // 标题栏、底部页签、浮岛等视觉状态由上面的 onSelected 提前更新。
         this.currentTab = idx;
         this.uiState.lastTab = idx;
         if (idx === 2) { this.logText = this.svc.getLog().getText(); }
