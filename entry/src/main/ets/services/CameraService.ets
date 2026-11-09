@@ -2269,7 +2269,15 @@ export class CameraService {
 
       return new DecodedPhotoResult(pixelMap, displayW, displayH);
     } catch (err) {
-      this.log.add(`全尺寸加载失败: handle=0x${handle.toString(16)}`);
+      this.log.add(`全尺寸加载失败: handle=0x${handle.toString(16)} ` +
+        `${(err as Error).message}`);
+      if (err instanceof PtpError && err.code === PTP_ERR_USB) {
+        // 取图过程中 USB 链路已经死了：关会话，下一次搜索重新连接，
+        // 避免后续每张图都继续打这条死管道。
+        this.connected = false;
+        this.usable = false;
+        await this.session.closeSessionAndPipe();
+      }
       return null;
     }
   }

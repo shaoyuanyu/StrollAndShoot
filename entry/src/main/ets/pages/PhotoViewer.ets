@@ -1133,6 +1133,11 @@ export struct PhotoViewerScreen {
 
   private onMainAnimationEnd(index: number): void {
     hilog.info(DOMAIN, TAG, `onMainAnimationEnd idx=${index} mainIdx=${this.mainIdx}`);
+    if (index !== this.mainIdx) {
+      // 快速连滑时上一段动画的 end 可能晚到；不能让它把 mainIdx 拉回旧页。
+      hilog.info(DOMAIN, TAG, `ignore stale animationEnd idx=${index} mainIdx=${this.mainIdx}`);
+      return;
+    }
     if (this._isDragging) {
       this.thumbCtrl.stopFakeDrag();
       this._isDragging = false;
