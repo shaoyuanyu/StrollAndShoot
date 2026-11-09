@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.23.1 / 1023001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.24.0 / 1024000 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -267,8 +267,8 @@ devecocli check lint entry/src/main/ets
 ```json5
 {
   "app": {
-    "versionName": "1.23.1",  // 语义化版本字符串
-    "versionCode": 1023001    // 整数编码，用于程序化比较
+    "versionName": "1.24.0",  // 语义化版本字符串
+    "versionCode": 1024000    // 整数编码，用于程序化比较
   }
 }
 ```
@@ -291,12 +291,12 @@ devecocli check lint entry/src/main/ets
 6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`，并同步 `build-profile.json5` 里 `default` 的 `versionName`
 
 - `versionCode` / `versionName` 定义在 `AppScope/app.json5`：前者是整数（0~2147483647，只用于比较新旧，每次发布递增），后者是展示串，设置页「关于 → 版本」直接显示 `versionName`。
-- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.23.1{debug}`），发布包用纯数字（`1.17.0`）。
+- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.24.0{debug}`），发布包用纯数字（`1.17.0`）。
 - `versionName` 只接受两种形态 —— ① 只有数字和点；② 同时包含 `{` 和 `}`、字符集为数字/字母/下划线/点/花括号。打包工具的校验正则是 `^[0-9.]+|(?=.*[{])(?=.*[}])[0-9a-zA-Z_.{}]+$`，所以 `1.17.0-beta`、`1.17.0 Debug`、`v1.17.0` 都不合法。`{debug}` 会**原样**显示在「关于」页，这是预期行为。
 - 调试标记写在 **product 级** `build-profile.json5` 的 `products[]` 里，只配 `default`：
 
   ```json5
-  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.23.1{debug}", ... }
+  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.24.0{debug}", ... }
   ```
 
   `AppScope/app.json5` 被两个 product 共用，写在那里会让发布包也带上 `{debug}`；`dist` 不要配 `versionName`，沿用 `app.json5` 的干净版本号。反过来（`app.json5` 写 `{debug}`、`dist` 覆盖）一旦忘了覆盖，发布包就会带调试标记，不要这么干。
@@ -842,7 +842,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - `linearGradientBlur(radius, options)` 的 `fractionStops` 是 `Array<[number, number]>`，每档含义是 **`[模糊程度, 模糊位置]`**，两个值范围都是 0–1；**模糊位置必须严格递增**，且数组至少 2 档，最后一档位置要写到 1，否则未覆盖区间的遮罩没有定义（模拟器上表现为三角碎片）。
 - 模拟器（Mate 80，HarmonyOS 7.0.0）的渲染服务在日志里会打 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false`：**GPU 不支持磨砂玻璃（沉浸光感）着色器**。单个悬浮页签的材质能看，但多选态这种「标题栏材质按钮 + 底部操作栏材质 + 页签材质」叠加、且持续重绘的场景，会退化成大片多边形色块。**这是模拟器能力限制，不是应用代码问题**：在改动前的基线上同样复现（2026-11-09 用 `git stash` 对照），关掉内容模糊、去掉操作栏材质、`barHeight` 0/56 都不改变。真机需单独确认。
 
-- USB 单次 `bulkTransfer` 小于 200KB：官方 `usbManager` 参考里没有写这个数值，属于本项目实测，改动缓冲区必须在真机验证。
+- USB 单次 `bulkTransfer` 的总数据（含 pipe、endpoint、buffer、timeout）必须小于 200KB，官方 `usbManager` 参考的 `bulkTransfer` 一节明确写了，超出返回 -1。`usbSubmitTransfer` 走 ashmem，官方只约束 `length` 为 [0, INT_MAX]；实测 1MB / 8MB 可用。改动缓冲区必须在真机验证。
 - `@SyncMonitor`：官方文档写明从 API 23 开始支持，`@Monitor` 从 API 12 开始支持。
 - `Repeat`：`LazyForEach` 的官方迁移写法是 `Repeat(data).virtualScroll()`，没有 `RepeatForEach` 这个组件。
 - `Tabs.onChange` 在 Tab 页签切换后触发，滑动时是滑动动画结束后；自定义页签 / 标题栏联动应在 `onSelected`（API 18+，点击或滑动离手开始动画时触发）或 `onAnimationStart` 中更新视觉索引。`onSelected` 回调里不能通过 `index` / `changeIndex()` 改 Tabs 当前页，所以视觉索引必须独立。

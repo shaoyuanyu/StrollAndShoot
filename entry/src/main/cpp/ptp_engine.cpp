@@ -220,6 +220,8 @@ PTPEngine::TransferResult PTPEngine::processIncoming(const uint8_t* rawData, siz
             result.data.assign(rawData + dataOffset, rawData + dataOffset + payloadLen);
             result.action = 1;
         } else {
+            // 一次大图有 6–16MB，按 payloadLen 预留，避免每包 append 时反复扩容拷贝。
+            dataAccumulator.reserve(payloadLen);
             dataAccumulator.assign(rawData + dataOffset, rawData + dataOffset + firstChunkLen);
             dataRemaining = payloadLen - firstChunkLen;
             dataPhaseActive = true;

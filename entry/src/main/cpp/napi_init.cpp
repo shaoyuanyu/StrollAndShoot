@@ -26,6 +26,34 @@ static napi_value MakeEmptyUint8Array(napi_env env) {
     return result;
 }
 
+// 大图数据直接以外部 ArrayBuffer 交给 JS，避免从 std::vector 再 memcpy 一份
+// （8MB 的拷贝在真机主线程上要 100ms 级，预览器滑动会直接掉帧）。
+static void FinalizeExternalVector(napi_env env, void* finalizeData, void* finalizeHint) {
+    (void)env;
+    (void)finalizeData;
+    delete static_cast<std::vector<uint8_t>*>(finalizeHint);
+}
+
+static napi_value MakeUint8ArrayExternal(napi_env env, std::vector<uint8_t>&& data) {
+    if (data.empty()) {
+        return MakeEmptyUint8Array(env);
+    }
+    auto* holder = new (std::nothrow) std::vector<uint8_t>(std::move(data));
+    if (holder == nullptr) {
+        return MakeEmptyUint8Array(env);
+    }
+    napi_value buf;
+    napi_status status = napi_create_external_arraybuffer(env, holder->data(), holder->size(),
+        FinalizeExternalVector, holder, &buf);
+    if (status != napi_ok) {
+        delete holder;
+        return MakeEmptyUint8Array(env);
+    }
+    napi_value result;
+    napi_create_typedarray(env, napi_uint8_array, holder->size(), buf, 0, &result);
+    return result;
+}
+
 static std::vector<uint8_t> GetUint8Array(napi_env env, napi_value val) {
     std::vector<uint8_t> out;
     bool isTypedArray = false;
@@ -203,14 +231,25 @@ static napi_value ProcessResponse(napi_env env, napi_callback_info info) {
     napi_value args[2] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
-    auto raw = GetUint8Array(env, args[0]);
     bool expectData = false;
     if (argc > 1) {
         napi_get_value_bool(env, args[1], &expectData);
     }
 
+    // 直接用 TypedArray 的底层指针，避免 GetUint8Array 先把 2MB 再拷贝进 vector。
+    napi_typedarray_type type = napi_uint8_array;
+    size_t len = 0;
+    void* dataPtr = nullptr;
+    napi_value arrayBuf;
+    size_t offset = 0;
+    bool isTypedArray = false;
+    napi_is_typedarray(env, args[0], &isTypedArray);
+    if (isTypedArray) {
+        napi_get_typedarray_info(env, args[0], &type, &len, &dataPtr, &arrayBuf, &offset);
+    }
+
     // Handle zero-length packet
-    if (raw.empty()) {
+    if (!isTypedArray || type != napi_uint8_array || dataPtr == nullptr || len == 0) {
         napi_value result;
         napi_create_object(env, &result);
         napi_value act;
@@ -219,7 +258,7 @@ static napi_value ProcessResponse(napi_env env, napi_callback_info info) {
         return result;
     }
 
-    auto tr = g_engine.processIncoming(raw.data(), raw.size(), expectData);
+    auto tr = g_engine.processIncoming(static_cast<const uint8_t*>(dataPtr), len, expectData);
 
     napi_value result;
     napi_create_object(env, &result);
@@ -235,7 +274,7 @@ static napi_value ProcessResponse(napi_env env, napi_callback_info info) {
     }
 
     if (tr.action == 1 && !tr.data.empty()) { // data
-        napi_value dataArr = MakeUint8Array(env, tr.data);
+        napi_value dataArr = MakeUint8ArrayExternal(env, std::move(tr.data));
         napi_set_named_property(env, result, "data", dataArr);
     } else if (tr.action == 1) { // data but empty, need to read more
         napi_value dataArr = MakeEmptyUint8Array(env);

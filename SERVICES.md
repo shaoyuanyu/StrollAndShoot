@@ -202,10 +202,10 @@ interface PhotoEntry {
 
 - `findCameras()`：枚举 USB 设备，筛选 class `0x06`（Image）、subclass `0x01`（SIC）、protocol `0x01`（PTP）
 - `connect()`：申请权限 → `connectDevice` → `claimInterface` → 清空中断端点 → `OpenSession`
-- 三个事务方法：`ptpCommand()`（命令 + 响应）、`ptpCommandGetData()`（命令 + 数据 + 响应，1KB 缓冲）、`ptpCommandGetLargeData()`（命令 + 数据 + 响应，192KB 缓冲循环复用）
-- `getThumb` / `getObject` / `getPartialObject` 各自维护 `usbBusy` 标记，靠 200ms 轮询等待通道空闲
+- 四个事务方法：`ptpCommand()`（命令 + 响应）、`ptpCommandGetData()`（命令 + 数据 + 响应，1KB 缓冲）、`ptpCommandGetLargeData()`（命令 + 数据 + 响应，192KB 缓冲循环复用，用于 `GetThumb` / `GetPartialObject`）、`ptpCommandGetObjectData()`（命令 bulk，数据阶段 `usbSubmitTransfer` 1MB/包、预加载 256KB/包，响应 1KB bulk，仅用于 `GetObject`）
 - 三个事务方法在相机返回非 `0x2001` 时抛 `PtpError(op, code)`，USB/通道失败抛 `PtpError(op, PTP_ERR_USB)`。`GetDeviceInfo` 例外：失败只记日志并返回 null（身份信息有 USB 级兜底，不该中断扫描）
 - `closeSessionAndPipe()` 只在 `CloseSession` 真的发出后才打 `acknowledged`；发送失败会如实打 `NOT acknowledged`（ISSUE-006）
+- **USB 链路失效后的自愈**：相机休眠或线松动后 `bulkTransfer` 返回 -1；旧逻辑把 `connected` 留在 true，下一次扫描继续复用死 pipe，表现为反复「USB 通信失败」。现在 `loadPhotosAndThumbnails` 捕获 `PTP_ERR_USB` 时置 `connected = false`、`usable = false` 并 `closeSessionAndPipe()`；下一次点「搜索相机」会重新走 `connect()`。相机端真正休眠时仍需先唤醒/重插，但应用不会再卡在死会话上（2026-11-09 真机实测）。
 - `log()` 只走 `AppLog.add()`（它内部已写 hilog），没有 AppLog 时才直接写 hilog —— 以前两条都写，每条 PTP 报文在 hilog 里出现两遍（ISSUE-007）
 
 - **崩溃后重连：`0x201E`（SessionAlreadyOpen）自愈**（2026-11-09 真机实测）。应用被系统杀掉时不会走 `closeSessionAndPipe()`，相机会一直保留那个 PTP 会话，之后每次 `OpenSession` 都返回 `0x201E`，表现为「相机明明连着却搜不到」。现在 `connect()` 里判断到 `0x201E` 会先补发一次 `CloseSession` 再重试 `OpenSession`，实测直接恢复（日志 `OpenSession: 相机仍挂着上一次的会话 (0x201E)，补发 CloseSession 后重试` → `补发 CloseSession 后 OpenSession 成功`）。补发仍失败时置 `sessionConflict = true`，由 `CameraService` 显示「相机还挂着上一次的连接：请拔插 USB 线，或重启相机后重试」。
@@ -218,7 +218,7 @@ interface PhotoEntry {
   1. **应用层用户态协议栈**（本项目）：`usbManager` + 自研 PTP 编解码，`libentry.so` 只做容器解析。桌面系统同样如此——libgphoto2 就是用户态库直接跟相机讲 PTP。
   2. **用户态扩展外设驱动**：`DriverExtensionAbility` + `UsbDdk`。官方限定 PC/2in1——[`DriverExtensionAbility`](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-app-ability-driverextensionability) 全部标注 `2in1`，驱动错误码 26300001 写明「产品形态不正确，仅支持PC/2in1」，[`ohos.permission.ACCESS_DDK_USB`](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/restricted-permissions) 也只对 PC/2in1 应用开放；且 UsbDdk 只能在 DriverExtensionAbility 生命周期内使用。
   3. **内核 / HDF 驱动**：随系统镜像由设备厂商构建，三方应用没有加载内核模块的接口，也不能通过 AppGallery 分发。
-- 补充：`usbManager` 没有设备插拔监听，只能轮询 `getDevices()`；大文件吞吐可改用 API 18 的 `usbSubmitTransfer`（异步批量、可取消），当前同步 `bulkTransfer` 的 192KB 上限见下节。
+- 补充：`usbManager` 没有设备插拔监听，只能轮询 `getDevices()`；大文件数据阶段已改用 API 18 的 `usbSubmitTransfer`，见下文 P3。
 
 ### PTP 事务调度（PtpScheduler，2026-11-09）
 
@@ -248,16 +248,71 @@ interface PhotoEntry {
 
 1288/1288 解码成功，无 `NO_THUMB` / `[TASKPOOL_THUMB] FAIL`。收益全部来自缩略图阶段：去掉 200ms 轮询 + 取图/解码流水线；元数据阶段仍是相机侧固定事务延迟，未继续优化。热扫描（缓存命中）不走 USB，约 2s 级。
 
+### P3：GetObject 异步大块传输与零拷贝（2026-11-09）
+
+扫描阶段保持原样，只改 `getObject`（原图下载）：
+
+- 命令 OUT 仍用 `bulkTransfer`（24B）；数据 IN 用 `usbSubmitTransfer`，主图 1MB/包、邻近预加载 256KB/包；数据结束后响应包用 1KB `bulkTransfer` 读。
+- `getThumb` / `getPartialObject` / `getObjectInfo` 仍走同步 bulk：小数据下 async 每次建 ashmem 的固定开销更大。
+- `usbSubmitTransfer` 走 ashmem，不受 `bulkTransfer` 的 200KB 限制；官方文档对 `length` 只约束 [0, INT_MAX]。
+- 缓冲区在事务内复用，顺序提交；`PtpScheduler` 仍然把整笔事务串行化。
+
+**NAPI 零拷贝（关键修复）**：
+
+- `ProcessResponse` 直接用 TypedArray 底层指针调用 `processIncoming`，不再先 `GetUint8Array` 拷进 `std::vector`；
+- 数据阶段按 PTP 头里的总长度 `reserve`，避免每包 append 时反复扩容；
+- 数据阶段结束的 6–16MB 结果用 `napi_create_external_arraybuffer` 交给 JS，去掉最后一次 `memcpy`。
+- 之前 2MB/包在 `processResponse` 里单次 **50–200ms**，是预览器滑动掉帧的根因；零拷贝后 1MB 包峰值 **3–4ms**。
+
+**分块实测（16.1MB NEF，同对象两轮，checksum 全部一致）**：
+
+| 分块 | 两轮吞吐 | `processResponse` 峰值 |
+|---|---|---|
+| 256KB | 22.1 / 12.0 MB/s | 1–2ms |
+| 512KB | 32.1 / 28.6 MB/s | 2ms |
+| **1MB** | **38.4 / 42.0 MB/s** | **3–4ms** |
+| 2MB | 18.9 / 51.1 MB/s | 2–3ms |
+| 4MB | 52.0 / 15.1 MB/s | 7ms |
+| 8MB | 45.8 / 38.5 MB/s | 14–17ms |
+
+1MB 是稳定性与主线程开销的折中（约 40MB/s）；2MB 以上波动明显变大，8MB 峰值已接近一帧，会重新掉帧。
+
+**多笔 in-flight 已排除**：512KB×2 直接返回 `async transfer status=6`（`TRANSFER_OVERFLOW`），同 endpoint 多笔在途时设备/主机不按请求边界切包，PTP 数据无法安全重组。
+
+**UI 结果**：零拷贝后 6.3MB 的 JPEG `USB下载` 约 0.2–0.4s；`processResponse` 不再出现 50ms 级主线程阻塞。
+
+**PC gphoto2 基线（2026-11-09，macOS）**：同一张 `DSC_3987.NEF`（15.7MB），gphoto2 2.5.32 两次下载 4.78s / 4.75s，约 **3.3MB/s**，比手机端 40MB/s 慢一个数量级。这说明 macOS 的 libusb/gphoto2 路径本身是瓶颈，不能拿来当相机上限；手机端 40MB/s 已经高于该基线，USB 链路不是当前瓶颈，继续压带宽的收益有限。
+
+
+### 预览器加载感知（2026-11-09）
+
+快速连滑多张后停住，曾出现「迟迟不显示转圈、迟迟不出原图」：
+
+- 旧逻辑停稳 100ms 就启动全图下载，快速滑动时给中间页白下 6MB；
+- 新当前页的 `loadFullRes` 被这个在途下载挡住，只记 `pendingFullResHandle` 就返回，**没有设置 spinner**，所以既没反馈也要等旧下载结束；
+- `PtpScheduler.getObject` 只把 priority 用于排队，没传给 `PtpSession.getObject`，预加载其实仍按前台分块跑。
+
+修复：
+
+- 停稳延迟 100ms → **260ms**；手指一落下就取消「停稳下载」定时器；
+- 被挡住的请求立即设置 `loading/spinnerOn`，不再等真正开始下载才转圈；
+- 转圈延迟 420ms → **300ms**；
+- `PtpScheduler.getObject` 把 priority 传给 `inner`；预览器预加载显式传 `PRELOAD`，并使用 256KB/包；
+- 真正当前图仍 `FOREGROUND`、1MB/包，插到预加载前面。
+
+实测体感：左右滑明显更顺，快速连滑后停住能立即看到加载提示并较快出图。
+
 ### 暂不做 / 以后做
 
 - **P2（延后 EXIF 方向）已排除**：相机缩略图本身没有 EXIF（实测 160×120 无 APP1），跳过一次 `GetPartialObject` 会让用户先看到旋转的照片，与体验一致性冲突。
-- **P3（USB 异步 / 更大缓冲）标记为最后做**：`usbSubmitTransfer` 能否同端点多笔在途、单笔能否超过 192KB，都受系统实现约束；先做分块扫描 + PC gphoto2 基线，确认是相机上限还是手机栈上限再试。
+- **P3 的进一步优化**：同 endpoint 多笔 in-flight 已被 `TRANSFER_OVERFLOW` 证伪；PC gphoto2 基线已做（约 3.3MB/s，反而不如手机），说明手机端约 40MB/s 不是 USB 链路瓶颈，继续在传输层抠带宽的收益有限。
+- **扫描阶段的下一步**：瓶颈是每笔 30ms 的相机延迟，不是块大小。可考虑 `GetObjectPropList` 批量取元数据、减少首次扫描的 `GetPartialObject`（方向缓存后已跳过），这两项都超出 P3 的传输层范围。
 
 ### USB 传输上限
 
-单次 `bulkTransfer` 的总数据必须小于 200KB，超出会返回 -1。缓冲区取 192KB（196608 字节）留出余量。
+单次 `bulkTransfer` 的总数据（含 pipe、endpoint、buffer、timeout）必须小于 200KB，官方 `usbManager` 参考明确写了，超出返回 -1。缓冲区取 192KB（196608 字节）留余量。
 
-> 此限制是本项目的实测经验，官方 `usbManager` 文档没有记载具体数值。改动缓冲区大小必须在真机验证。
+`usbSubmitTransfer` 的 `length` 官方只约束为 [0, INT_MAX]；它走 ashmem，开源实现还会拒绝 >= 512MB 的 ashmem 大小。实测 1MB / 8MB 均可完整传完，改动缓冲区仍必须真机验证。
 
 ### 目录遍历
 

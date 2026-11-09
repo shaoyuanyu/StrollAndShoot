@@ -1,9 +1,29 @@
 import usbManager from '@ohos.usbManager';
 import rawPtp from 'libentry.so';
 import hilog from '@ohos.hilog';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { AppLog } from '../services/AppLog';
 
 const TAG = 'PtpHost';
+
+/**
+ * GetObject 数据阶段的单包大小。
+ *
+ * 真机实测（16.1MB NEF，零拷贝 NAPI，同对象两轮）：
+ * 256KB 22.1/12.0；512KB 32.1/28.6；1MB 38.4/42.0 MB/s；
+ * 2MB 18.9/51.1；4MB 52.0/15.1；8MB 45.8/38.5（processResponse 峰值 14–17ms）。
+ * 1MB 最稳（约 40MB/s，processResponse 峰值 4ms）；再大波动明显变大，
+ * 且主线程一次处理的拷贝更长，预览器滑动会重新出现掉帧。
+ */
+const LARGE_DATA_CHUNK = 1024 * 1024;
+
+/**
+ * 邻近预加载的单包大小。
+ *
+ * 预加载在用户滑动时可能正在跑，256KB 一包的 processResponse 峰值约 2ms，
+ * 比 512KB 更不容易和滑动抢主线程；预加载对绝对吞吐不敏感。
+ */
+const PRELOAD_DATA_CHUNK = 256 * 1024;
 
 interface PtpApi {
   buildOpenSession(sessionId: number): Uint8Array;
@@ -176,6 +196,18 @@ export class PtpSession implements PtpTransport {
    */
   sessionConflict: boolean = false;
 
+  // ---- 自适应传输参数（按端点/运行时表现调整，避免只适配一台设备） ----
+  /** usbSubmitTransfer 同步提交失败时置 true，整个会话退回 bulk。 */
+  private asyncBroken: boolean = false;
+  /** 当前主图分块（字节）。 */
+  private chunkBytes: number = 512 * 1024;
+  /** 本端点允许的最大分块。 */
+  private chunkMax: number = 1024 * 1024;
+  /** 最近一次 processResponse 的最大耗时，用于降档防掉帧。 */
+  private lastProcMaxMs: number = 0;
+  /** 连续成功次数，用于升档。 */
+  private goodStreak: number = 0;
+
   get connectedDeviceName(): string {
     return this.device?.name ?? '';
   }
@@ -228,6 +260,7 @@ export class PtpSession implements PtpTransport {
         await this.closeSessionAndPipe();
         return false;
       }
+      this.initTransferProfile();
 
       // Drain interrupt EP
       if (this.intEp) {
@@ -351,11 +384,22 @@ export class PtpSession implements PtpTransport {
     return await this.ptpCommandGetLargeData(cmd, 'GetThumb');
   }
 
-  async getObject(handle: number, _priority?: PtpPriority): Promise<Uint8Array | null> {
+  async getObject(handle: number, priority?: PtpPriority): Promise<Uint8Array | null> {
     if (!this.sessionOpen) throw new PtpError('GetObject', PTP_ERR_NOT_OPEN);
     log(`Getting object for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetObject(handle);
-    return await this.ptpCommandGetLargeData(cmd, 'GetObject');
+    if (this.asyncBroken) {
+      // 该会话已确认 usbSubmitTransfer 不可用，整条会话退回同步 bulk。
+      return await this.ptpCommandGetLargeData(cmd, 'GetObject');
+    }
+    const chunk = priority === PtpPriority.PRELOAD
+      ? Math.min(PRELOAD_DATA_CHUNK, this.chunkBytes) : this.chunkBytes;
+    const t0 = Date.now();
+    const data = await this.ptpCommandGetObjectData(cmd, 'GetObject', chunk);
+    if (priority !== PtpPriority.PRELOAD && !this.asyncBroken) {
+      this.adaptAfterTransfer(Date.now() - t0);
+    }
+    return data;
   }
 
   /**
@@ -566,6 +610,239 @@ export class PtpSession implements PtpTransport {
     }
     log('Too many iterations, giving up');
     throw new PtpError(op, PTP_ERR_USB, `${op}: transfer timeout`);
+  }
+
+  /**
+   * 按端点能力设置初始分块：
+   * - USB3.0（bulk mps=1024）：512KB 起步，最多升到 1MB；
+   * - USB2.0（mps=512）：512KB 起步，最多 512KB；
+   * - 全速（mps<512）：64KB，不再升。
+   * 起步不直接用 1MB，避免在没验证过的相机/手机上第一笔就踩大包异常。
+   */
+  private initTransferProfile(): void {
+    const mps = this.bulkIn?.maxPacketSize ?? 512;
+    if (mps >= 1024) {
+      this.chunkBytes = 512 * 1024;
+      this.chunkMax = 1024 * 1024;
+    } else if (mps >= 512) {
+      this.chunkBytes = 512 * 1024;
+      this.chunkMax = 512 * 1024;
+    } else {
+      this.chunkBytes = 64 * 1024;
+      this.chunkMax = 64 * 1024;
+    }
+    this.asyncBroken = false;
+    this.goodStreak = 0;
+    this.lastProcMaxMs = 0;
+    log(`自适应传输: mps=${mps} 初始分块=${this.chunkBytes / 1024}KB ` +
+      `上限=${this.chunkMax / 1024}KB`);
+  }
+
+  /** 根据最近一笔的 processResponse 峰值和连续成功次数升/降档。 */
+  private adaptAfterTransfer(ms: number): void {
+    const minChunk = 256 * 1024;
+    const proc = this.lastProcMaxMs;
+    if (proc > 8 && this.chunkBytes > minChunk) {
+      this.chunkBytes = Math.max(minChunk, Math.floor(this.chunkBytes / 2));
+      this.goodStreak = 0;
+      log(`自适应传输: processResponse ${proc}ms，分块降到 ${this.chunkBytes / 1024}KB`);
+      return;
+    }
+    if (proc <= 4 && ms > 0) {
+      this.goodStreak++;
+    } else {
+      this.goodStreak = 0;
+    }
+    if (this.goodStreak >= 2 && this.chunkBytes < this.chunkMax) {
+      this.chunkBytes = Math.min(this.chunkMax, this.chunkBytes * 2);
+      this.goodStreak = 0;
+      log(`自适应传输: 连续 ${proc}ms，分块升到 ${this.chunkBytes / 1024}KB`);
+    }
+  }
+
+  /**
+   * 异步提交不可用时的兜底：命令已经发出，继续用同步 bulk 把当前 GetObject
+   * 的数据/响应读完，避免用户第一次取图直接失败。
+   */
+  private async readObjectBulkAfterCommand(op: string): Promise<Uint8Array | null> {
+    const buf = new Uint8Array(196608);
+    for (let i = 0; i < 4096; i++) {
+      let rn = -1;
+      try {
+        rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 15000);
+      } catch (err) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: bulk fallback read failed`);
+      }
+      if (rn < 0) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: bulk fallback read failed (${rn})`);
+      }
+      if (rn === 0) {
+        continue;
+      }
+      const result = ptpNative.processResponse(buf.subarray(0, rn), true);
+      if (result.action === 1 && result.data && result.data.length > 0) {
+        log(`Got data: ${result.data.length} bytes (bulk fallback)`);
+        return await this.readResponseAfterData(op, result.data);
+      }
+      if (result.action === 2) {
+        const code = result.responseCode ?? 0;
+        if (code === 0x2001) {
+          return null;
+        }
+        throw new PtpError(op, code);
+      }
+      if (result.action === -1) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: malformed response`);
+      }
+    }
+    throw new PtpError(op, PTP_ERR_USB, `${op}: bulk fallback timeout`);
+  }
+
+  /**
+   * GetObject 的数据阶段：命令仍走 bulk，数据用 usbSubmitTransfer 大块读。
+   *
+   * 为什么只给 GetObject 用：零拷贝 + 1MB async 把 16MB NEF 从 5.3MB/s
+   * 提到约 40MB/s；但 GetThumb / GetPartialObject 这类小数据，async 反而比
+   * bulk 慢 3–4ms（每次都要建 ashmem），所以它们继续走 bulk。
+   */
+  private async ptpCommandGetObjectData(cmd: Uint8Array, op: string = 'GetObject',
+    chunkBytes: number = LARGE_DATA_CHUNK): Promise<Uint8Array | null> {
+    logHex('CMD OUT', cmd);
+    let n = -1;
+    try {
+      n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
+    } catch (err) {
+      log(`OUT exception: ${JSON.stringify(err)}`);
+      throw new PtpError(op, PTP_ERR_USB, `${op}: command send failed`);
+    }
+    if (n < 0) {
+      log(`OUT failed: ${n}`);
+      throw new PtpError(op, PTP_ERR_USB, `${op}: command send failed (${n})`);
+    }
+
+    let dataPayload: Uint8Array | null = null;
+    let zeroReads = 0;
+    let received = false;
+    this.lastProcMaxMs = 0;
+    const buf = new Uint8Array(chunkBytes);
+    for (let attempt = 0; attempt < 4096; attempt++) {
+      let rn = 0;
+      try {
+        rn = await this.submitAsyncTransfer(this.bulkIn!, buf, 15000);
+      } catch (err) {
+        log(`async IN exception: ${(err as Error).message}`);
+        if (this.asyncBroken && attempt === 0 && !received) {
+          log('usbSubmitTransfer 不可用，回退 bulk 读当前 GetObject');
+          return await this.readObjectBulkAfterCommand(op);
+        }
+        throw new PtpError(op, PTP_ERR_USB, `${op}: async read failed`);
+      }
+      if (rn === 0) {
+        zeroReads++;
+        if (zeroReads > 8) {
+          throw new PtpError(op, PTP_ERR_USB, `${op}: too many zero-length reads`);
+        }
+        continue;
+      }
+      zeroReads = 0;
+      received = true;
+      const procStart = Date.now();
+      const result = ptpNative.processResponse(buf.subarray(0, rn), true);
+      const procMs = Date.now() - procStart;
+      if (procMs > this.lastProcMaxMs) {
+        this.lastProcMaxMs = procMs;
+      }
+      if (result.action === 1 && result.data && result.data.length > 0) {
+        dataPayload = result.data;
+        log(`Got data: ${result.data.length} bytes (async)`);
+        // 响应包只有 12B 左右，用 bulk 读，不再为它建 1MB ashmem。
+        return await this.readResponseAfterData(op, dataPayload);
+      }
+      if (result.action === 2) {
+        const code = result.responseCode ?? 0;
+        if (code === 0x2001) {
+          return dataPayload;
+        }
+        log(`Response error: 0x${code.toString(16)} (${ptpResponseName(code)})`);
+        throw new PtpError(op, code);
+      }
+      if (result.action === -1) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: malformed response`);
+      }
+    }
+    throw new PtpError(op, PTP_ERR_USB, `${op}: transfer timeout`);
+  }
+
+  private async readResponseAfterData(op: string, data: Uint8Array | null): Promise<Uint8Array | null> {
+    for (let i = 0; i < 6; i++) {
+      const buf = new Uint8Array(1024);
+      let rn = -1;
+      try {
+        rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
+      } catch (err) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: response read failed`);
+      }
+      if (rn < 0) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: response read failed (${rn})`);
+      }
+      if (rn === 0) {
+        continue;
+      }
+      const result = ptpNative.processResponse(buf.subarray(0, rn), true);
+      if (result.action === 2) {
+        const code = result.responseCode ?? 0;
+        if (code === 0x2001) {
+          return data;
+        }
+        log(`Response error: 0x${code.toString(16)} (${ptpResponseName(code)})`);
+        throw new PtpError(op, code);
+      }
+      if (result.action === -1) {
+        throw new PtpError(op, PTP_ERR_USB, `${op}: malformed response`);
+      }
+    }
+    throw new PtpError(op, PTP_ERR_USB, `${op}: no response from camera`);
+  }
+
+  /**
+   * 异步 bulk 传输（usbSubmitTransfer）。
+   *
+   * 走 ashmem，不受同步 bulkTransfer 的 200KB 限制；GetObject 的数据阶段
+   * 用它一次读 1MB（预加载 256KB）。命令/响应这类小数据仍用 bulkTransfer。
+   */
+  private submitAsyncTransfer(ep: usbManager.USBEndpoint, buffer: Uint8Array, timeout: number): Promise<number> {
+    return new Promise<number>((resolve, reject) => {
+      const params: usbManager.UsbDataTransferParams = {
+        devPipe: this.pipe!,
+        // 当前 HDI 不消费 flags；这里取 0，避免短包被当成错误。
+        flags: usbManager.UsbTransferFlags.USB_TRANSFER_SHORT_NOT_OK,
+        endpoint: ep.address,
+        type: usbManager.UsbEndpointTransferType.TRANSFER_TYPE_BULK,
+        timeout: timeout,
+        length: buffer.length,
+        callback: (err: BusinessError, data: usbManager.SubmitTransferCallback) => {
+          if (err) {
+            reject(new Error(`async transfer error code=${err.code} message=${err.message}`));
+            return;
+          }
+          if (data.status !== usbManager.UsbTransferStatus.TRANSFER_COMPLETED) {
+            reject(new Error(`async transfer status=${data.status} actual=${data.actualLength}`));
+            return;
+          }
+          resolve(data.actualLength);
+        },
+        userData: new Uint8Array(0),
+        buffer: buffer,
+        isoPacketCount: 0
+      };
+      try {
+        usbManager.usbSubmitTransfer(params);
+      } catch (e) {
+        // 同步提交失败通常意味着该设备/HDI 不支持或当前状态不允许异步传输。
+        this.asyncBroken = true;
+        reject(e as Error);
+      }
+    });
   }
 
   // ---- USB setup ----

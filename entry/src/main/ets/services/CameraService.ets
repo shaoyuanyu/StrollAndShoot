@@ -1636,6 +1636,13 @@ export class CameraService {
       return true;
     } catch (err) {
       hilog.error(DOMAIN, TAG, `loadPhotos error: ${JSON.stringify(err)}`);
+      // 相机休眠/线松动后 USB pipe 已经死了。不主动关会话的话，下一次扫描
+      // 仍会走进 sameDevice 分支复用这个死 pipe，表现为反复“USB 通信失败”。
+      if (err instanceof PtpError && err.code === PTP_ERR_USB) {
+        this.connected = false;
+        this.usable = false;
+        await this.session.closeSessionAndPipe();
+      }
       // 不清空 photos / photoCount：失败时保留上一轮内容（ISSUE-005）。
       this.reportScanFailure(this.describeScanError(err as Object));
       this.scanStatsText = '';
@@ -2140,10 +2147,10 @@ export class CameraService {
    * `getObject` 排到 PRELOAD/SCAN 前面，用户不用等整条扫描队列。
    */
   private async fetchFullPhotoForeground(handle: number, startedAt: number,
-    waited: boolean): Promise<Uint8Array | null> {
+    waited: boolean, priority: PtpPriority): Promise<Uint8Array | null> {
     this.preloadingSet.add(handle);
     try {
-      const data = await this.session.getObject(handle, PtpPriority.FOREGROUND);
+      const data = await this.session.getObject(handle, priority);
       if (!data || data.length === 0) return null;
       const t1 = Date.now();
       const sizeMB = (data.length / 1048576).toFixed(1);
@@ -2156,7 +2163,8 @@ export class CameraService {
     }
   }
 
-  async loadFullPhoto(handle: number): Promise<DecodedPhotoResult | null> {
+  async loadFullPhoto(handle: number,
+    priority: PtpPriority = PtpPriority.FOREGROUND): Promise<DecodedPhotoResult | null> {
     try {
       const t0 = Date.now();
       let data: Uint8Array | null = null;
@@ -2172,11 +2180,11 @@ export class CameraService {
           data = this.compressedCache.get(handle)!;
           hit = true;
         } else {
-          data = await this.fetchFullPhotoForeground(handle, t0, true);
+          data = await this.fetchFullPhotoForeground(handle, t0, true, priority);
           if (!data) return null;
         }
       } else {
-        data = await this.fetchFullPhotoForeground(handle, t0, false);
+        data = await this.fetchFullPhotoForeground(handle, t0, false, priority);
         if (!data) return null;
       }
 

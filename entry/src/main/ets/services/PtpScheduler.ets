@@ -70,7 +70,7 @@ export class PtpScheduler implements PtpTransport {
   }
 
   getObject(handle: number, priority: PtpPriority = PtpPriority.FOREGROUND): Promise<Uint8Array | null> {
-    return this.enqueue(priority, () => this.inner.getObject(handle));
+    return this.enqueue(priority, () => this.inner.getObject(handle, priority));
   }
 
   getPartialObject(handle: number, offset: number, maxBytes: number,

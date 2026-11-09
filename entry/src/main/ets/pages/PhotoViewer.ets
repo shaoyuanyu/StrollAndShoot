@@ -3,6 +3,7 @@ import { curves } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { displaySync } from '@kit.ArkGraphics2D';
 import { CameraService } from '../services/CameraService';
+import { PtpPriority } from './PtpHost';
 import type { PhotoEntry } from '../model/PhotoEntry';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import {
@@ -118,7 +119,9 @@ const MORPH_CURVE = curves.cubicBezierCurve(0.2, 0.0, 0.0, 1.0);
 const BACKDROP_IN_MS = 180;
 const BACKDROP_OUT_MS = 260;
 /** 加载超过这个时长才显示转圈（避免转圈在照片落地的瞬间闪一下）。 */
-const SPINNER_DELAY_MS = 420;
+const SPINNER_DELAY_MS = 300;
+/** 翻页停稳多久才启动全图下载；快速连滑时避免给中间页白下。 */
+const FULLRES_STABLE_MS = 260;
 /**
  * 收回动画的「目标格子矩形」可能因为列表虚拟化而暂时查不到：`handleBack` 会让
  * 画廊先滚到那一行，这里按帧重试，拿到就立刻开始收回。
@@ -1131,6 +1134,7 @@ export struct PhotoViewerScreen {
     this._fromMain = false;
     this.setChromeMotion(false);
     this.mainIdx = index;
+    this.clearDeferredLoading(this.currentHandle());
     this.thumbIdx = index;
     this.thumbCtrl.changeIndex(index, false);
     this.updateScales(index);
@@ -1141,6 +1145,7 @@ export struct PhotoViewerScreen {
   private onMainChange(idx: number): void {
     hilog.info(DOMAIN, TAG, `onMainChange idx=${idx} mainIdx=${this.mainIdx} total=${this.mainPhotos.length}`);
     this.mainIdx = idx;
+    this.clearDeferredLoading(this.currentHandle());
     // 换了一张照片：缩放快照失效（ZoomableImage 切页时会自己复位）
     this.curZoomScale = 1;
     this.curZoomX = 0;
@@ -1265,8 +1270,11 @@ export struct PhotoViewerScreen {
 
     this.stableTimerId = setTimeout(() => {
       this.stableTimerId = -1;
+      if (this.currentHandle() !== handle) {
+        return;
+      }
       this.loadFullRes(handle);
-    }, 100);
+    }, FULLRES_STABLE_MS);
   }
 
   private cancelStableTimer(): void {
@@ -1284,12 +1292,32 @@ export struct PhotoViewerScreen {
     return -1;
   }
 
+  /** 延迟加载时先给用户反馈：缩略图保留，同时立刻显示转圈。 */
+  private markDeferredLoading(handle: number): void {
+    if (handle < 0 || this.fullResMap.has(handle)) return;
+    const st = this.stateFor(handle);
+    st.loading = true;
+    st.spinnerOn = true;
+  }
+
+  /** 清掉不再需要的延迟状态；正在下载的那张和 except 保留。 */
+  private clearDeferredLoading(except: number): void {
+    this.renderStates.forEach((st: PhotoRenderState, h: number) => {
+      if (h !== except && h !== this.loadingHandle) {
+        st.loading = false;
+        st.spinnerOn = false;
+      }
+    });
+  }
+
   private async loadFullRes(handle: number): Promise<void> {
     // Scanning guard: no full-res loading until scan completes
     if (this.svc.scanning) return;
     // 转场进行中：先记下来，等共享层落地后再下载（见 transitionActive 注释）
     if (this.transitionActive) {
       this.pendingFullResHandle = handle;
+      this.clearDeferredLoading(handle);
+      this.markDeferredLoading(handle);
       return;
     }
 
@@ -1301,22 +1329,31 @@ export struct PhotoViewerScreen {
       // usbBusy），所以先把「用户真正想看的这张」记下来，等当前下载结束后补投。
       // 以前这里直接 return，请求被静默丢弃，用户停在大号缩略图上（ISSUE-014-A）。
       this.pendingFullResHandle = handle;
+      this.clearDeferredLoading(handle);
+      this.markDeferredLoading(handle);
       return;
     }
 
+    this.clearDeferredLoading(handle);
     this.loadingHandle = handle;
     const startState = this.stateFor(handle);
+    const keepSpinner = startState.spinnerOn;
     startState.loading = true;
-    startState.spinnerOn = false;
-    if (this.spinnerTimerId >= 0) { clearTimeout(this.spinnerTimerId); }
-    this.spinnerTimerId = setTimeout(() => {
+    if (this.spinnerTimerId >= 0) {
+      clearTimeout(this.spinnerTimerId);
       this.spinnerTimerId = -1;
-      if (this.loadingHandle === handle && this.stateFor(handle).loading) {
-        this.stateFor(handle).spinnerOn = true;
-      }
-    }, SPINNER_DELAY_MS);
+    }
+    if (!keepSpinner) {
+      startState.spinnerOn = false;
+      this.spinnerTimerId = setTimeout(() => {
+        this.spinnerTimerId = -1;
+        if (this.loadingHandle === handle && this.stateFor(handle).loading) {
+          this.stateFor(handle).spinnerOn = true;
+        }
+      }, SPINNER_DELAY_MS);
+    }
     try {
-      const result = await this.svc.loadFullPhoto(handle);
+      const result = await this.svc.loadFullPhoto(handle, PtpPriority.FOREGROUND);
       if (result !== null) {
         const pixelMap = result.pixelMap;
         this.fullResMap.set(handle, pixelMap);
@@ -1356,6 +1393,7 @@ export struct PhotoViewerScreen {
           setTimeout(() => { this.loadFullRes(next); }, 0);
           return;
         }
+        this.clearDeferredLoading(-1);
         // If queue was waiting for current load to finish, resume now
         if (!this.loadingPaused && this.preloadQueue.length > 0 && !this.preloadActive) {
           setTimeout(() => { this.processPreloadQueue(); }, 50);
@@ -1468,7 +1506,7 @@ export struct PhotoViewerScreen {
       }
 
       try {
-        const result = await this.svc.loadFullPhoto(task.handle);
+        const result = await this.svc.loadFullPhoto(task.handle, PtpPriority.PRELOAD);
         if (result !== null) {
           // 只写普通 Map：预加载邻近照片不该重建任何界面。
           this.fullResMap.set(task.handle, result.pixelMap);
@@ -2022,6 +2060,8 @@ export struct PhotoViewerScreen {
       onZoomChange: (zoomed: boolean) => { this.isZoomed = zoomed; },
       onGestureStart: () => {
         this.gestureDepth++;
+        // 手指一落下就取消「停稳后下载」的定时器，避免滑动过程中给中间页白下一次 6MB。
+        this.cancelStableTimer();
         this.pausePreloading();
         this.setChromeMotion(true);
       },
