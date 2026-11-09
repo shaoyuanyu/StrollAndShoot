@@ -256,6 +256,8 @@ interface PhotoEntry {
 - `getThumb` / `getPartialObject` / `getObjectInfo` 仍走同步 bulk：小数据下 async 每次建 ashmem 的固定开销更大。
 - `usbSubmitTransfer` 走 ashmem，不受 `bulkTransfer` 的 200KB 限制；官方文档对 `length` 只约束 [0, INT_MAX]。
 - 缓冲区在事务内复用，顺序提交；`PtpScheduler` 仍然把整笔事务串行化。
+- **自适应分块与回退**：按 `bulkIn.maxPacketSize` 设初始/上限（USB3 512KB→1MB、USB2 512KB、全速 64KB）；每笔记录 `processResponse` 峰值，>8ms 降一档，连续两笔 ≤4ms 升一档。`usbSubmitTransfer` 同步提交失败时，当前 GetObject 继续用 192KB bulk 把数据/响应读完，本会话后续都走 bulk；预加载分块固定不超过 256KB。
+- 自适应参数目前只在 Nikon Z50_2 + 本机做过一轮设计验证，其他手机/相机/读卡器仍需真机矩阵确认。
 
 **NAPI 零拷贝（关键修复）**：
 
