@@ -8,7 +8,7 @@
 
 单例，`@ObservedV2`，相机相关操作的入口：
 
-- `scanForCamera(quickMode)`：搜索相机 → 连接 → 取设备信息 → 判断缓存设置 → Phase 0 缓存快照 → Phase 1 目录遍历 → Phase 2a 元数据 → Phase 2b 缩略图。有 800ms 最小触发间隔（ISSUE-004），`bypassThrottle` 留给内部调用；失败时 `statusText` / `lastScanError` / `scanErrorVersion` 一起更新，界面据此显示原因并弹一次 toast
+- `scanForCamera(quickMode)`：搜索相机 → 连接 → 取设备信息 → 判断缓存设置（**新相机在这里停下来问，问完再扫**）→ Phase 0 缓存快照 → Phase 1 目录遍历 → Phase 2a 元数据 → Phase 2b 缩略图。有 800ms 最小触发间隔（ISSUE-004），`bypassThrottle` 留给内部调用；失败时 `statusText` / `lastScanError` / `scanErrorVersion` 一起更新，界面据此显示原因并弹一次 toast
 - `usable` 与 `connected` 分开：`connected` 只表示 PTP 会话建立，`usable` 表示 `GetStorageIDs` 成功。存储读不到时相机会话仍然是连着的，界面必须看 `usable`（ISSUE-003）
 - `PtpError`（定义在 `PtpHost.ets`）：`code > 0` 是相机 PTP 响应码，`code < 0` 是传输层错误（`PTP_ERR_USB` / `PTP_ERR_NOT_OPEN`）。服务层用 `describeScanError()` 映射成可执行文案（`0x200F` 拒绝访问、`0x200E` 只读卡、`0x2008` 无效存储等）；**不要再把失败折叠成 `null` / `[]`**（ISSUE-002）
 - `collectPhotoHandles()`：递归遍历目录，用 `GetObjectHandles` 的格式筛选（`0x0000` 与 `0x3001`）区分文件与目录，不使用启发式判断
@@ -88,7 +88,9 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 - **Phase 2b**：按 4 张一行加载缩略图，每行完成递增一次 `thumbnailVersion`，结束时 `purgeStale` 并写一行摘要 `缩略图阶段: 已在内存 X / 磁盘命中 Y / USB 读取 Z / 解码成功 W`，然后再存一次元数据（把本阶段学到的 EXIF 方向写回去）
 - 失败只更新状态文案，**不清空 `photos` / `photoCount`**（ISSUE-005）
 
-新相机第一次连接时先按“启用缓存”处理，扫描完成后再弹对话框询问（`cachingDialogRequired`），用户选择写入 `CameraCachePrefs`。
+新相机第一次连接时，**连接成功后立刻弹对话框问「是否启用缩略图缓存」，问完再扫**：`checkCachingState()` 只置 `pendingCachingPrompt`，`scanForCamera()` 在 Phase 0 之前 `await askCachingPreference()`，用户点按钮走 `setCachingPreference()` 并 resolve 这个 Promise，扫描带着答案继续（不重扫）。答案写入 `CameraCachePrefs`；选「不缓存」会顺手删掉这台相机的缓存目录。询问带 90s 超时兜底（按启用处理），避免对话框异常时把扫描卡死。
+
+> 2026-11-09 修正：早前是「先按启用缓存扫完，再弹窗追问」，1288 张时弹窗要等元数据 + 全部缩略图传完（几分钟）才出现，时机完全错位。
 
 ### 缓存调试
 

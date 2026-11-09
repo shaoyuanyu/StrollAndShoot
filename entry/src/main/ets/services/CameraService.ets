@@ -57,6 +57,8 @@ const METADATA_REUSE_PROBE = 8;
  * 另一个任务可以在 TaskPool 里解码。8 足够把管道喂饱，又不会一次占太多内存。
  */
 const THUMB_PIPELINE = 8;
+/** 等用户回答「是否启用缓存」的上限；超时按启用处理，避免扫描被对话框卡死。 */
+const CACHING_PROMPT_TIMEOUT_MS = 90 * 1000;
 
 // ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
 
@@ -1224,7 +1226,7 @@ export class CameraService {
 
   async scanForCamera(quickMode: boolean = true, bypassThrottle: boolean = false): Promise<void> {
     const startedAt = Date.now();
-    if (this.scanning) {
+    if (this.scanning || this.pendingCachingResolve !== null) {
       this.log.add('[节流] 已有扫描在进行中，忽略本次请求');
       return;
     }
@@ -1330,12 +1332,17 @@ export class CameraService {
         this.checkCachingState();
       }
 
-      // If camera is new and caching dialog is required, wait for user
-      // choice before scanning. setCachingPreference will trigger scan.
-      if (this.cachingDialogRequired) {
+      // 新相机：连接成功后立刻问「要不要缓存」，问完再扫。
+      // 早前是「先按启用缓存扫完，再弹窗追问」，弹窗要等元数据 + 全部缩略图都传完
+      // （1288 张要好几分钟）才出现，时机完全错位。
+      if (this.pendingCachingPrompt) {
         this.statusText = L10n.tr('camera_status_choose_cache');
         this.scanning = false;
-        return;
+        const cacheChosen = await this.askCachingPreference();
+        this.pendingCachingPrompt = false;
+        this.log.add(`缓存询问结果: ${cacheChosen ? '启用' : '不启用'}，继续扫描`);
+        this.scanning = true;
+        this.statusText = L10n.tr('camera_status_connected');
       }
 
       // Phase 0: deploy cached snapshot (quick mode only, caching enabled, known camera)
@@ -1369,10 +1376,6 @@ export class CameraService {
     } finally {
       this.scanning = false;
       await this.endTransferTask();
-      if (this.pendingCachingPrompt) {
-        this.pendingCachingPrompt = false;
-        this.cachingDialogRequired = true;
-      }
     }
   }
 
@@ -2557,8 +2560,11 @@ export class CameraService {
    * If previously rejected (cachingEnabled=false), keeps it false.
    * If previously accepted, initializes the thumbnail cache.
    */
-  /** 扫描结束后再弹缓存询问，避免阻塞首次扫描。 */
+  /** 新相机还没问过「要不要缓存」：`scanForCamera()` 会先问再扫。 */
   private pendingCachingPrompt: boolean = false;
+
+  /** 等用户点按钮的 resolver，`setCachingPreference()` 里唤醒。 */
+  private pendingCachingResolve: ((enabled: boolean) => void) | null = null;
 
   private checkCachingState(): void {
     if (!this.cameraIdentity) {
@@ -2568,18 +2574,16 @@ export class CameraService {
     }
     const pref = this.cachePrefs.get(this.cameraIdentity);
     if (!pref) {
-      // New camera: cache FIRST during scan, prompt AFTER scan completes.
-      // This ensures ALL photos are cached regardless of when user taps dialog.
+      // 新相机：**连上就问，问完再扫**。答案直接决定这轮扫描是否落盘缓存。
+      // 早前是「先缓存、扫完再问」，图片多时弹窗会被拖到整轮扫描（元数据 + 全部缩略图，
+      // 1288 张要好几分钟）之后才出现，用户早就不在看相机页了。
       this.pendingCamIdForDialog = this.cameraIdentity;
       this.pendingCamNameForDialog = this.cameraName;
-      this.cachingEnabled = true;
-      // 关键：不能在这里就把 cachingDialogRequired 置 true，
-      // scanForCamera 见到它为 true 会直接 return 等待用户选择，
-      // 而对话框要等 scan 结束后才会被弹出 → 首次连接永远扫不出照片。
+      // 还没回答之前不知道要不要写缓存，别提前按“启用”处理。
+      this.cachingEnabled = false;
       this.cachingDialogRequired = false;
       this.pendingCachingPrompt = true;
-      this.thumbCache.init(this.filesDir, this.cameraIdentity);
-      this.log.add(`新相机 ${this.cameraName}，先缓存后询问`);
+      this.log.add(`新相机 ${this.cameraName}，扫描前询问是否启用缓存`);
       return;
     }
     // 已登记过的相机每次连接都刷新 lastSeen / 名称，缓存管理页的“上次连接”才准确。
@@ -2597,8 +2601,34 @@ export class CameraService {
   }
 
   /**
+   * 弹出「是否启用缩略图缓存」询问，并等用户选择。
+   *
+   * 由 `scanForCamera()` 在连接成功、还没开始扫的时候调用：`cachingDialogRequired`
+   * 置 true 后 MainScreen 的 `@Monitor` 弹对话框，用户点按钮走
+   * `setCachingPreference()`，在那里 resolve 本 Promise，扫描接着往下走。
+   * 超时兜底：万一对话框没弹出来（页面未挂载等），不能让扫描永远卡住。
+   */
+  private askCachingPreference(): Promise<boolean> {
+    this.pendingCamIdForDialog = this.cameraIdentity;
+    this.pendingCamNameForDialog = this.cameraName;
+    return new Promise<boolean>((resolve: (enabled: boolean) => void) => {
+      this.pendingCachingResolve = resolve;
+      this.cachingDialogRequired = true;
+      setTimeout(() => {
+        if (this.pendingCachingResolve !== resolve) return;
+        this.pendingCachingResolve = null;
+        this.pendingCachingPrompt = false;
+        this.cachingDialogRequired = false;
+        this.cachingEnabled = true;
+        this.log.add('缓存询问超时（对话框未响应），本轮按启用缓存处理');
+        resolve(true);
+      }, CACHING_PROMPT_TIMEOUT_MS);
+    });
+  }
+
+  /**
    * Called from MainScreen after the user responds to the caching dialog.
-   * 拒绝时必须把“先缓存后询问”已经写下的缩略图与元数据快照删掉。
+   * 回答“不启用”时要把可能已经写下的缩略图与元数据快照删掉。
    */
   async setCachingPreference(cameraId: string, enabled: boolean): Promise<void> {
     const camName = this.pendingCamNameForDialog !== ''
@@ -2608,7 +2638,10 @@ export class CameraService {
     this.cachingEnabled = enabled;
     this.pendingCachingPrompt = false;
     this.log.add(enabled ? `用户已启用缓存: ${this.cameraName}` : `用户拒绝缓存: ${this.cameraName}`);
-    if (!enabled) {
+    if (enabled) {
+      // 扫描紧接着就要落盘缩略图，先按这台相机初始化缓存目录。
+      this.thumbCache.init(this.filesDir, cameraId);
+    } else {
       if (cameraId === this.cameraIdentity) {
         this.thumbCache.reset();
       }
@@ -2617,7 +2650,10 @@ export class CameraService {
     }
     this.pendingCamIdForDialog = '';
     this.pendingCamNameForDialog = '';
-    // 扫描在弹窗之前就已完成，这里只落库设置，不重复扫描。
+    // 唤醒 scanForCamera() 里等选择的 await：扫描在弹窗之前就暂停了，这里只放行，不重扫。
+    const resolve = this.pendingCachingResolve;
+    this.pendingCachingResolve = null;
+    if (resolve !== null) resolve(enabled);
   }
 
   /**
