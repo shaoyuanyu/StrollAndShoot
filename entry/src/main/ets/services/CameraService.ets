@@ -35,6 +35,8 @@ const TAG = 'CameraService';
  * 内存和纹理带宽打满，捏合、翻页都会发涩。
  */
 const FULL_DECODE_MAX_EDGE = 3072;
+/** 全图预览解码的最长边：先快速出图，再后台解 3072 全尺寸。 */
+const PREVIEW_DECODE_MAX_EDGE = 2048;
 
 /** 两次扫描的最小间隔，避免失败后连点把一次点击放大成多次 USB 会话（ISSUE-004）。 */
 const SCAN_MIN_INTERVAL_MS = 800;
@@ -2163,8 +2165,21 @@ export class CameraService {
     }
   }
 
+  /** PTP 元数据里的原图长边；未知返回 0。 */
+  private photoLongEdge(handle: number): number {
+    for (const p of this.photos) {
+      if (p.handle === handle) {
+        const w = p.imagePixWidth ?? 0;
+        const h = p.imagePixHeight ?? 0;
+        return Math.max(w, h);
+      }
+    }
+    return 0;
+  }
+
   async loadFullPhoto(handle: number,
-    priority: PtpPriority = PtpPriority.FOREGROUND): Promise<DecodedPhotoResult | null> {
+    priority: PtpPriority = PtpPriority.FOREGROUND,
+    onPreview?: (pm: image.PixelMap, w: number, h: number) => void): Promise<DecodedPhotoResult | null> {
     try {
       const t0 = Date.now();
       let data: Uint8Array | null = null;
@@ -2198,6 +2213,28 @@ export class CameraService {
       // 为 TaskPool 克隆一份 ArrayBuffer，主线程保留原始数据用于缓存
       const decodeBuf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
       const tCopy = Date.now();
+
+      // 先解一张屏幕级预览：用户很快看到可用的图，3072 全尺寸在后台继续解。
+      const srcEdge = this.photoLongEdge(handle);
+      const previewUseful = srcEdge <= 0 || srcEdge > PREVIEW_DECODE_MAX_EDGE;
+      if (onPreview !== undefined && priority === PtpPriority.FOREGROUND && previewUseful) {
+        try {
+          const previewBuf = decodeBuf.slice(0);
+          const previewTask = new taskpool.Task(
+            decodeFullPhotoTask,
+            previewBuf,
+            orient.rotate,
+            orient.flipH,
+            orient.flipV,
+            PREVIEW_DECODE_MAX_EDGE
+          );
+          const preview = await taskpool.execute(previewTask) as image.PixelMap;
+          const previewInfo = await preview.getImageInfo();
+          onPreview(preview, previewInfo.size.width, previewInfo.size.height);
+        } catch (_e) {
+          // 预览失败不阻塞全尺寸解码
+        }
+      }
 
       const task = new taskpool.Task(
         decodeFullPhotoTask,

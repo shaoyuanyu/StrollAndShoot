@@ -149,6 +149,10 @@ const CHROME_OUT_MS = 140;
  *
  * 把状态挂到「每张照片一个对象」上之后，更新只重建对应的那一个 MainImageView。
  */
+class PreviewHolder {
+  pm: image.PixelMap | null = null;
+}
+
 @ObservedV2
 class PhotoRenderState {
   /** 已解码的全尺寸位图；null 表示还在显示缩略图或占位。 */
@@ -840,6 +844,8 @@ export struct PhotoViewerScreen {
   private stableTimerId: number = -1;
   private preloadWindow: number = 3;
   private preloadedHandles: Set<number> = new Set();
+  /** 最近一次翻页方向：+1 下一张，-1 上一张；预加载优先同方向。 */
+  private swipeDir: number = 1;
 
   // ---- Interaction-aware serial preload queue ----
   private preloadQueue: PreloadTask[] = [];
@@ -1144,6 +1150,9 @@ export struct PhotoViewerScreen {
 
   private onMainChange(idx: number): void {
     hilog.info(DOMAIN, TAG, `onMainChange idx=${idx} mainIdx=${this.mainIdx} total=${this.mainPhotos.length}`);
+    if (idx !== this.mainIdx) {
+      this.swipeDir = idx > this.mainIdx ? 1 : -1;
+    }
     this.mainIdx = idx;
     this.clearDeferredLoading(this.currentHandle());
     // 换了一张照片：缩放快照失效（ZoomableImage 切页时会自己复位）
@@ -1352,8 +1361,24 @@ export struct PhotoViewerScreen {
         }
       }, SPINNER_DELAY_MS);
     }
+    const previewHolder = new PreviewHolder();
     try {
-      const result = await this.svc.loadFullPhoto(handle, PtpPriority.FOREGROUND);
+      const result = await this.svc.loadFullPhoto(handle, PtpPriority.FOREGROUND,
+        (pm: image.PixelMap, w: number, h: number) => {
+          if (this.loadingHandle !== handle || this.currentHandle() !== handle) {
+            try {
+              pm.release();
+            } catch (_e) { /* best effort */ }
+            return;
+          }
+          previewHolder.pm = pm;
+          const st = this.stateFor(handle);
+          st.fullPm = pm;
+          st.photoW = w;
+          st.photoH = h;
+          st.loading = false;
+          st.spinnerOn = false;
+        });
       if (result !== null) {
         const pixelMap = result.pixelMap;
         this.fullResMap.set(handle, pixelMap);
@@ -1361,6 +1386,13 @@ export struct PhotoViewerScreen {
         st.photoW = result.displayW;
         st.photoH = result.displayH;
         st.fullPm = pixelMap;
+        const preview = previewHolder.pm;
+        if (preview !== null) {
+          try {
+            preview.release();
+          } catch (_e) { /* best effort */ }
+          previewHolder.pm = null;
+        }
         // Only trigger preloads if this photo is still the current one
         if (handle === this.currentHandle()) {
           this.preloadNeighbors();
@@ -1429,7 +1461,10 @@ export struct PhotoViewerScreen {
       const h = photos[i].handle;
       if (!this.fullResMap.has(h) && !this.preloadedHandles.has(h)) {
         const dist = Math.abs(i - center);
-        newQueue.push({ handle: h, priority: dist });
+        const dir = i > center ? 1 : -1;
+        // 同方向优先：下一张/上一张先于反方向同距离的图。
+        const bias = dir === this.swipeDir ? 1 : 0;
+        newQueue.push({ handle: h, priority: dist * 2 - bias });
         this.preloadedHandles.add(h);
       }
     }
