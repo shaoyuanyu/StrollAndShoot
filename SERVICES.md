@@ -8,13 +8,32 @@
 
 单例，`@ObservedV2`，相机相关操作的入口：
 
-- `scanForCamera(quickMode)`：搜索相机 → 连接 → 取设备信息 → 判断缓存设置 → Phase 0 缓存快照 → Phase 1 目录遍历 → Phase 2a 元数据 → Phase 2b 缩略图
+- `scanForCamera(quickMode)`：搜索相机 → 连接 → 取设备信息 → 判断缓存设置 → Phase 0 缓存快照 → Phase 1 目录遍历 → Phase 2a 元数据 → Phase 2b 缩略图。有 800ms 最小触发间隔（ISSUE-004），`bypassThrottle` 留给内部调用；失败时 `statusText` / `lastScanError` / `scanErrorVersion` 一起更新，界面据此显示原因并弹一次 toast
+- `usable` 与 `connected` 分开：`connected` 只表示 PTP 会话建立，`usable` 表示 `GetStorageIDs` 成功。存储读不到时相机会话仍然是连着的，界面必须看 `usable`（ISSUE-003）
+- `PtpError`（定义在 `PtpHost.ets`）：`code > 0` 是相机 PTP 响应码，`code < 0` 是传输层错误（`PTP_ERR_USB` / `PTP_ERR_NOT_OPEN`）。服务层用 `describeScanError()` 映射成可执行文案（`0x200F` 拒绝访问、`0x200E` 只读卡、`0x2008` 无效存储等）；**不要再把失败折叠成 `null` / `[]`**（ISSUE-002）
 - `collectPhotoHandles()`：递归遍历目录，用 `GetObjectHandles` 的格式筛选（`0x0000` 与 `0x3001`）区分文件与目录，不使用启发式判断
 - `loadThumbnailsRowByRow()`：每 4 张为一组加载，整组完成才递增 `thumbnailVersion`
 - `loadFullPhoto(handle)`：优先读 `compressedCache`，未命中走 USB，解码在 TaskPool 里执行，返回 `DecodedPhotoResult`（PixelMap + 旋转后的尺寸）。完成时打一行四段耗时 `下载完成: 1.0s (取图 …ms / 方向 …ms / 拷贝 …ms / 解码 …ms)`：**「第一次打开照片卡一下」先看这行**——取图占大头是 USB/排队，拷贝占大头是主线程 30MB `ArrayBuffer.slice`，解码占大头才是 TaskPool。
 - **邻近预加载半径是 2，且预览器打开期间整体挂起**（`suspendNeighborPreload` / `resumeNeighborPreload`）。以前是 5 且每翻一张就重新排队 10 张，与预览器自己的队列抢 USB。**解码按最长边降采样到 `FULL_DECODE_MAX_EDGE`（3072px）**：手机屏幕长边约 2700px、预览器最多 5x 捏合，3072 已够用；24MP 原图全尺寸是 96MB/张，预览器同时驻留 6-7 张会把内存与纹理带宽打满。降采样用 `DecodingOptions.desiredSize`（2026-11-07 在模拟器把上限压到 600 验证过，日志 `full decode done 600x400 scale=0.500`）。
 - `downloadPhotos(handles, onProgress, ctx)`：批量下载到沙箱，按拍摄时间匹配 GPS 并写入 EXIF，最后经 `showAssetsCreationDialog` 保存到系统相册，同时维护 `download_registry.json`
 - `disconnect()`：关闭会话，清空全部内存缓存
+
+### 传输期间的后台长时任务与通知进度环（2026-11-09）
+
+传输（扫描的元数据/缩略图、批量下载）是用户可感知的长任务，退到后台必须继续：
+
+- `module.json5` 的 `abilities[].backgroundModes` 已声明 `location` + `dataTransfer`；
+- `CameraService.beginTransferTask()` / `endTransferTask()` 用**引用计数**申请 / 释放 `BackgroundMode.DATA_TRANSFER`（扫描与下载可能同时进行，最后一个结束才取消），日志 `后台传输长时任务已申请 / 已取消`；
+- **系统限制**：一个 UIAbility 同时只允许一个长时任务（API 20 及以前）。定位长时任务在跑时，传输任务会申请失败（日志 `后台传输长时任务申请失败`），此时退后台会被挂起；要并存需改用 API 21+ 的 `startBackgroundRunning(context, ContinuousTaskRequest)` 多任务接口。
+
+通知栏进度环走的是**系统预置通知模板**，不是自绘：
+
+- `services/TransferNotice.ets`：`NotificationRequest.template = { name: 'downloadTemplate', data: { title, fileName, progressValue } }`，系统自己渲染进度环，`progressValue >= 100` 时环消失；
+- 模板目前只覆盖上传/下载场景；需要用户授权（首次传输时 `requestEnableNotification`，拒绝则静默跳过，不影响传输）；
+- `CameraService.tickTransferNotice()` 每 1 秒（800ms 节流）刷新，内容形如 `512/1288 · 正在加载缩略图`，传输结束 `cancel()`；
+- 它与长时任务那条通知**并存**（系统长时任务通知的内容应用改不了，无法合并）。
+- DATA_TRANSFER 的官方约束：进度首次更新超过 10 分钟未更新会被取消，且「更新进度的通知类型必须为实况窗」。单次扫描/下载在几分钟内结束，暂时不受影响；要做超长传输需要接实况窗。
+- 实况窗（LiveView）的 `event` 只支持官方 13 类场景（打车/配送/取餐/航班/排队/比分/租赁/计时/运动/导航/打卡/快递/高铁），**照片导入不在其中**，不要硬套。
 
 ### 下载注册表与「最近删除」
 
@@ -52,21 +71,22 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
   {hash}.jpg       // 缩略图 JPEG，quality 85
 ```
 
-- manifest 带 `version`，旧版本会被整体丢弃重建（v1 无法区分原始与已纠正的 JPEG）
+- manifest 带 `version`，旧版本会被整体丢弃重建。当前 v3：v1 无法区分原始与已纠正的 JPEG；v2 的 NEF 缩略图是按「无原始尺寸 → 不裁剪」存的纠正版、带黑边且无法补救（ISSUE-012）
 - 条目里的 `corrected` 表示磁盘上的 JPEG 是否已烘焙旋转/翻转/裁剪；为 false 时按 `exifRotate`/`exifFlipH`/`exifFlipV` 在解码时补上变换
-- 首次扫描先写原始 JPEG（`corrected: false`），解码成功后再用纠正版覆盖（`corrected: true`），两次写入严格串行
+- 首次扫描只写**原始 JPEG + 变换参数**（`corrected: false` + `exifRotate/exifFlipH/exifFlipV/origWidth/origHeight`），**不再**在解码后重新编码覆盖；缓存命中时按 manifest 里的参数重新应用旋转/翻转到原始尺寸的裁剪。少掉每张一次的 ImagePacker 编码 + 覆盖写（ISSUE-007）
 - 键为 `filename::size`，与下载注册表一致
 - 命中条件：键存在且 `modificationDate` 相同，否则视为过期
-- `saveRawThumbnail()` 直接写入 USB 取回的原始 JPEG 字节，避免重新编码
-- `saveEncodedThumbnail()` 在解码裁掉黑边后用编码结果覆盖缓存文件
+- `saveRawThumbnail()` 直接写入 USB 取回的原始 JPEG 字节，避免重新编码；这是**唯一**写入路径
+- `saveEncodedThumbnail()` 仍保留但没有调用点（v2 时代的“解码后再编码覆盖”已被移除）
 - 扫描结束调用 `purgeStale(validKeys)` 删除已经不在相机上的条目
 
 ### 扫描的四个阶段（`scanForCamera(quickMode)`）
 
 - **Phase 0**（仅快速扫描，且相机之前同意过缓存）：从 `metadata_cache.json` 读出上一次的 `PhotoEntry[]`，同时从磁盘并行加载缩略图，画廊立刻有内容
-- **Phase 1**：递归遍历目录，收集 handle
-- **Phase 2a**：逐个 `getObjectInfo` 取元数据，按 `captureDate` → `modificationDate` → `handle` 降序排序，替换 `photos` 并递增 `photosVersion`，同时写出新的 `metadata_cache.json`
-- **Phase 2b**：按 4 张一行加载缩略图，每行完成递增一次 `thumbnailVersion`，结束时 `purgeStale`
+- **Phase 1**：递归遍历目录，收集 handle；单张 `getObjectInfo` 失败只跳过那一张，不打断整轮
+- **Phase 2a**：逐个 `getObjectInfo` 取元数据；**快速扫描会复用 `metadata_cache.json`**（按 handle 命中，先抽样 8 个 `GetObjectInfo` 比对文件名/体积，7 天有效期），只对新增照片读取（ISSUE-009）。缓存为空时每 100 张排一次序并上屏（ISSUE-008）。结束后写 `metadata_cache.json`
+- **Phase 2b**：按 4 张一行加载缩略图，每行完成递增一次 `thumbnailVersion`，结束时 `purgeStale` 并写一行摘要 `缩略图阶段: 已在内存 X / 磁盘命中 Y / USB 读取 Z / 解码成功 W`，然后再存一次元数据（把本阶段学到的 EXIF 方向写回去）
+- 失败只更新状态文案，**不清空 `photos` / `photoCount`**（ISSUE-005）
 
 新相机第一次连接时先按“启用缓存”处理，扫描完成后再弹对话框询问（`cachingDialogRequired`），用户选择写入 `CameraCachePrefs`。
 
@@ -182,6 +202,21 @@ interface PhotoEntry {
 - `connect()`：申请权限 → `connectDevice` → `claimInterface` → 清空中断端点 → `OpenSession`
 - 三个事务方法：`ptpCommand()`（命令 + 响应）、`ptpCommandGetData()`（命令 + 数据 + 响应，1KB 缓冲）、`ptpCommandGetLargeData()`（命令 + 数据 + 响应，192KB 缓冲循环复用）
 - `getThumb` / `getObject` / `getPartialObject` 各自维护 `usbBusy` 标记，靠 200ms 轮询等待通道空闲
+- 三个事务方法在相机返回非 `0x2001` 时抛 `PtpError(op, code)`，USB/通道失败抛 `PtpError(op, PTP_ERR_USB)`。`GetDeviceInfo` 例外：失败只记日志并返回 null（身份信息有 USB 级兜底，不该中断扫描）
+- `closeSessionAndPipe()` 只在 `CloseSession` 真的发出后才打 `acknowledged`；发送失败会如实打 `NOT acknowledged`（ISSUE-006）
+- `log()` 只走 `AppLog.add()`（它内部已写 hilog），没有 AppLog 时才直接写 hilog —— 以前两条都写，每条 PTP 报文在 hilog 里出现两遍（ISSUE-007）
+
+- **崩溃后重连：`0x201E`（SessionAlreadyOpen）自愈**（2026-11-09 真机实测）。应用被系统杀掉时不会走 `closeSessionAndPipe()`，相机会一直保留那个 PTP 会话，之后每次 `OpenSession` 都返回 `0x201E`，表现为「相机明明连着却搜不到」。现在 `connect()` 里判断到 `0x201E` 会先补发一次 `CloseSession` 再重试 `OpenSession`，实测直接恢复（日志 `OpenSession: 相机仍挂着上一次的会话 (0x201E)，补发 CloseSession 后重试` → `补发 CloseSession 后 OpenSession 成功`）。补发仍失败时置 `sessionConflict = true`，由 `CameraService` 显示「相机还挂着上一次的连接：请拔插 USB 线，或重启相机后重试」。
+
+### 主机侧没有 PTP 驱动（2026-11-09 核对）
+
+- HarmonyOS 的公开 API 里没有主机侧（Host）PTP/MTP 类驱动或服务：`@ohos.usbManager` 的主机侧只提供设备枚举、权限、接口/配置管理与控制/批量/中断/异步传输，PTP 容器与事务必须应用自己实现。
+- 系统里确实有 PTP/MTP 代码，但方向相反：OpenHarmony 的 [`IUsbfnMtpInterface`](https://gitcode.com/openharmony/docs/blob/e464cb7f67646bdd8b54da8267544a329bd916bc/zh-cn/device-dev/reference/hdi-apis/usb/interface_i_usbfn_mtp_interface.md) 是 **USB Function（从设备）** 侧的 MTP/PTP HDI（4.0 起，`Start`/`Stop`/`Read`/`Write`/`ReceiveFile`/`SendFile`/`SendEvent`），给手机插到电脑上被识别为相机/便携设备用，不对外提供主机侧接口。
+- 「自己写驱动」只有三条路，手机上只有第一条可用：
+  1. **应用层用户态协议栈**（本项目）：`usbManager` + 自研 PTP 编解码，`libentry.so` 只做容器解析。桌面系统同样如此——libgphoto2 就是用户态库直接跟相机讲 PTP。
+  2. **用户态扩展外设驱动**：`DriverExtensionAbility` + `UsbDdk`。官方限定 PC/2in1——[`DriverExtensionAbility`](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/js-apis-app-ability-driverextensionability) 全部标注 `2in1`，驱动错误码 26300001 写明「产品形态不正确，仅支持PC/2in1」，[`ohos.permission.ACCESS_DDK_USB`](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/restricted-permissions) 也只对 PC/2in1 应用开放；且 UsbDdk 只能在 DriverExtensionAbility 生命周期内使用。
+  3. **内核 / HDF 驱动**：随系统镜像由设备厂商构建，三方应用没有加载内核模块的接口，也不能通过 AppGallery 分发。
+- 补充：`usbManager` 没有设备插拔监听，只能轮询 `getDevices()`；大文件吞吐可改用 API 18 的 `usbSubmitTransfer`（异步批量、可取消），当前同步 `bulkTransfer` 的 192KB 上限见下节。
 
 ### USB 传输上限
 
@@ -194,6 +229,10 @@ interface PhotoEntry {
 递归进入所有目录（format `0x3001`），把所有非目录 handle 当作照片。相机支持格式筛选时，每层目录只需 2 次 `GetObjectHandles`；不支持时退化为逐个 `GetObjectInfo` 判断。不使用任何启发式判断。
 
 **旧实现的教训**：旧逻辑用 `validCount <= 2` 作为是否继续进入子目录的条件，遇到同一层有多个子目录（如 `DCIM/100NCD90` 与 `DCIM/101NCD90`）、一个目录下超过 2 个直接子项、或者同一层文件与目录混排的相机就会漏照片。现在的写法是进入全部目录，把所有非目录 handle 当作照片。
+
+### Native 解析要点
+
+`GetStorageIDs` / `GetObjectHandles` 的数据阶段是「`UINT32 count` + count 个 `UINT32`」。`PTPEngine::parseCountedU32Array()` 会跳过 count 并按 `min(count, (len-4)/4)` 截断；NAPI 的 `parseStorageIDs` / `parseObjectHandles` 必须走它。旧的 `parseU32Array()` 只适用于协议明确没有 count 前缀的裸数组（当前无调用点）。
 
 ### 相机身份
 

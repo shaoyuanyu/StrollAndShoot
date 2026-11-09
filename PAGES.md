@@ -26,12 +26,18 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 按拍摄日期分组，标题文案对齐官方并跟随系统语言：`今天` / `昨天` / 本地化月日（中文 `11月6日`、英文 `Nov 6`，跨年带年份），没有拍摄日期的归入「未知日期」。分组键是 `YYYYMMDD` 原始串，显示文案由 `dateHeaderLabel()` 换算，日期本身交给 `utils/DateTimeText.ets` 的 `Intl.DateTimeFormat`。
 - 日期标题：左侧 16fp 粗体、上下各 24vp 留白、左右 16vp；多选态右侧多一个整组勾选圆圈（三态，见下文）。
 - 格式筛选是标题栏右侧的 `Select` 下拉（选项 = 全部 + 照片里出现过的扩展名，只在“文件优先”模式下出现）。**不要**再做成「点一下轮换到下一个格式」的循环按钮 —— 用户猜不到下一下会到哪，设计很差。
+- **「文件优先」下一个文件一格，但同一张照片的多个文件必须相邻**（JPG 在前、RAW 在后），2026-11-09 真机修复（R3-001）。排序与配对全部由 `utils/PhotoGroupUtil.ets` 的 `buildDisplayGroups()` 负责：内容优先按 basename 合组，文件优先按「拍摄时间倒序 → 同名词条收成相邻块」排。`GalleryPage.allDisplayGroups()` **不要再按 `captureDate` 重排一次**：那会把 EXIF 时间差 1 秒的同名文件重新拆开。为什么不能只靠时间 + handle 兜底，见 [ISSUES.md](ISSUES.md) R3-001（连拍同秒 + 相机按格式分段分配 handle，1288 个文件里 438 组被拆）。
 - 长按进入多选（或点标题栏的「选择」胶囊）。多选态标题栏左叉 + 左对齐「已选择 N 项」+ 全选胶囊，底部悬浮胶囊操作栏只有「下载」一项。详见下文「多选模式」。
 - 缩略图按整行显示：一行（当前列数）全部解码完成才同时出现，否则该行显示占位。
 - `buildFlatItems()` 把日期标题与行拍平成一个数组交给 `Repeat` + `.virtualScroll()`，按 `photosVersion`、显示模式、筛选值、**当前列数**、宽度做缓存。日期分组另外缓存在 `ensureGrouping()` 里（只依赖照片与筛选）：捏合换列只需要重新分行，不要再扫一遍全量照片。
 - 缩略图单元格抽成独立 `@ComponentV2 ThumbImage`，内部调 `svc.thumbForRender(handle)` 建立 V2 依赖（原因见 [AGENTS.md](AGENTS.md) 的三个刷新坑）。
 - 末尾有 `FlatItem.tail()` 占位项（104vp），给悬浮页签留滚动空间；`ListItem` 的 `key` 必须保持稳定，把「行是否加载完成」编进 `key` 会让 `virtualScroll` 的复用项失效、整行渲染成空白。
-- `List` 用 `.contentStartOffset(this.listTopInset())` 让首行避开标题栏，并设 `.clip(false)` + `.cachedCount(6, true)` 让滚动中的照片能穿到标题栏下方被模糊；扫描横幅显示时它自己就在内容顶部，此时 `listTopInset()` 归零（原因见 [AGENTS.md](AGENTS.md) 的「顶部标题栏」）。
+- `List` 用 `.contentStartOffset(this.listTopInset())` 让首行避开标题栏，并设 `.clip(false)` + `.cachedCount(6, true)` 让滚动中的照片能穿到标题栏下方被模糊。
+- **扫描状态显示为「浮卡」，不要再放回列表上方的流内横幅**（2026-11-09 真机）：列表设了 `clip(false)`，滚动内容会越过自身边界盖上来，流内横幅会被日期标题和缩略图压住、文字被切。现在 `ScanCard()` 是根 `Stack` 里排在列表**之后**的浮层（定位在 `titleBarTotalVp() + 4`、左右 12vp），`listTopInset()` 返回 `titleBarTotalVp() + (扫描中 ? SCAN_CARD_INSET(64) : 0)`，两者互不遮挡。卡片内容：加载环 + 「正在载入照片」+ 实时阶段文案 + `已处理/总数` + 2vp 进度线，`hitTestBehavior(None)` 不挡点击。
+
+### 多选模式的模拟器限制
+
+2026-11-09 复现：模拟器（Mate 80 / 7.0.0）进入多选态后，整页会出现大片白/灰/彩色多边形。排查结论是**模拟器 GPU 不支持磨砂玻璃着色器**（`hilog` 里 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false`），而多选态同时挂了「标题栏材质按钮 + 底部操作栏材质 + 页签材质」并持续重绘。用 `git stash` 回到改动前基线同样复现；关掉内容区模糊、去掉操作栏材质、`barHeight` 设 0 或 56 都不消失。**功能本身正常**（选择计数、拖拽框选、全选、下载栏都工作），真机需要另行确认材质渲染。
 
 ### 多选模式
 
@@ -61,6 +67,18 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 官方图库在多选态的每个日期标题 **右侧** 放一个 20vp 圆形勾选（不是「全选当天」文字胶囊）。三态：未选 = 空心细圈（`text_tertiary` 1.5vp）、部分选中 = 实心蓝 + 白色横线、全选 = 实心蓝 + 白勾；热区用 `responseRegion` 扩到 44vp。点击调 `toggleSelectDate(dateKey)` 整组切换。
 
+#### 拖拽多选（REQ-001，2026-11-09）
+
+多选态下按住并滑动，划过的缩略图连续选中/取消：
+
+- 起手格决定整笔方向：起手格已选 → 整笔取消；未选 → 整笔选中；同一笔内不反复翻转
+- 支持斜向、跨行；已下载的照片跳过
+- 手指贴住列表上下边缘 72vp 内自动滚动（50ms 一次 `scrollBy`），长列表也能选到屏幕外的照片
+- 手势实现**不用 PanGesture**：多点跨格收不到 Move，且会和 List 滚动抢优先级。现在用 `List.onTouch` 原始触摸 + `List.enableScrollInteraction(!selectMode)`（多选态禁止拖动滚动）+ 官方 `Scroller.getItemIndex(x, y)` / `getItemRect(index)` 把坐标换成单元格。`TouchObject.x/y` 与这两个接口都是「相对 List」的坐标。
+- `suppressNextTap`：拖选改过选择集后，抬手时单元格自己的 `TapGesture` 要跳过反选，否则整笔方向会被最后一格抵消。
+- 长按进入多选后手指不抬起、直接继续拖，会按「选中」方向接着选（MOVE 时补建这一笔）。
+- 多选态**不能拖动列表滚动**，这是有意取舍：拖动已经被框选占用，长距离用边缘自动滚动。退出多选恢复滚动。
+
 #### 数据流
 
 选中集在 `GalleryPage`，标题栏在 `MainScreen`，靠一组计数与 `@Monitor` 双向打通：
@@ -77,6 +95,8 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `visualTab === 1` 分支，不是 `currentTab`）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
 - 内容区只有三张 24vp 圆角白卡、内边距 16vp：状态卡（连接状态、相机名、扫描进度与统计）、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。未连接时状态卡换成空态卡（图标 + 说明 + 指向右上角「搜索相机」）。
+- **状态卡标题永远优先显示 `svc.statusText`**，`connected` 只决定圆点颜色与是否展示设备卡。历史上写成 `connected ? 已连接 : statusText`，导致连上相机之后所有失败原因（无存储 / 拒绝访问 / 扫描出错）都不可见（ISSUE-001）。圆点颜色：扫描中蓝、`connected && usable` 绿、`connected && !usable` 红、未连接灰。未连接态的空态卡下方也会显示 `lastScanError`。
+- 扫描失败还会由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast（`getUIContext().getPromptAction().showToast`），文案来自 `svc.lastScanError`。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
 
 扫描阶段、缓存与快速扫描的细节见 [SERVICES.md](SERVICES.md)。
@@ -106,7 +126,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 预览器，一个文件里有这些结构：`ZoomState`、`ZoomLayer`、`ZoomableImage`、`MainImageView`、`ThumbCellView`、`PhotoViewerScreen`。
 
-- `ZoomableImage`：单张图片的缩放与拖动。捏合用 `pinchCenterX/Y`（屏幕绝对坐标）计算锚点；拖动位移要乘缩放倍数换算回屏幕空间；捏合期间 `PanGesture` 会持续累计位移，必须记录并在捏合结束后扣除，否则松手时会跳变。缩放范围 1x–5x，双击在 1x 与 2.5x 之间切换。捏合与拖动都要接 `onActionCancel`（来电、三指会取消手势），否则页面会永远停在「捏合中」。
+- `ZoomableImage`：单张图片的缩放与拖动。捏合用 `pinchCenterX/Y`（屏幕绝对坐标）计算锚点；**拖动位移直接用 `GestureEvent.offsetX/Y`（屏幕空间 vp），不要再乘缩放倍数**——乘上去会让 5x 缩放时手指划 100vp、照片走 500vp（ISSUE-015-B，2026-11-09 修正）。捏合期间 `PanGesture` 会持续累计位移，必须记录并在捏合结束后扣除，否则松手时会跳变。缩放范围 1x–5x，双击在 1x 与 2.5x 之间切换。捏合与拖动都要接 `onActionCancel`（来电、三指会取消手势），否则页面会永远停在「捏合中」。
 - **逐帧变化的缩放值必须放在 `ZoomState`（`@ObservedV2` 的 `@Trace scale/x/y`）里，由叶子组件 `ZoomLayer` 订阅，`ZoomableImage` 自己不许再持有 `@Local scaleVal/offX/offY`**：一旦把这三个值写成 `ZoomableImage` 的 `@Local`，每个捏合事件都会重跑它的 `build()`，`GestureGroup` + 3 个手势连同 `PanGesture` 的触发距离每帧重建并重新绑定——这是预览器缩放卡顿的根因（2026-11-07）。`ZoomableImage` 里只保留一个 `@Local zoomed`，它只在 1x 边界翻转时才变，用来切换 `PanGesture` 的 `distance`（1x 时 80vp，让主 Swiper 先接管滑动；放大后 3vp）。
 - `MainImageView`：主图容器，叠加加载指示与扫描进度横幅。**每张照片的状态是 `PhotoRenderState`（`@ObservedV2`，`@Trace fullPm/loading/photoW/photoH`），页面通过一张普通 `Map` 拿到它再传进来，页面自己绝不能在 `build()` 里读这些字段**：否则任何一张图解码完成都会重建整页（标题栏 + 两个 Swiper + Repeat 全量 diff）。后台每解完一张邻近照片就卡一下，就是这么来的。
 - `fullResMap`、`loadingHandle` 必须是**普通字段/普通 Map**，`thumbnailPixelMapMap` 也是普通 Map；界面刷新靠 `PhotoRenderState` 和 `MainImageView` 内部读 `svc.thumbnailVersion`。
@@ -114,8 +134,18 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - `updateScales()` 只在值真的变化时写 `scaleArr/offsetArr`，并且**不要再引入逐帧变化的 `thumbFrac`**：`@Local` 数组每次赋值都会通知订阅者，逐帧全写会让窗口内 11 个缩略图单元格反复重算并重启自身的 150ms 动画。中间项的选中高亮由 `scaleArr[i] >= MAX_S` 判定。
 - `ThumbCellView`：底部缩略图条的单元。
 - `PhotoViewerScreen`：**打开时调用 `svc.suspendNeighborPreload()`，关闭时 `resumeNeighborPreload()`**（并把 `loadingPaused` 置真）：预览器自己有一套「当前优先、前后各 3 张」的串行加载队列，后台再跑一套邻近预加载只会在串行的 USB 管道上插队，把用户正在等的那张拖慢——2026-11-07 实测手机上预览期间每秒都有 `预加载[N]` 时，第一次开图要 1.0–1.4s，挂起后回到 0.5s（mock 的固定 520ms）。
-- `PhotoViewerScreen`：NavDestination。主 `Swiper` 与缩略图 `Swiper` 双向联动（`startFakeDrag` / `fakeDragBy` 同步），主图滑动带惯性，缩略图中心项放大到 1.3x。原图按“当前照片优先，前后各 3 张”排队串行加载，手势期间暂停；预加载结果只写普通 Map，等翻到那张时再由 `presentCached()` 挂到渲染状态上。淘汰时 `PixelMap.release()` 要 `setTimeout(0)` 延后，不要正好压在手势中间。返回时用当前照片的缩略图更新共享元素，保证转场起点正确。
+- `PhotoViewerScreen`：NavDestination。主 `Swiper` 与缩略图 `Swiper` 双向联动（`startFakeDrag` / `fakeDragBy` 同步），缩略图中心项放大到 1.3x。
+- **缩略图条不再自定义惯性**（2026-11-09）：以前手指还没抬起就置 `_inertiaAnim` 让主图停跟，抬手后又自己算跳数 + Friction/5000ms 动画，观感是“飘”。现在把 fling 交还 Swiper 自身（固定 `Curve.Linear` + 150ms），`_inertiaAnim` 只表示“缩略图条正在落位”，用于在这段时间暂停全量图加载；落位结束再补一次 `scheduleFullResLoad()`，并带 `THUMB_SETTLE_GUARD_MS` 安全超时（ISSUE-014-C）。
+- **手势期间预加载必须一直暂停**：`gestureDepth` 在 `onGestureStart/End` 增减，300ms 冷却到点时若计数仍 > 0 就继续排下一次冷却。以前冷却结束无条件恢复，捏合超过 300ms 后后台又开始每 1–2 秒读 7MB + 解码，与捏合渲染抢带宽（ISSUE-015-A）。
+- **全尺寸加载不能被静默丢弃**：USB 忙（另一张正在下载且不可取消）时把请求记进 `pendingFullResHandle`，当前下载结束的 `finally` 里优先补投「当前页」，其次补投排队的那张（ISSUE-014-A/B）。
+- 原图按“当前照片优先，前后各 3 张”排队串行加载，手势期间暂停；预加载结果只写普通 Map，等翻到那张时再由 `presentCached()` 挂到渲染状态上。淘汰时 `PixelMap.release()` 要 `setTimeout(0)` 延后，不要正好压在手势中间。返回时用当前照片的缩略图更新共享元素，保证转场起点正确。
 - 一次捏合结束会打两行性能日志：`ViewerPerf pinch updates=…, frames=…, fps=…, lateFrames=…, gapMax=…ms, workMax=…ms`（hilog，tag `ViewerPerf`）与 `PERF viewer pinch: swiperScrolls=…`（AppLog）。fps 掉 / gapMax 大 = UI 线程被拖住；fps 正常但不跟手 = 渲染侧。
+
+### 扫描期间只看缩略图（2026-11-09）
+
+缩略图还在传的时候点开照片，**不下载原图**：`loadFullRes` / `scheduleFullResLoad` / `preloadNeighbors` / `processPreloadQueue` 四处都以 `svc.scanning` 为闸门，扫描结束后由 `@Monitor('svc.scanning')` 自动补投（约 100ms 后）。
+
+界面必须明说，否则会被当成卡死：照片区底部一条提示「扫描中，暂时只显示缩略图 X/1288 / 扫描完成后会自动加载原图」（`viewer_scanning_thumb_only` / `viewer_scanning_thumb_note`），扫描结束自动消失。
 
 ### 一镜到底转场
 
@@ -130,6 +160,12 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - **禁止再对整个 NavDestination 做 scale / translate / clip**（旧做法）：那会把标题栏、缩略图条一起从一个小方块里缩放着长出来，观感是「一个迷你版预览器在放大」，和官方差得很远。曾同时用 `showDetailContent` 布尔量做内容显隐，而它在 `animateTo` 里被翻转，`if` 立刻读到新值 → 共享层在动画第 0 帧就被拆掉，等于什么都没做。
 - **`animateTo` 不会插值「本帧才创建」的节点的 `width/height/position`**（2026-11-07 实测：`onAppear` 里拿到的就是终点矩形）。共享层是转场开始那一刻才创建的，所以矩形必须用 `displaySync` 帧回调逐帧写 `PhotoMorphState`，缓动值取 `curve.interpolate(t)`（与引擎同一条曲线）。背景与标题栏的 `opacity` 作用在常驻节点上，可以继续用 `animateTo`。
 - 矩形换算在 `CustomTransition/PhotoMorph.ets`：`containRect(aspect)` = 图片显示区域（窗口高 − 状态栏 − 56vp 标题栏 − 手势条）× 照片比例居中；起点由 `getRectangleById('thumb_<handle>')` 给的 px 直接 `px2vp`。**图片显示区域必须和 `TitleBar`/`padding` 的实际布局同源**，改标题栏高度要同步 `VIEWER_TITLE_BAR_HEIGHT`。
+- **共享照片层的矩形动画交给 `animateTo`，不要再逐帧回调 JS**（2026-11-09 真机实测后定稿）。曾经试过两种写法，都踩过坑：
+  - ①（已废弃）「固定布局位图 + 逐帧改裁剪框 + 内层等比 `scale`」：数学上等价于 `ImageFit.Cover`，但外层每帧改尺寸又 `clip(true)`，等于**每帧离屏渲染一次**，真机 push 只有 47fps、pop 掉到 21fps（`gapMax=134ms`）。
+  - ②（已废弃）`displaySync` 帧回调里改 4 个 `@Trace` 字段：每帧跑一次 JS build + 属性 diff，同样只有 47fps。
+  - ③（当前）`startRectAnimation()` 先 `morph.apply(from)`，再用 `ui.animateTo({ duration, curve, onFinish }, () => morph.apply(to))` 让框架插值，JS 只在首尾各跑一次。真机观感恢复正常，`onFinish` 里与共享层同帧换手并 `finishTransition()`，另有 `duration + 200ms` 的兜底定时器防止共享层卡住。
+  - **前提**：共享层必须在动画开始前已经渲染过一帧（`onReady` 里就 `apply(起点)` + `visible = true`）。`animateTo` 不会插值「本帧才创建」的节点的 `width/height/position`；若以后改成「动画开始才创建共享层」，必须退回逐帧方案。
+- 转场埋点：`ViewerPerf transition push|pop native <ms>ms`（原生动画耗时）。改转场后先看这行，别只凭观感；需要逐帧数据时再把 `PinchPerf` + `displaySync` 的采样接回来。
 - 预览器页的 `NavDestination` 背景必须透明、内容区也**不许铺纯黑底**（否则下层画廊从第一帧就被挡住，只剩共享层在动）；黑底只由 `MorphBackdrop` 提供，它同时负责「透过它看到画廊」。
 - 返回起点取「当前屏幕上的照片矩形」：未放大就是 `Contain` 矩形；放大过则用 `ZoomableImage.onTransform` 在**手势结束时**汇报的 `scale/offX/offY` 换算（`rect × s` 绕同一中心缩放再平移），这样放大状态下按返回也从当前画面收回，不会先跳回等比显示。`offX/offY` 是屏幕空间位移（`applyTransform` 的注释已经写明 finger 位移要乘 scale 换回屏幕空间，说明 `.translate` 在 `.scale` 之后应用）。
 - **返回终点 = 当前照片的缩略图矩形；格子在可视区外就先把画廊滚过去再收**（对齐官方图库「回家时网格已经在当前张」）：

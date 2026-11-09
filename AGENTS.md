@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.20.1 / 1020001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.22.1 / 1022001 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -267,8 +267,8 @@ devecocli check lint entry/src/main/ets
 ```json5
 {
   "app": {
-    "versionName": "1.20.1",  // 语义化版本字符串
-    "versionCode": 1020001    // 整数编码，用于程序化比较
+    "versionName": "1.22.1",  // 语义化版本字符串
+    "versionCode": 1022001    // 整数编码，用于程序化比较
   }
 }
 ```
@@ -291,12 +291,12 @@ devecocli check lint entry/src/main/ets
 6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`，并同步 `build-profile.json5` 里 `default` 的 `versionName`
 
 - `versionCode` / `versionName` 定义在 `AppScope/app.json5`：前者是整数（0~2147483647，只用于比较新旧，每次发布递增），后者是展示串，设置页「关于 → 版本」直接显示 `versionName`。
-- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.20.1{debug}`），发布包用纯数字（`1.17.0`）。
+- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.22.1{debug}`），发布包用纯数字（`1.17.0`）。
 - `versionName` 只接受两种形态 —— ① 只有数字和点；② 同时包含 `{` 和 `}`、字符集为数字/字母/下划线/点/花括号。打包工具的校验正则是 `^[0-9.]+|(?=.*[{])(?=.*[}])[0-9a-zA-Z_.{}]+$`，所以 `1.17.0-beta`、`1.17.0 Debug`、`v1.17.0` 都不合法。`{debug}` 会**原样**显示在「关于」页，这是预期行为。
 - 调试标记写在 **product 级** `build-profile.json5` 的 `products[]` 里，只配 `default`：
 
   ```json5
-  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.20.1{debug}", ... }
+  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.22.1{debug}", ... }
   ```
 
   `AppScope/app.json5` 被两个 product 共用，写在那里会让发布包也带上 `{debug}`；`dist` 不要配 `versionName`，沿用 `app.json5` 的干净版本号。反过来（`app.json5` 写 `{debug}`、`dist` 覆盖）一旦忘了覆盖，发布包就会带调试标记，不要这么干。
@@ -672,6 +672,23 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 更多按页面的应用方式见 [PAGES.md](PAGES.md)。
 
+### 手势与滚动坐标（2026-11-09 核对）
+
+- **`GestureEvent.offsetX/offsetY` 是屏幕空间位移**（「相对手指按下位置」，单位 vp），不会被 `.scale()` 缩小。凡是把位移加到屏幕空间的 `translate` 上，**不能再乘缩放倍数**——预览器曾经乘了 `zoom.scale`，5 倍缩放时手指划 100vp、照片走 500vp。
+- 同理，`GestureEvent.pinchCenterX/Y` 已是屏幕坐标，捏合锚点可以直接用。
+- 多选框选这类「手指跨单元格」的交互不要给单元格加 PanGesture（跨格收不到 Move），也不要和 List 的滚动抢优先级。当前做法：多选态 `List.enableScrollInteraction(false)` + `List.onTouch` 原始触摸 + 官方 `Scroller.getItemIndex(x, y)`（API 14）把坐标换成 flat 列表下标，再用 `Scroller.getItemRect(index)`（API 11）拿行矩形、按列均分反推单元格。
+- `TouchObject.x/y` 是**相对注册 onTouch 的组件**，与 `getItemIndex/getItemRect` 的坐标口径一致，可以直接混用。
+- 拖到列表上下边缘时要自己开定时器 `scrollBy`（官方 List 不会替你做），否则长列表选不到屏幕外的照片。
+
+### 后台长时任务与通知进度（2026-11-09 核对）
+
+- 长时任务：`module.json5` 的 `abilities[].backgroundModes` 要声明类型（本项目 `location` + `dataTransfer`），权限 `ohos.permission.KEEP_BACKGROUND_RUNNING`。申请成功后**通知栏出现系统通知**，用户划掉通知系统会自动停任务。
+- **一个 UIAbility 同时只允许一个长时任务**（API 20 及以前）；API 21 起才有 `startBackgroundRunning(context, ContinuousTaskRequest)` 多任务版本。两个业务都要保活时，要么合并类型，要么换新接口。
+- **长时任务通知的内容应用改不了**：`ContinuousTaskRequest` 只有模式、子模式、`wantAgent`、`continuousTaskId`，没有进度或自定义文案。
+- 想在通知栏显示**进度环**，用系统预置通知模板 `NotificationTemplate`：`name: 'downloadTemplate'`，`data` 只认 `title` / `fileName` / `progressValue(0~100)`，`>= 100` 时环消失。模板只覆盖上传/下载场景。这是普通通知，和长时任务通知是两条。
+- DATA_TRANSFER 的附加约束：进度首次更新超过 10 分钟会被取消，且官方要求「更新进度的通知类型必须为实况窗」。实况窗的 `event` 只支持固定场景（打车/配送/取餐/航班/排队/比分/租赁/计时/运动/导航/打卡/快递/高铁），**照片导入不在其中**，不要硬套场景。
+- 实现与日志见 [SERVICES.md](SERVICES.md)「传输期间的后台长时任务与通知进度环」。
+
 ### 导航、标题栏与沉浸光感
 
 #### 导航骨架
@@ -704,7 +721,8 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 #### 底部页签
 
 - 底部是系统 `Tabs` 的**悬浮页签**：只设 `barOverlap(true)` + `Tabs.barFloatingStyle({ barBottomMargin: this.navIndicatorVp(), maskColor: Color.Transparent, systemMaterial: new uiMaterial.ImmersiveMaterial({ style: REGULAR, interactive: true }) })`。
-- **不要**再设 `barBackgroundColor` / `barBackgroundBlurStyle`（会盖住材质），也不要设 `barMode` / `scrollable`（会破坏悬浮样式的默认布局；`vertical(false)`、`barPosition: End` 为默认）。`barHeight` 只在多选态动态置 0。
+- **不要**再设 `barBackgroundColor` / `barBackgroundBlurStyle`（会盖住材质），也不要设 `barMode`（会破坏悬浮样式的默认布局；`vertical(false)`、`barPosition: End` 为默认）。`barHeight` 只在多选态动态置 0。
+- **`scrollable` 例外**：为了实现画廊「按住拖拽多选」并避免横向拖动被 Tabs 抢走，2026-11-09 起**故意**设了 `.scrollable(false)`（REQ-001，用户已确认接受取消 3 个 tab 之间的左右滑动）。模拟器实测：悬浮页签的材质、圆角、位置与点击切换都正常，只是左右滑动不再切页。此前「不要设 `scrollable`」的经验来自同时设了 `barMode` 的场景；**再改动这一行要重新确认材质与页签点击**。
 - **底边距必须自己算**：窗口是 `setWindowLayoutFullScreen(true)`，Tabs 是全屏的，`barFloatingStyle` 不会自动避让手势条。`barBottomMargin: this.navIndicatorVp()` 才让胶囊底边正好贴在手势条避让区上沿；写成固定的 10 会让胶囊压在手势条上（官方图库也是这么摆的）。
 - **实测（2026-11-06，模拟器 Mate 80 + 真机 VYG-AL00）**：只写 `systemMaterial` 时，两边都能正确呈现磨砂透明，内容从胶囊下面透出且带模糊与折射。
 - **踩过的坑**：一度以为“模拟器渲染不出材质”，其实是同时设了 `barBackgroundColor` + `barBackgroundBlurStyle`，把材质整个盖住了。**只要这两个属性还在，材质就一定看不到**——不是设备能力问题。排查时先确认没有别的东西压在上面。
@@ -717,7 +735,8 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 1. 顶部只有**独立的浮动玻璃控件**（圆形钮 / 胶囊），它们之间是纯页面底色，看不到任何“条”；
 2. 大标题是**纯文字浮在内容上**，内容滑到标题后面时被**平滑压淡**——`linearGradient` 用 4 档压色（`nav_bg` 77% → `nav_bg_mid` 55% → `nav_bg_weak` 20% → `bg_page_fade` 0%）做缓出，衰减一直延伸到标题下方 28vp（`TITLE_FADE_EXTRA`）。**不要**做成「上不透明 → 下全透明」（内容被抹掉），也**不要**做成均匀一块压色（看着像一条带子）；标题要停在渐隐区**顶部**（状态栏下方），不要压在渐隐区底边；
 3. 玻璃控件用 `uiMaterial.ImmersiveMaterial`（`ULTRA_THIN` + `interactive: true`），与底部页签同一套材质，且与滚动无关、常驻；
-4. 压色之外还要一点点**磨砂**，但**不能用 `backdropBlur`**：它的边界是硬的，标题栏下边缘会留下一条泾渭分明的横线（2026-11-06 实测，用户一眼看出来）。正解是给**内容容器**加 `linearGradientBlur(96, { fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18]], direction: GradientDirection.Bottom })`——模糊强度连续衰减到 0，天然没有边界。
+4. 压色之外还要一点点**磨砂**，但**不能用 `backdropBlur`**：它的边界是硬的，标题栏下边缘会留下一条泾渭分明的横线（2026-11-06 实测，用户一眼看出来）。正解是给**内容容器**加 `linearGradientBlur(96, { fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18], [0, 1]], direction: GradientDirection.Bottom })`——模糊强度连续衰减到 0，天然没有边界。
+   - **`fractionStops` 必须覆盖到位置 1**（2026-11-09 实测）：每一档是 `[模糊程度, 模糊位置]`，位置要严格递增，且**最后一档的位置必须是 1**。只写到 `[0, 0.18]` 时，0.18→1 这段的模糊遮罩没有定义，模拟器（Mate 80 / 7.0.0）会在整个内容区画出大片三角碎片；补上 `[0, 1]` 后立刻恢复干净。
 
 - 实现：`MainScreen.TitleBar` = `Stack` 里「一整块 `linearGradient` 渐隐层」+「底部 56vp 的一行：28fp 大标题 + 右侧两颗玻璃胶囊」，`.title({ builder, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })`。
 - **标题栏要延伸到状态栏**：`EntryAbility` 里 `setWindowLayoutFullScreen(true)`，`applyThemeSystemBars` 把 `statusBarColor` 设成透明；标题 builder 的渐隐层自然铺到最顶，标题文字靠 `Stack` 的底部对齐停在状态栏下方。
@@ -820,6 +839,9 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 ### 已核对官方结论
 
+- `linearGradientBlur(radius, options)` 的 `fractionStops` 是 `Array<[number, number]>`，每档含义是 **`[模糊程度, 模糊位置]`**，两个值范围都是 0–1；**模糊位置必须严格递增**，且数组至少 2 档，最后一档位置要写到 1，否则未覆盖区间的遮罩没有定义（模拟器上表现为三角碎片）。
+- 模拟器（Mate 80，HarmonyOS 7.0.0）的渲染服务在日志里会打 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false`：**GPU 不支持磨砂玻璃（沉浸光感）着色器**。单个悬浮页签的材质能看，但多选态这种「标题栏材质按钮 + 底部操作栏材质 + 页签材质」叠加、且持续重绘的场景，会退化成大片多边形色块。**这是模拟器能力限制，不是应用代码问题**：在改动前的基线上同样复现（2026-11-09 用 `git stash` 对照），关掉内容模糊、去掉操作栏材质、`barHeight` 0/56 都不改变。真机需单独确认。
+
 - USB 单次 `bulkTransfer` 小于 200KB：官方 `usbManager` 参考里没有写这个数值，属于本项目实测，改动缓冲区必须在真机验证。
 - `@SyncMonitor`：官方文档写明从 API 23 开始支持，`@Monitor` 从 API 12 开始支持。
 - `Repeat`：`LazyForEach` 的官方迁移写法是 `Repeat(data).virtualScroll()`，没有 `RepeatForEach` 这个组件。
@@ -858,6 +880,18 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 ## 已知问题与历史
 
 2026-10-14 审视代码时定位的问题，2026-11-05 已全部修复，当前无已知缺陷。
+
+### 2026-11-09（真机测试 ISSUES.md 整改）
+
+- **PTP 数组解析多出伪元素**：`parseU32Array` 没跳过 `NumberOfElements`，`StorageIDs count` 多 1、`ObjectHandles` 多 1，每次扫描产生 10×`0x2008` + 6×`0x2009`。新增 `parseCountedU32Array` 并按 count 截断（ISSUE-010）
+- **扫描失败无反馈**：`statusText` 只有在 `connected === false` 时才渲染 → 状态卡改为永远优先显示 `statusText`；传输层改用 `PtpError(code)` 抛出、服务层按 `0x200F/0x200E/0x2008` 映射文案；失败补 toast、`usable` 与 `connected` 分开、失败不再清空 `photos`、扫描加 800ms 节流（ISSUE-001~005）
+- **热扫描 39s 全花在重读元数据**：快速扫描改为复用 `metadata_cache.json`（按 handle 命中，抽样 8 个 `GetObjectInfo` 校验，7 天有效期），只对新增照片读取；`metadata_cache` 升 v2 带 `savedAt`，并缓存 EXIF 方向，缩略图阶段不再为每张读 16KB 头（ISSUE-007~009）
+- **缩略图两张写盘**：不再在解码后重新编码覆盖，磁盘只留原始 JPEG + manifest 变换参数，解码时再裁剪；manifest 升 v3（旧 NEF 缩略图带黑边无法补救）（ISSUE-012）
+- **NEF 缩略图带黑边**：原始尺寸优先用 PTP `imagePixWidth/Height`（NEF 的 EXIF 尺寸在 SubIFD，16KB 窗口读不到），EXIF 只在 PTP 给 0 时兜底
+- **日期显示英文**：`Intl.DateTimeFormat` 全部改为显式区域 —— 应用内语言优先，跟随系统时取 `i18n.System.getSystemLocaleInstance()`（ISSUE-011）
+- **预览器放大后拖动飞快**：去掉 `offsetX * zoom.scale`；**捏合卡顿**：手势期间持续保持预加载暂停（以前 300ms 冷却后无条件恢复）；**切图卡顿**：USB 忙时被丢弃的全尺寸请求改为记下并在当前下载结束后补投；**缩略图条不跟手**：删掉自算惯性与 5s 动画，交还 Swiper 自身 fling，只在落位期间暂停加载（ISSUE-014/015）
+- **返回转场掉帧**：共享照片层不再逐帧改 `Image.width/height`，改为固定布局尺寸 + 外层裁剪框 + 内层等比 `scale`（数学上与原 Cover 等价）；新增 `ViewerPerf transition push/pop frames/fps/lateFrames/gapMax` 帧采样（ISSUE-016）
+- **新增拖拽多选**（REQ-001）：多选态按住滑动连续选中/取消，起手格决定整笔方向，已下载跳过，边缘自动滚动；Tabs 设 `.scrollable(false)` 取消左右滑动切页
 
 ### 2026-11-08
 
