@@ -81,6 +81,18 @@ class PinchPerf {
     if (workMs > this.workMaxMs) { this.workMaxMs = workMs; }
   }
 
+  /** 结束采样并返回帧摘要；不要求有 update() 调用（转场用）。 */
+  endFramesOnly(): string {
+    if (this.sync !== null) {
+      try { this.sync.stop(); } catch (_e) { /* ignore */ }
+    }
+    if (this.frames === 0) { return ''; }
+    const ms = Math.max(1, Date.now() - this.startMs);
+    const fps = this.frames * 1000 / ms;
+    return `frames=${this.frames}, fps=${fps.toFixed(0)}, ` +
+      `lateFrames=${this.lateFrames}, gapMax=${this.maxFrameGapMs.toFixed(0)}ms`;
+  }
+
   /** 结束一次捏合，返回一行摘要；没收到捏合事件时返回空串。 */
   end(): string {
     if (this.sync !== null) {
@@ -419,10 +431,12 @@ struct ZoomableImage {
     // Subtract offset that accumulated during pinch; only apply NEW finger movement.
     const effectiveOffX = e.offsetX - this.accumPanOffX;
     const effectiveOffY = e.offsetY - this.accumPanOffY;
-    // Compensate for the scaled local coordinate system:
-    // .scale() shrinks the component's local coordinate space, so GestureEvent.offsetX
-    // reports a smaller value. Multiply by scale to restore the screen-space delta.
-    this.applyTransform(1, effectiveOffX * this.zoom.scale, effectiveOffY * this.zoom.scale);
+    // GestureEvent.offsetX/offsetY 是「相对手指按下位置」的屏幕空间位移（vp），
+    // 不会被 .scale() 缩小。`applyTransform` / `clampAndCheckEdge` 里的
+    // zoom.x/zoom.y 同样是屏幕空间（捏合路径用 pinchCenterX 直接算），
+    // 所以这里**不能再乘 scale**：以前乘上去导致 5 倍缩放时手指划 100vp、
+    // 照片走 500vp（ISSUE-015-B）。
+    this.applyTransform(1, effectiveOffX, effectiveOffY);
   }
 
   private onPanEnd(_e: GestureEvent): void {
@@ -545,11 +559,6 @@ struct MainImageView {
     return this.state !== null && this.state.fullPm !== null;
   }
 
-  private scanText(): ResourceStr {
-    if (this.svc.scanTotal <= 0) { return ''; }
-    return $r('app.string.viewer_updating', this.svc.scanProgress, this.svc.scanTotal);
-  }
-
   build() {
     Stack() {
       if (this.photo !== null && this.state !== null) {
@@ -595,17 +604,27 @@ struct MainImageView {
         .hitTestBehavior(HitTestMode.None)
       }
 
-      // Scanning banner — shown when scanning and no full-res loaded yet
+      // 扫描期间只给缩略图、不下载原图（USB 要留给缩略图传输）。这里明确告知用户，
+      // 否则「一直不出原图」会被当成卡死或加载失败。
       if (this.svc.scanning && !this.hasFullRes() && this.svc.scanTotal > 0) {
-        Text(this.scanText())
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.viewer_text_on_dark_80'))
-          .textAlign(TextAlign.Center)
-          .width('100%')
-          .padding({ top: 4, bottom: 4 })
-          .backgroundColor($r('app.color.viewer_banner_bg'))
-          .position({ bottom: 0 })
-          .hitTestBehavior(HitTestMode.None)
+        Column({ space: 2 }) {
+          Text($r('app.string.viewer_scanning_thumb_only',
+            this.svc.scanProgress, this.svc.scanTotal))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.viewer_text_on_dark_80'))
+            .textAlign(TextAlign.Center)
+            .width('100%')
+          Text($r('app.string.viewer_scanning_thumb_note'))
+            .fontSize(FontSize.Micro)
+            .fontColor($r('app.color.viewer_text_on_dark_70'))
+            .textAlign(TextAlign.Center)
+            .width('100%')
+        }
+        .width('100%')
+        .padding({ top: 6, bottom: 6, left: 16, right: 16 })
+        .backgroundColor($r('app.color.viewer_banner_bg'))
+        .position({ bottom: 0 })
+        .hitTestBehavior(HitTestMode.None)
       }
     }
     .width('100%').height('100%')
@@ -619,9 +638,8 @@ const MIN_S = 1.0;
 const ITEM_SPACE = 2;
 const CENTER_OFFSET = 14;
 const SNAP_DURATION = 150;
-const INERTIA_THRESHOLD = 3000;
-const INERTIA_FACTOR = 150;
-const INERTIA_DURATION = 5000;
+/** 缩略图条落位动画的安全超时：万一没收到 onAnimationEnd，也要恢复全量图加载。 */
+const THUMB_SETTLE_GUARD_MS = 1600;
 
 // Preload queue item
 interface PreloadTask {
@@ -740,6 +758,14 @@ export struct PhotoViewerScreen {
   private popScrollSettled: number = 0;
   /** 主图区域不透明度：转场期间由共享层代替，结束时一次性给回。 */
   @Local photoAlpha: number = 0;
+  /**
+   * 转场期间不发起原图下载与解码。
+   *
+   * USB 是串行管道，6MP 的下载 + 解码会和共享层动画抢主线程：真机实测转场
+   * 帧率只有 33–48fps、gapMax 89ms，观感就是「几乎没有动画 + 一顿」。
+   * 新页面默认是转场中，落地后再放行（另有兜底定时器，回调没来也不会一直卡着）。
+   */
+  private transitionActive: boolean = true;
   /** 标题栏 / 缩略图条不透明度：照片到位后才淡入。 */
   @Local chromeAlpha: number = 0;
   private chromeTimerId: number = -1;
@@ -755,7 +781,8 @@ export struct PhotoViewerScreen {
    * 的属性做插值——新节点会直接以终值出现（实测 `appear` 里就是终点矩形），
    * 整个一镜到底会变成硬切。帧回调逐帧写状态则与节点生命周期无关。
    */
-  private morphSync: displaySync.DisplaySync | null = null;
+  /** 矩形动画的兜底定时器（onFinish 没来时的保险）。 */
+  private morphTimerId: number = -1;
   private morphFrom: MorphRect = new MorphRect();
   private morphTo: MorphRect = new MorphRect();
   private morphCurve: ICurve = MORPH_CURVE;
@@ -815,6 +842,12 @@ export struct PhotoViewerScreen {
   private preloadQueue: PreloadTask[] = [];
   private preloadActive: boolean = false;
   private loadingPaused: boolean = false;
+  /** 当前进行中的手势数（捏合与拖动可以并行，所以用计数而不是布尔）。 */
+  private gestureDepth: number = 0;
+  /** USB 正忙时被挡下的全尺寸加载请求，等当前下载结束时补投。 */
+  private pendingFullResHandle: number = -1;
+  /** 缩略图条落位动画的安全超时句柄。 */
+  private thumbSettleGuardId: number = -1;
   private pauseTimerId: number = -1;
   private readonly RESUME_COOLDOWN_MS: number = 300;
   private lastInteractionTs: number = 0;
@@ -857,6 +890,8 @@ export struct PhotoViewerScreen {
     this.cancelChromeTimer();
     this.stopRectAnimation();
     this.cancelPopRetry();
+    this.endThumbSettle();
+    this.pendingFullResHandle = -1;
     if (this.spinnerTimerId >= 0) {
       clearTimeout(this.spinnerTimerId);
       this.spinnerTimerId = -1;
@@ -1094,7 +1129,6 @@ export struct PhotoViewerScreen {
       this._isDragging = false;
     }
     this._fromMain = false;
-    this._inertiaAnim = false;
     this.setChromeMotion(false);
     this.mainIdx = index;
     this.thumbIdx = index;
@@ -1111,7 +1145,7 @@ export struct PhotoViewerScreen {
     this.curZoomScale = 1;
     this.curZoomX = 0;
     this.curZoomY = 0;
-    if (this._fromMain && !this._inertiaAnim) {
+    if (this._fromMain) {
       this._fromMain = false;
       if (this._isDragging) {
         this.thumbCtrl.stopFakeDrag();
@@ -1131,7 +1165,9 @@ export struct PhotoViewerScreen {
   // ========== Thumb -> Main ==========
 
   private onThumbGestureSwipe(index: number, extraInfo: SwiperAnimationEvent): void {
-    if (this._fromMain || this._inertiaAnim) return;
+    // 拖动过程中必须持续更新中心高亮。以前 `_inertiaAnim` 在手指还没抬起时
+    // 就被置位，主图与高亮一起停住，用户会觉得“不跟手”（ISSUE-014-C）。
+    if (this._fromMain) return;
     const centerReal = index - extraInfo.currentOffset / (this._thumbItemW + ITEM_SPACE);
     const clamped = Math.max(0, Math.min(Math.round(centerReal), this._realTotal - 1));
     if (clamped !== this.mainIdx) { this.mainIdx = clamped; }
@@ -1140,23 +1176,46 @@ export struct PhotoViewerScreen {
   }
 
   private onThumbAnimationStart(_index: number, targetIndex: number): void {
-    if (this._fromMain || this._inertiaAnim) return;
+    if (this._fromMain) return;
     const realTarget = Math.max(0, Math.min(targetIndex, this._realTotal - 1));
     this.mainCtrl.changeIndex(realTarget, true);
+    // 缩略图条开始落位/惯性动画：只暂停全量图加载，不接管它的动画。
+    this.beginThumbSettle();
+  }
+
+  /** 缩略图条进入落位动画：暂停全量图加载，动画结束后再补。 */
+  private beginThumbSettle(): void {
+    this._inertiaAnim = true;
+    if (this.thumbSettleGuardId >= 0) { clearTimeout(this.thumbSettleGuardId); }
+    this.thumbSettleGuardId = setTimeout(() => {
+      this.thumbSettleGuardId = -1;
+      this.endThumbSettle();
+    }, THUMB_SETTLE_GUARD_MS);
+  }
+
+  private endThumbSettle(): void {
+    this._inertiaAnim = false;
+    if (this.thumbSettleGuardId >= 0) {
+      clearTimeout(this.thumbSettleGuardId);
+      this.thumbSettleGuardId = -1;
+    }
   }
 
   private onThumbAnimationEnd(index: number): void {
-    if (this._fromMain || this._inertiaAnim) return;
+    this.endThumbSettle();
+    if (this._fromMain) return;
     const realIdx = Math.max(0, Math.min(index, this._realTotal - 1));
     this.mainIdx = realIdx;
     this.thumbIdx = index;
     this.updateScales(realIdx);
     this.setChromeMotion(false);
+    // 动画结束后补投当前页的全尺寸加载（动画期间是被暂停的）
+    this.scheduleFullResLoad();
   }
 
   private onThumbChange(idx: number): void {
     this.thumbIdx = idx;
-    if (this._fromMain || this._inertiaAnim) return;
+    if (this._fromMain) return;
     const centerIdx = idx + this._half;
     if (this.isPlaceholder(centerIdx)) return;
     const realIdx = Math.max(0, Math.min(this.toReal(centerIdx), this._realTotal - 1));
@@ -1228,9 +1287,22 @@ export struct PhotoViewerScreen {
   private async loadFullRes(handle: number): Promise<void> {
     // Scanning guard: no full-res loading until scan completes
     if (this.svc.scanning) return;
+    // 转场进行中：先记下来，等共享层落地后再下载（见 transitionActive 注释）
+    if (this.transitionActive) {
+      this.pendingFullResHandle = handle;
+      return;
+    }
 
-    // Guard: already loaded or another load in progress
-    if (this.fullResMap.has(handle) || this.loadingHandle >= 0) return;
+    // 已经加载过 / 就是当前正在加载的那张
+    if (this.fullResMap.has(handle)) return;
+    if (this.loadingHandle === handle) return;
+    if (this.loadingHandle >= 0) {
+      // 另一张正在下载：USB 是串行管道、不可取消（PtpHost 的 getObject 会等
+      // usbBusy），所以先把「用户真正想看的这张」记下来，等当前下载结束后补投。
+      // 以前这里直接 return，请求被静默丢弃，用户停在大号缩略图上（ISSUE-014-A）。
+      this.pendingFullResHandle = handle;
+      return;
+    }
 
     this.loadingHandle = handle;
     const startState = this.stateFor(handle);
@@ -1269,6 +1341,21 @@ export struct PhotoViewerScreen {
         const st = this.stateFor(handle);
         st.loading = false;
         st.spinnerOn = false;
+        // 补投被丢弃的请求：优先当前页，其次刚才排队的那张。
+        const remembered = this.pendingFullResHandle;
+        this.pendingFullResHandle = -1;
+        const cur = this.currentHandle();
+        let next = -1;
+        if (cur >= 0 && cur !== handle && !this.fullResMap.has(cur)) {
+          next = cur;
+        } else if (remembered >= 0 && remembered !== handle &&
+                   !this.fullResMap.has(remembered) && this.isInPreloadWindow(remembered)) {
+          next = remembered;
+        }
+        if (next >= 0) {
+          setTimeout(() => { this.loadFullRes(next); }, 0);
+          return;
+        }
         // If queue was waiting for current load to finish, resume now
         if (!this.loadingPaused && this.preloadQueue.length > 0 && !this.preloadActive) {
           setTimeout(() => { this.processPreloadQueue(); }, 50);
@@ -1430,6 +1517,13 @@ export struct PhotoViewerScreen {
     }
     this.pauseTimerId = setTimeout(() => {
       this.pauseTimerId = -1;
+      // 捏合/拖动常常超过 300ms；只要手势还在进行就继续保持暂停。
+      // 以前这里无条件恢复，于是「捏合到第 0.3 秒」后台预加载又开始了，
+      // 每 1–2 秒读 7MB + 解一张 6MP，和捏合渲染抢带宽（ISSUE-015-A）。
+      if (this.gestureDepth > 0) {
+        this.scheduleResumePreloading();
+        return;
+      }
       this.loadingPaused = false;
       // Resume preloading if queue has items
       if (this.preloadQueue.length > 0 && !this.preloadActive) {
@@ -1548,6 +1642,11 @@ export struct PhotoViewerScreen {
 
   // ========== 一镜到底转场 ==========
 
+  // ---- 转场帧采样 ----
+  /** 转场期间与捏合同一套 displaySync 采样，用来量化“掉帧”而不是只凭观感。 */
+  private morphPerf: PinchPerf = new PinchPerf();
+  private morphPerfLabel: string = '';
+
   // ---- 矩形插值（帧回调驱动）----
 
   private static lerp(a: number, b: number, p: number): number {
@@ -1555,72 +1654,58 @@ export struct PhotoViewerScreen {
   }
 
   private stopRectAnimation(): void {
-    if (this.morphSync !== null) {
-      try {
-        this.morphSync.off('frame');
-        this.morphSync.stop();
-      } catch (_e) { /* ignore */ }
-      this.morphSync = null;
+    if (this.morphPerfLabel !== '') {
+      const summary = this.morphPerf.endFramesOnly();
+      if (summary !== '') {
+        hilog.info(DOMAIN, 'ViewerPerf', 'transition %{public}s %{public}s',
+          this.morphPerfLabel, summary);
+      }
+      this.morphPerfLabel = '';
     }
-    this.morphStartMs = -1;
+    if (this.morphTimerId >= 0) {
+      clearTimeout(this.morphTimerId);
+      this.morphTimerId = -1;
+    }
     this.morphDone = null;
   }
 
-  private onMorphFrame(info: displaySync.IntervalInfo): void {
-    const nowMs = info.timestamp / 1000000;
-    if (this.morphStartMs < 0) {
-      // 第一帧只作为计时起点，画面保持起始矩形，避免起步就跳一格
-      this.morphStartMs = nowMs;
-      return;
-    }
-    const raw = this.morphDurationMs > 0 ? (nowMs - this.morphStartMs) / this.morphDurationMs : 1;
-    const t = Math.max(0, Math.min(1, raw));
-    const p = this.morphCurve.interpolate(t);
-    this.morph.left = PhotoViewerScreen.lerp(this.morphFrom.left, this.morphTo.left, p);
-    this.morph.top = PhotoViewerScreen.lerp(this.morphFrom.top, this.morphTo.top, p);
-    this.morph.width = PhotoViewerScreen.lerp(this.morphFrom.width, this.morphTo.width, p);
-    this.morph.height = PhotoViewerScreen.lerp(this.morphFrom.height, this.morphTo.height, p);
-    if (t >= 1) {
+  /**
+   * 从 `from` 插值到 `to`，结束后回调。
+   *
+   * 2026-11-09 真机：以前用 `displaySync` 每帧回调里改 4 个 @Trace 字段，
+   * 等于每帧跑一次 JS build + 属性 diff，push 只有 47fps、pop 掉到 21fps
+   * （`gapMax=134ms`）。现在把整段矩形变化交给 `animateTo` 的原生属性动画：
+   * 插值在框架内部完成，不再逐帧回调 JS；`onFinish` 里再交接共享层。
+   */
+  private startRectAnimation(from: MorphRect, to: MorphRect, duration: number,
+    curve: ICurve, onDone: () => void, label: string): void {
+    this.stopRectAnimation();
+    this.morphPerfLabel = label;
+    this.morphPerf.begin();
+    this.morph.apply(from);
+    this.morphDone = onDone;
+    const startedAt = Date.now();
+    const ui = this.getUIContext();
+    ui.animateTo({
+      duration: duration,
+      curve: curve,
+      onFinish: () => {
+        hilog.info(DOMAIN, 'ViewerPerf', 'transition %{public}s native %{public}dms',
+          label, Date.now() - startedAt);
+        const done = this.morphDone;
+        this.stopRectAnimation();
+        if (done !== null) { done(); }
+      }
+    }, () => {
+      this.morph.apply(to);
+    });
+    // 兜底：onFinish 没来（例如转场被打断）也不能让共享层一直挂着
+    this.morphTimerId = setTimeout(() => {
+      this.morphTimerId = -1;
       const done = this.morphDone;
       this.stopRectAnimation();
       if (done !== null) { done(); }
-    }
-  }
-
-  /**
-   * 从 `from` 插值到 `to`，结束后回调。取不到帧回调时直接落到终点，保证不卡住。
-   */
-  private startRectAnimation(from: MorphRect, to: MorphRect, duration: number,
-    curve: ICurve, onDone: () => void): void {
-    this.stopRectAnimation();
-    this.morphFrom = from;
-    this.morphTo = to;
-    this.morphCurve = curve;
-    this.morphDurationMs = duration;
-    this.morphDone = onDone;
-    this.morph.apply(from);
-    let sync: displaySync.DisplaySync | null = null;
-    try {
-      sync = displaySync.create();
-      sync.setExpectedFrameRateRange({ expected: 60, min: 30, max: 60 });
-      sync.on('frame', (info: displaySync.IntervalInfo) => { this.onMorphFrame(info); });
-    } catch (_e) {
-      sync = null;
-    }
-    if (sync === null) {
-      this.morph.apply(to);
-      this.stopRectAnimation();
-      onDone();
-      return;
-    }
-    this.morphSync = sync;
-    try {
-      sync.start();
-    } catch (_e) {
-      this.morph.apply(to);
-      this.stopRectAnimation();
-      onDone();
-    }
+    }, duration + 200);
   }
 
   /** 转场矩形的一行日志文本（只用于排查，保持简短）。 */
@@ -1629,6 +1714,25 @@ export struct PhotoViewerScreen {
       return 'none';
     }
     return `${r.left.toFixed(1)},${r.top.toFixed(1)} ${r.width.toFixed(1)}x${r.height.toFixed(1)}`;
+  }
+
+  /**
+   * 换共享层的位图，并把它的原始尺寸交给 PhotoMorphState。
+   *
+   * 位图原始尺寸是内层 `Image` 的固定布局尺寸；比例必须与位图一致，
+   * 否则每帧的等比换算会多裁一块（见 PhotoMorph 头注释的推导）。
+   */
+  private setMorphBitmap(pm: image.PixelMap): void {
+    this.morphPm = pm;
+  }
+
+  /** 转场结束（或兜底超时）后放行原图加载。 */
+  private finishTransitionGate(): void {
+    if (!this.transitionActive) {
+      return;
+    }
+    this.transitionActive = false;
+    this.scheduleFullResLoad();
   }
 
   private currentMorphRect(): MorphRect {
@@ -1695,6 +1799,7 @@ export struct PhotoViewerScreen {
       this.photoAlpha = 1;
       this.chromeAlpha = 1;
       if (proxy) { proxy.finishTransition(); }
+      this.finishTransitionGate();
       return;
     }
     const ui = this.getUIContext();
@@ -1704,7 +1809,8 @@ export struct PhotoViewerScreen {
       this.morph.visible = false;
       this.photoAlpha = 1;
       if (proxy) { proxy.finishTransition(); }
-    });
+      this.finishTransitionGate();
+    }, 'push');
     ui.animateTo({ duration: BACKDROP_IN_MS, curve: Curve.EaseOut }, () => {
       this.morph.backdrop = 1;
     });
@@ -1845,7 +1951,7 @@ export struct PhotoViewerScreen {
     this.startRectAnimation(this.currentMorphRect(), target, POP_MS, MORPH_CURVE, () => {
       this.morph.visible = false;
       if (proxy) { proxy.finishTransition(); }
-    });
+    }, 'pop');
   }
 
   /**
@@ -1869,7 +1975,7 @@ export struct PhotoViewerScreen {
       ' rect=' + this.morphRectText(displayRect) + ' -> ' +
       (this.popTargetRect !== null ? this.morphRectText(this.popTargetRect) : 'pending'));
     if (pm !== null) {
-      this.morphPm = pm;
+      this.setMorphBitmap(pm);
       this.morph.apply(displayRect);
       this.morph.visible = true;
       this.photoAlpha = 0;
@@ -1915,10 +2021,12 @@ export struct PhotoViewerScreen {
       svc: this.svc,
       onZoomChange: (zoomed: boolean) => { this.isZoomed = zoomed; },
       onGestureStart: () => {
+        this.gestureDepth++;
         this.pausePreloading();
         this.setChromeMotion(true);
       },
       onGestureEnd: () => {
+        if (this.gestureDepth > 0) { this.gestureDepth--; }
         this.scheduleResumePreloading();
         this.setChromeMotion(this._isDragging || this._inertiaAnim || this.pinchActive);
       },
@@ -1997,8 +2105,8 @@ export struct PhotoViewerScreen {
             .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
             .onChange((i: number) => { this.onMainChange(i); })
             .cachedCount(6).loop(false).indicator(false)
-            .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
-            .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
+            .curve(Curve.Linear)
+            .duration(SNAP_DURATION)
             .width('100%').height('100%')
             // 转场期间由共享照片层代表这张照片，落地后一次性交还
             .opacity(this.photoAlpha)
@@ -2021,8 +2129,8 @@ export struct PhotoViewerScreen {
                 .indicator(false).itemSpace(ITEM_SPACE)
                 .width('100%').height(this._thumbItemW).clip(false)
                 .disableSwipe(false).loop(false)
-                .curve(this._inertiaAnim ? Curve.Friction : Curve.Linear)
-                .duration(this._inertiaAnim ? INERTIA_DURATION : SNAP_DURATION)
+                .curve(Curve.Linear)
+                .duration(SNAP_DURATION)
                 .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onThumbGestureSwipe(i, e); })
                 .onAnimationStart((i: number, t: number) => { this.onThumbAnimationStart(i, t); })
                 .onAnimationEnd((i: number) => { this.onThumbAnimationEnd(i); })
@@ -2033,37 +2141,6 @@ export struct PhotoViewerScreen {
                     this._thumbItemW = (sw - (this._displayCount - 1) * ITEM_SPACE) / this._displayCount;
                   }
                 })
-                .parallelGesture(
-                  PanGesture()
-                    .onActionUpdate((e: GestureEvent) => {
-                      const vx = e.velocityX || 0;
-                      if (Math.abs(vx) >= INERTIA_THRESHOLD && !this._inertiaAnim) {
-                        this._inertiaAnim = true;
-                      }
-                    })
-                    .onActionEnd((e: GestureEvent) => {
-                      const vx = e.velocityX || 0;
-                      if (Math.abs(vx) < INERTIA_THRESHOLD) {
-                        this._inertiaAnim = false;
-                        return;
-                      }
-                      const jump = Math.max(1, Math.round(Math.abs(vx) / INERTIA_FACTOR));
-                      const step = vx > 0 ? -jump : jump;
-                      const target = Math.max(0, Math.min(this.mainIdx + step, this._realTotal - 1));
-                      if (target !== this.mainIdx) {
-                        const dt = this._displayTotal;
-                        for (let i = 0; i < dt; i++) {
-                          this.scaleArr[i] = this.isPlaceholder(i) ? 0 : MIN_S;
-                          this.offsetArr[i] = 0;
-                        }
-                        this._fromMain = true;
-                        this.thumbCtrl.changeIndex(target, true);
-                        this.mainCtrl.changeIndex(target, true);
-                      } else {
-                        this._inertiaAnim = false;
-                      }
-                    })
-                )
               }
               .width('100%')
               // Reserved area for the gesture bar is already excluded from
@@ -2134,7 +2211,7 @@ export struct PhotoViewerScreen {
       const startRect: MorphRect = MorphGeometry.fromPx(this.cardItemInfo);
       const startPm = this.svc.thumbnailPixelMapMap.get(handle);
       if (startPm !== undefined && MorphGeometry.isValid(startRect)) {
-        this.morphPm = startPm;
+        this.setMorphBitmap(startPm);
         this.morph.apply(startRect);
         this.morph.visible = true;
         this.photoAlpha = 0;
@@ -2147,6 +2224,8 @@ export struct PhotoViewerScreen {
       }
       this.svc.getLog().add('push morph ' + this.morphRectText(startRect) + ' pm=' +
         (startPm !== undefined));
+      // 兜底放行：转场回调没来（比如被系统直接跳过）时，不能让原图一直不加载
+      setTimeout(() => { this.finishTransitionGate(); }, 900);
 
       // Register custom transition animation callback
       CustomTransition.getInstance().registerNavParam(this.pageId,

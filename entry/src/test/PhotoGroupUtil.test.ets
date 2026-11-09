@@ -80,5 +80,51 @@ export default function photoGroupUtilTest() {
       const contentFirst: DisplayGroup[] = buildDisplayGroups(photos, 'content_first');
       expect(contentFirst.length).assertEqual(1);
     });
+
+    it('文件优先：同一秒的 JPG 与 NEF 必须成对相邻，JPG 在前', 0, () => {
+      // 模拟相机：JPEG 与 NEF 的 handle 分段分配（JPG 高段、NEF 低段），
+      // 两连拍照片的 EXIF 时间戳落在同一秒，只能靠 handle 兜底。
+      const photos: PhotoEntry[] = [
+        photo(7002, 'DSC_0002.JPG', '20260101T100005'),
+        photo(1002, 'DSC_0002.NEF', '20260101T100005'),
+        photo(7001, 'DSC_0001.JPG', '20260101T100004'),
+        photo(1001, 'DSC_0001.NEF', '20260101T100004')
+      ];
+      const groups: DisplayGroup[] = buildDisplayGroups(photos, 'file_first');
+      expect(groups.length).assertEqual(4);
+      expect(groups[0].displayPhoto.filename).assertEqual('DSC_0002.JPG');
+      expect(groups[1].displayPhoto.filename).assertEqual('DSC_0002.NEF');
+      expect(groups[2].displayPhoto.filename).assertEqual('DSC_0001.JPG');
+      expect(groups[3].displayPhoto.filename).assertEqual('DSC_0001.NEF');
+      // 文件优先里每个格子只有一个文件
+      expect(groups[0].alternates.length).assertEqual(0);
+      expect(groups[0].allPhotos.length).assertEqual(1);
+      expect(groups[0].basename).assertEqual('DSC_0002');
+    });
+
+    it('文件优先：两文件时间相差 1 秒也成对相邻', 0, () => {
+      const photos: PhotoEntry[] = [
+        photo(11, 'DSC_0010.NEF', '20260101T100010'),
+        photo(12, 'DSC_0010.JPG', '20260101T100009'),
+        photo(13, 'DSC_0011.JPG', '20260101T100008')
+      ];
+      const groups: DisplayGroup[] = buildDisplayGroups(photos, 'file_first');
+      expect(groups.length).assertEqual(3);
+      expect(groups[0].displayPhoto.filename).assertEqual('DSC_0010.JPG');
+      expect(groups[1].displayPhoto.filename).assertEqual('DSC_0010.NEF');
+      expect(groups[2].displayPhoto.filename).assertEqual('DSC_0011.JPG');
+    });
+
+    it('文件优先：不同照片之间仍按拍摄时间倒序', 0, () => {
+      const photos: PhotoEntry[] = [
+        photo(1, 'DSC_0001.JPG', '20260101T100004'),
+        photo(3, 'DSC_0003.JPG', '20260101T100006'),
+        photo(2, 'DSC_0002.NEF', '20260101T100005')
+      ];
+      const groups: DisplayGroup[] = buildDisplayGroups(photos, 'file_first');
+      expect(groups[0].displayPhoto.filename).assertEqual('DSC_0003.JPG');
+      expect(groups[1].displayPhoto.filename).assertEqual('DSC_0002.NEF');
+      expect(groups[2].displayPhoto.filename).assertEqual('DSC_0001.JPG');
+    });
   });
 }

@@ -93,6 +93,10 @@
       "value": "连接相机失败"
     },
     {
+      "name": "camera_status_session_conflict",
+      "value": "相机还挂着上一次的连接：请拔插 USB 线，或重启相机后重试"
+    },
+    {
       "name": "camera_status_choose_cache",
       "value": "请选择缓存设置..."
     },
@@ -114,7 +118,7 @@
     },
     {
       "name": "camera_status_no_storage",
-      "value": "已连接 (无存储设备)"
+      "value": "相机没有可用存储（请插入存储卡）"
     },
     {
       "name": "camera_status_walking_dirs",
@@ -227,6 +231,10 @@
     {
       "name": "camera_main_find",
       "value": "搜索相机"
+    },
+    {
+      "name": "gallery_scanning_title",
+      "value": "正在载入照片"
     },
     {
       "name": "gallery_scanning",
@@ -733,6 +741,14 @@
       "value": "更新中 %1$d/%2$d"
     },
     {
+      "name": "viewer_scanning_thumb_note",
+      "value": "扫描完成后会自动加载原图"
+    },
+    {
+      "name": "viewer_scanning_thumb_only",
+      "value": "扫描中，暂时只显示缩略图 %1$d/%2$d"
+    },
+    {
       "name": "viewer_decoding",
       "value": "正在解码缩略图…"
     },
@@ -815,6 +831,30 @@
     {
       "name": "error_location_current_failed",
       "value": "获取当前位置失败: %1$s"
+    },
+    {
+      "name": "camera_status_access_denied",
+      "value": "相机拒绝访问存储：请确认已插卡、相机已开机，且不在回放/菜单状态"
+    },
+    {
+      "name": "camera_status_store_readonly",
+      "value": "存储卡为只读：请检查卡上的写保护开关"
+    },
+    {
+      "name": "camera_status_invalid_storage",
+      "value": "相机返回了无效的存储标识"
+    },
+    {
+      "name": "camera_status_session_lost",
+      "value": "相机会话已断开：请重新搜索相机"
+    },
+    {
+      "name": "camera_status_usb_error",
+      "value": "USB 通信失败：请检查连接线或重新插拔"
+    },
+    {
+      "name": "camera_status_ptp_error",
+      "value": "相机返回错误 %1$s"
     }
   ]
 }

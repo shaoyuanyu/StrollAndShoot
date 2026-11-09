@@ -7,11 +7,26 @@ import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import { formatDateParts } from '../utils/DateTimeText';
 
+/** 扫描浮卡占用的高度（vp）：列表用 contentStartOffset 让开这么多。 */
+const SCAN_CARD_INSET = 64;
+
 class FlatItem {
   kind: 'header' | 'row' | 'tail' = 'tail';
   /** 日期分组键（YYYYMMDD，无拍摄日期为 ''）。标题文案由它换算，见 dateHeaderLabel()。 */
   dateKey: string = '';
-  rowPhotos: (DisplayGroup | null)[] = [];
+  /**
+   * 该行的真实照片，**不放 null 占位**。
+   *
+   * 以前末行不满时补 null，`PhotoCell` 里就得到处写 `cellRi.item!`；扫描期间列表会被
+   * 重新分块、元素被复用，判空之后的那次读取可能拿到 null，直接把进程打崩
+   * （真机 jscrash：Cannot read property displayPhoto of null）。空白格改由
+   * `padIndexes` 单独渲染，行数据里永远只有真照片。
+   */
+  rowPhotos: DisplayGroup[] = [];
+  /** 该行的总列数（照片 + 右侧空白格）。 */
+  cols: number = 0;
+  /** 右侧空白格的下标，只用于补齐末行。 */
+  padIndexes: number[] = [];
 
   static tail(): FlatItem {
     const item = new FlatItem();
@@ -26,10 +41,16 @@ class FlatItem {
     return item;
   }
 
-  static row(photos: (DisplayGroup | null)[]): FlatItem {
+  static row(photos: DisplayGroup[], cols: number): FlatItem {
     const item = new FlatItem();
     item.kind = 'row';
     item.rowPhotos = photos;
+    item.cols = cols > 0 ? cols : photos.length;
+    const pads: number[] = [];
+    for (let i = photos.length; i < item.cols; i++) {
+      pads.push(i);
+    }
+    item.padIndexes = pads;
     return item;
   }
 }
@@ -76,6 +97,24 @@ export struct GalleryPage {
   /** 预览器返回转场要求把列表滚到某张照片（计数 + handle 的既有约定）。 */
   @Param galleryScrollVersion: number = 0;
   @Param galleryScrollHandle: number = -1;
+  // ---- 拖拽多选（REQ-001）----
+  /** DOWN 时决定整笔的方向：起手格未选 → 整笔选中；已选 → 整笔取消。 */
+  private dragIntent: boolean = false;
+  /** 是否正处于一笔拖选里（手指按下且落在可选格子上）。 */
+  private dragActive: boolean = false;
+  /** 起手格 handle（第一笔 MOVE 时也要补选它）。 */
+  private dragStartHandle: number = -1;
+  private dragStartX: number = 0;
+  private dragStartY: number = 0;
+  private dragLastX: number = 0;
+  private dragLastY: number = 0;
+  /** 本笔已经真正改动过选择集；用于抑制抬手时单元格自己的 TapGesture。 */
+  private dragApplied: boolean = false;
+  /** 上一次拖选改动过选择集 → 抬手后的 Tap 不要再去反选。 */
+  private suppressNextTap: boolean = false;
+  private dragScrollTimerId: number = -1;
+  /** List 的可视高度（vp），边缘自动滚动需要它。 */
+  private listHeightVp: number = 0;
   private pinchBaseScale: number = 1.0;
   /** 一次捏合里的事件数 / 换列次数，捏合结束后打一行日志用于核性能。 */
   private pinchUpdateCount: number = 0;
@@ -114,7 +153,7 @@ export struct GalleryPage {
       const it = items[i];
       if (it.kind !== 'row') continue;
       for (const g of it.rowPhotos) {
-        if (g !== null && g.displayPhoto.handle === handle) {
+        if (g.displayPhoto.handle === handle) {
           // CENTER：让目标行落在舒适区，不要贴着底部悬浮页签
           this.scroller.scrollToIndex(i, false, ScrollAlign.CENTER);
           this.svc.getLog().add(`viewer pop: scrollToIndex ${i} handle=${handle}`);
@@ -136,6 +175,7 @@ export struct GalleryPage {
     const handles: number[] = [];
     this.selectedHandles.forEach((key: number) => { handles.push(key); });
     this.onDownloadSelected(handles);
+    this.stopDragSelect();
     this.selectMode = false;
     this.onSelectModeChange(false);
     this.selectedHandles.clear();
@@ -145,6 +185,7 @@ export struct GalleryPage {
   @Monitor('exitSelectModeVersion')
   onExitSelectModeRequest(): void {
     if (this.selectMode) {
+      this.stopDragSelect();
       this.selectMode = false;
       this.selectedHandles.clear();
       this.onSelectModeChange(false);
@@ -264,12 +305,9 @@ export struct GalleryPage {
         this._cacheMode === this.displayMode) {
       return this._allGroupsCache;
     }
+    // 顺序（含文件优先模式下的 JPG/NEF 成对）由 buildDisplayGroups 统一负责，
+    // 这里**不要**再按 captureDate 排一次：那会把时间相差 1 秒的同名文件重新拆开。
     this._allGroupsCache = buildDisplayGroups(this.svc.photos, this.displayMode);
-    // Sort by captureDate DESC so getFilteredDisplayGroups() matches gallery visual order.
-    // This ensures handles/index are in visual order — eliminating extra sorting in Index.ets
-    // and keeping PhotoViewer's thumbnail strip consistent with gallery positions.
-    this._allGroupsCache.sort((a: DisplayGroup, b: DisplayGroup): number =>
-      (b.displayPhoto.captureDate ?? '').localeCompare(a.displayPhoto.captureDate ?? ''));
     this._cachePhotosVer = this.svc.photosVersion;
     this._cacheMode = this.displayMode;
     return this._allGroupsCache;
@@ -343,11 +381,7 @@ export struct GalleryPage {
       items.push(FlatItem.header(k));
       const photos = this._groupMap.get(k)!;
       for (let i = 0; i < photos.length; i += safeCols) {
-        const row: (DisplayGroup | null)[] = [];
-        for (let j = 0; j < safeCols; j++) {
-          row.push(i + j < photos.length ? photos[i + j] : null);
-        }
-        items.push(FlatItem.row(row));
+        items.push(FlatItem.row(photos.slice(i, i + safeCols), safeCols));
       }
     }
     items.push(FlatItem.tail());
@@ -452,8 +486,183 @@ export struct GalleryPage {
     return selected === total ? 2 : 1;
   }
 
+  // ---------------- 拖拽多选（REQ-001） ----------------
+
+  /**
+   * 屏幕坐标 → 单元格 handle。
+   *
+   * 用官方 `Scroller.getItemIndex(x, y)`（API 14）拿到行在 flat 列表里的下标，
+   * 再用 `getItemRect(index)` 拿这一行相对 List 的矩形，按列均分反推是第几格。
+   * 两条都是官方接口，比按 header 高度/行高累加推算稳得多（那种做法依赖字号缩放）。
+   * 坐标口径：`onTouch` 的 `TouchObject.x/y` 与 `getItemIndex` 都是「相对 List」。
+   */
+  private handleAt(x: number, y: number): number {
+    let itemIndex = -1;
+    try {
+      itemIndex = this.scroller.getItemIndex(x, y);
+    } catch (_e) {
+      return -1;
+    }
+    if (itemIndex < 0) return -1;
+    const items = this.buildFlatItems();
+    if (itemIndex >= items.length) return -1;
+    const item = items[itemIndex];
+    if (item.kind !== 'row') return -1;
+    const count = item.cols > 0 ? item.cols : item.rowPhotos.length;
+    if (count <= 0) return -1;
+    let rect: RectResult | null = null;
+    try {
+      rect = this.scroller.getItemRect(itemIndex);
+    } catch (_e) {
+      return -1;
+    }
+    if (rect === null || rect.width <= 0) return -1;
+    const gap = this.activeGap();
+    const cellW = (rect.width - (count - 1) * gap) / count;
+    if (cellW <= 0) return -1;
+    let col = Math.floor((x - rect.x) / (cellW + gap));
+    if (col < 0) col = 0;
+    if (col >= count) col = count - 1;
+    if (col >= item.rowPhotos.length) return -1;
+    return item.rowPhotos[col].displayPhoto.handle;
+  }
+
+  private isHandleDownloaded(handle: number): boolean {
+    const groups = this.getFilteredDisplayGroups();
+    for (const g of groups) {
+      if (g.displayPhoto.handle === handle) {
+        return this.isDownloaded(g.displayPhoto);
+      }
+    }
+    return false;
+  }
+
+  /** 按整笔方向把某个格子设成选中/未选；已下载的照片跳过。 */
+  private applyDragHandle(handle: number): void {
+    if (handle < 0) return;
+    if (this.isHandleDownloaded(handle)) return;
+    const has = this.selectedHandles.has(handle);
+    if (has === this.dragIntent) return;
+    if (this.dragIntent) {
+      this.selectedHandles.add(handle);
+    } else {
+      this.selectedHandles.delete(handle);
+    }
+    this.selectedHandles = new Set(this.selectedHandles);
+    this.syncSelectionStats();
+    this.dragApplied = true;
+    this.suppressNextTap = true;
+  }
+
+  private applyDragAt(x: number, y: number): void {
+    this.applyDragHandle(this.handleAt(x, y));
+  }
+
+  /** 手指贴住上下边缘时自动滚动；否则长列表里选不到屏幕外的照片。 */
+  private startDragScrollTimer(): void {
+    if (this.dragScrollTimerId >= 0) return;
+    this.dragScrollTimerId = setInterval(() => {
+      if (!this.dragActive) {
+        this.stopDragSelect();
+        return;
+      }
+      const h = this.listHeightVp;
+      if (h <= 0) return;
+      const edge = 72;
+      let step = 0;
+      if (this.dragLastY < edge) {
+        step = -Math.max(6, Math.min(24, (edge - this.dragLastY) / 3));
+      } else if (this.dragLastY > h - edge) {
+        step = Math.max(6, Math.min(24, (this.dragLastY - (h - edge)) / 3));
+      }
+      if (step === 0) return;
+      try {
+        this.scroller.scrollBy(0, step);
+      } catch (_e) {
+        return;
+      }
+      // 内容滚过手指后，压着的格子可能换了一张，继续按整笔方向处理
+      this.applyDragAt(this.dragLastX, this.dragLastY);
+    }, 50);
+  }
+
+  private stopDragSelect(): void {
+    this.dragActive = false;
+    this.dragStartHandle = -1;
+    if (this.dragScrollTimerId >= 0) {
+      clearInterval(this.dragScrollTimerId);
+      this.dragScrollTimerId = -1;
+    }
+  }
+
+  /**
+   * 网格上的原始触摸。这里刻意不用 PanGesture：
+   * 多选态下 List 的滚动交互已被关掉（`enableScrollInteraction(!selectMode)`），
+   * 原始触摸与单元格自己的 Tap/LongPress 不打架，抬手时由 `suppressNextTap`
+   * 抑制一次多余的 Tap。
+   */
+  private onGridTouch(event: TouchEvent): void {
+    if (!this.selectMode) {
+      this.stopDragSelect();
+      return;
+    }
+    const touches = event.touches;
+    if (event.type === TouchType.Down) {
+      this.suppressNextTap = false;
+      this.stopDragSelect();
+      if (touches.length !== 1) return;
+      const t = touches[0];
+      this.dragStartX = t.x;
+      this.dragStartY = t.y;
+      this.dragLastX = t.x;
+      this.dragLastY = t.y;
+      this.dragApplied = false;
+      const h = this.handleAt(t.x, t.y);
+      this.dragStartHandle = h;
+      if (h < 0 || this.isHandleDownloaded(h)) return;
+      // 起手格已选 → 整笔取消；未选 → 整笔选中
+      this.dragIntent = !this.selectedHandles.has(h);
+      this.dragActive = true;
+      this.startDragScrollTimer();
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      if (touches.length !== 1) {
+        this.stopDragSelect();
+        return;
+      }
+      const t = touches[0];
+      this.dragLastX = t.x;
+      this.dragLastY = t.y;
+      if (!this.dragActive) {
+        // 长按进入多选时长按那一笔还没结束：继续拖就直接按“选中”方向接着选
+        if (this.dragStartHandle < 0) return;
+        this.dragIntent = true;
+        this.dragActive = true;
+        this.startDragScrollTimer();
+      }
+      if (!this.dragApplied) {
+        // 第一笔 MOVE 补上起手格（手指可能一上来就跨过了起手格）
+        this.applyDragHandle(this.dragStartHandle);
+      }
+      this.applyDragAt(t.x, t.y);
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.stopDragSelect();
+    }
+  }
+
+  /**
+   * 渲染一个格子。
+   *
+   * 参数保持 `RepeatItem`：`@Builder` 的**值参数不会随列表复用刷新**（AGENTS.md 记过这个坑），
+   * 之前为了躲空指针改成传值，结果滚动复用后格子停在旧照片上。
+   * 现在 `rowPhotos` 里只有真实照片、没有 null 占位，`cellRi.item` 不会再变成 null，
+   * 原来那个 jscrash 也不会回来。
+   */
   @Builder
-  PhotoCell(cellRi: RepeatItem<DisplayGroup | null>) {
+  PhotoCell(cellRi: RepeatItem<DisplayGroup>) {
     if (cellRi.item !== null) {
       Stack() {
         ThumbImage({ handle: cellRi.item!.displayPhoto.handle })
@@ -504,6 +713,11 @@ export struct GalleryPage {
           TapGesture()
             .onAction(() => {
               if (this.selectMode) {
+                if (this.suppressNextTap) {
+                  // 这一笔是拖选，不要在建整笔状态的格子上再反选一次
+                  this.suppressNextTap = false;
+                  return;
+                }
                 if (this.isDownloaded(cellRi.item!.displayPhoto)) return;
                 if (this.selectedHandles.has(cellRi.item!.displayPhoto.handle)) {
                   this.selectedHandles.delete(cellRi.item!.displayPhoto.handle);
@@ -520,14 +734,22 @@ export struct GalleryPage {
         )
       )
     } else {
-      Stack()
+      Row()
         .layoutWeight(1)
         .aspectRatio(1)
-        .backgroundColor(Color.Transparent)
     }
   }
 
+  /** 末行右侧的空白格：只占位，不画内容。 */
+  @Builder
+  PadCell() {
+    Row()
+      .layoutWeight(1)
+      .aspectRatio(1)
+  }
+
   private toggleSelectMode(): void {
+    this.stopDragSelect();
     if (this.selectMode) {
       this.selectMode = false;
       this.selectedHandles.clear();
@@ -540,31 +762,55 @@ export struct GalleryPage {
     this.syncSelectionStats();
   }
 
+  /**
+   * 扫描状态浮卡。
+   *
+   * 以前是把横幅排在列表上方（同一个 Column），但列表为了「照片能钻到标题栏底下」
+   * 设了 `clip(false)`，滚动内容会越过自身的上边界盖住横幅——真机截图里就是
+   * 日期标题压在进度条上、进度文字被格子切掉。现在改成 **浮在列表之上的卡片**，
+   * 列表用 contentStartOffset 整体让开，谁都不会遮谁。
+   */
   @Builder
-  ScanBanner() {
-    if (this.svc.scanning && this.svc.scanTotal > 0) {
-      Column({ space: 4 }) {
-        Progress({
-          value: this.svc.scanProgress,
-          total: this.svc.scanTotal,
-          type: ProgressType.Linear
-        })
-          .width('100%').height(3)
+  ScanCard() {
+    Column({ space: 8 }) {
+      Row({ space: 10 }) {
+        LoadingProgress()
+          .width(18).height(18)
           .color($r('app.color.primary'))
-          .backgroundColor($r('app.color.divider'))
-        Row() {
-          Text(this.svc.scanPhaseText || $r('app.string.gallery_scanning'))
-            .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
-          Blank()
-          Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
-            .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
+        Column({ space: 2 }) {
+          Text($r('app.string.gallery_scanning_title'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+          Text(this.svc.scanPhaseText)
+            .fontSize(FontSize.Micro)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
-        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_secondary'))
       }
       .width('100%')
-      // 标题栏是 STACK 布局，内容区延伸到它下方，横幅自己避让
-      .padding({ left: 16, right: 16, top: 8, bottom: 4 })
+      .alignItems(VerticalAlign.Center)
+
+      Progress({
+        value: this.svc.scanProgress,
+        total: this.svc.scanTotal > 0 ? this.svc.scanTotal : 1,
+        type: ProgressType.Linear
+      })
+        .width('100%').height(2)
+        .color($r('app.color.primary'))
+        .backgroundColor($r('app.color.progress_track'))
     }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 10, bottom: 12 })
+    .borderRadius(Radius.Inner)
+    .backgroundColor($r('app.color.bg_surface'))
+    .border({ width: 1, color: $r('app.color.card_border') })
   }
 
   /** 顶部固定区（扫描横幅）是否显示。 */
@@ -580,20 +826,14 @@ export struct GalleryPage {
    * 标题栏，滚动的照片才能从标题栏底下透出。
    */
   private listTopInset(): number {
-    return this.topHeaderVisible() ? 0 : titleBarTotalVp();
+    // 扫描卡是浮层（见 build 里的 ScanCard），内容要整体让开它，
+    // 否则首个日期标题会被卡片压住。
+    return titleBarTotalVp() + (this.topHeaderVisible() ? SCAN_CARD_INSET : 0);
   }
 
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column() {
-      // 扫描横幅紧凑地放在（已被标题栏安全区下移的）内容顶部
-      if (this.topHeaderVisible()) {
-        Column() {
-          this.ScanBanner()
-        }
-        .width('100%')
-      }
-
       if (this.svc.photos.length === 0) {
         Column({ space: 12 }) {
           SymbolGlyph($r('sys.symbol.camera'))
@@ -664,14 +904,16 @@ export struct GalleryPage {
                 } else {
                   ListItem() {
                     Row({ space: this.activeGap() }) {
-                      Repeat<DisplayGroup | null>(ri.item.rowPhotos)
-                        .each((cellRi: RepeatItem<DisplayGroup | null>) => {
+                      Repeat<DisplayGroup>(ri.item.rowPhotos)
+                        .each((cellRi: RepeatItem<DisplayGroup>) => {
                           this.PhotoCell(cellRi)
                         })
-                        .key((dg: DisplayGroup | null, idx: number) => {
-                          if (dg !== null) return dg.displayPhoto.handle.toString();
-                          return `pad_${ri.index}_${idx}`;
+                        .key((dg: DisplayGroup) => dg.displayPhoto.handle.toString())
+                      Repeat<number>(ri.item.padIndexes)
+                        .each((_pad: RepeatItem<number>) => {
+                          this.PadCell()
                         })
+                        .key((_n: number, idx: number) => `pad_${ri.index}_${idx}`)
                     }
                     .width('100%')
                   }
@@ -690,6 +932,13 @@ export struct GalleryPage {
           .width('100%')
           .layoutWeight(1)
           .scrollBar(BarState.Off)
+          // 多选态：拖动用来框选，不再滚列表（滚到边缘时自动滚动）。
+          .enableScrollInteraction(!this.selectMode)
+          .onTouch((event: TouchEvent) => { this.onGridTouch(event); })
+          .onAreaChange((_o: Area, n: Area) => {
+            const h = n.height as number;
+            if (h > 0) { this.listHeightVp = h; }
+          })
           // 官方《设置动态模糊样式》：不裁剪超出范围的子组件，内容才能穿透到标题栏下方；
           // 同时用 cachedCount 预加载，穿过标题栏时不会消失。
           .clip(false)
@@ -728,6 +977,16 @@ export struct GalleryPage {
       }
       .width('100%').height('100%')
 
+      // 扫描浮卡：放在列表之后绘制，永远盖在内容之上
+      if (this.topHeaderVisible()) {
+        Column() {
+          this.ScanCard()
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12 })
+        .position({ top: titleBarTotalVp() + 4, left: 0 })
+        .hitTestBehavior(HitTestMode.None)
+      }
     }
     .width('100%').height('100%')
     .onAreaChange((_o: Area, n: Area) => {

@@ -17,8 +17,10 @@ export struct CameraPage {
   @Event onDisconnect: () => void = () => {};
 
   private statusColor(): Resource {
-    if (this.svc.connected) return $r('app.color.status_connected');
     if (this.svc.scanning) return $r('app.color.primary');
+    // connected 只代表 PTP 会话建立；存储读不到时要显式报警（ISSUE-003）。
+    if (this.svc.connected && this.svc.usable) return $r('app.color.status_connected');
+    if (this.svc.connected) return $r('app.color.status_error');
     return $r('app.color.status_disconnected');
   }
 
@@ -29,10 +31,16 @@ export struct CameraPage {
         Row()
           .width(8).height(8).borderRadius(pillRadius(8))
           .backgroundColor(this.statusColor())
-        Text(this.svc.connected
-          ? $r('app.string.camera_status_connected')
-          : (this.svc.statusText || $r('app.string.camera_empty_title')))
+        // 永远优先显示 statusText：以前 connected 为真时写死成“已连接”，
+        // 导致连上相机之后所有失败原因都不可见（ISSUE-001）。
+        Text(this.svc.statusText !== ''
+          ? this.svc.statusText
+          : (this.svc.connected
+            ? $r('app.string.camera_status_connected')
+            : $r('app.string.camera_empty_title')))
           .fontSize(FontSize.CardTitle)
+          .layoutWeight(1)
+          .maxLines(2)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
         Blank()
@@ -116,6 +124,14 @@ export struct CameraPage {
         .lineHeight(20)
         .textAlign(TextAlign.Center)
         .fontColor($r('app.color.text_secondary'))
+      // 扫描失败的原因在未连接态也要显示出来，否则用户只看到“没反应”。
+      if (this.svc.lastScanError !== '') {
+        Text(this.svc.lastScanError)
+          .fontSize(FontSize.Caption)
+          .lineHeight(20)
+          .textAlign(TextAlign.Center)
+          .fontColor($r('app.color.status_error'))
+      }
     }
     .width('100%')
     .padding({ left: 24, right: 24, top: 48, bottom: 48 })

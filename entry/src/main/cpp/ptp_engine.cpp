@@ -399,12 +399,36 @@ PTPObjectInfo PTPEngine::parseObjectInfo(const uint8_t* data, size_t len, uint32
     return obj;
 }
 
+// PTP 规范：GetStorageIDs / GetObjectHandles 的数据阶段是
+//   NumberOfElements (UINT32) + Elements[] (UINT32 各一)
+// 旧实现把整段按 4 字节切开，于是 count 本身被当成第一个元素，凭空多出一个
+// 伪 storage / 伪句柄（Nikon 实测：StorageIDs count 2、ObjectHandles 1289，
+// 每次扫描多出 10 次 0x2008 与 6 次 0x2009）。
+std::vector<uint32_t> PTPEngine::parseCountedU32Array(const uint8_t* data, size_t len) {
+    std::vector<uint32_t> out;
+    if (data == nullptr || len < 4) return out;
+    uint32_t declared = 0;
+    std::memcpy(&declared, data, 4);
+    size_t available = (len - 4) / 4;
+    size_t count = declared < available ? static_cast<size_t>(declared) : available;
+    out.reserve(count);
+    for (size_t i = 0; i < count; i++) {
+        uint32_t v = 0;
+        std::memcpy(&v, data + 4 + i * 4, 4);
+        out.push_back(v);
+    }
+    return out;
+}
+
 std::vector<uint32_t> PTPEngine::parseU32Array(const uint8_t* data, size_t len) {
     std::vector<uint32_t> out;
-    if (len < 4) return out;
+    if (data == nullptr || len < 4) return out;
     size_t count = len / 4;
+    out.reserve(count);
     for (size_t i = 0; i < count; i++) {
-        out.push_back(reinterpret_cast<const uint32_t*>(data)[i]);
+        uint32_t v = 0;
+        std::memcpy(&v, data + i * 4, 4);
+        out.push_back(v);
     }
     return out;
 }

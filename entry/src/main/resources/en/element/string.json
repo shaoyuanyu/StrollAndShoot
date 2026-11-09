@@ -93,6 +93,10 @@
       "value": "Failed to connect to camera"
     },
     {
+      "name": "camera_status_session_conflict",
+      "value": "The camera still holds the previous session. Unplug and replug the USB cable, or restart the camera."
+    },
+    {
       "name": "camera_status_choose_cache",
       "value": "Choose a cache setting…"
     },
@@ -114,7 +118,7 @@
     },
     {
       "name": "camera_status_no_storage",
-      "value": "Connected (no storage)"
+      "value": "No usable storage in the camera (insert a card)"
     },
     {
       "name": "camera_status_walking_dirs",
@@ -227,6 +231,10 @@
     {
       "name": "camera_main_find",
       "value": "Find Camera"
+    },
+    {
+      "name": "gallery_scanning_title",
+      "value": "Loading photos"
     },
     {
       "name": "gallery_scanning",
@@ -733,6 +741,14 @@
       "value": "Updating %1$d/%2$d"
     },
     {
+      "name": "viewer_scanning_thumb_note",
+      "value": "Full resolution loads automatically after the scan"
+    },
+    {
+      "name": "viewer_scanning_thumb_only",
+      "value": "Scanning — showing thumbnails only %1$d/%2$d"
+    },
+    {
       "name": "viewer_decoding",
       "value": "Decoding thumbnail…"
     },
@@ -815,6 +831,30 @@
     {
       "name": "error_location_current_failed",
       "value": "Failed to get current location: %1$s"
+    },
+    {
+      "name": "camera_status_access_denied",
+      "value": "Camera denied access to storage: check the card, make sure the camera is on, and leave playback/menu"
+    },
+    {
+      "name": "camera_status_store_readonly",
+      "value": "Storage card is read-only: check its write-protect switch"
+    },
+    {
+      "name": "camera_status_invalid_storage",
+      "value": "Camera returned an invalid storage ID"
+    },
+    {
+      "name": "camera_status_session_lost",
+      "value": "Camera session was lost: search for the camera again"
+    },
+    {
+      "name": "camera_status_usb_error",
+      "value": "USB communication failed: check the cable or reconnect"
+    },
+    {
+      "name": "camera_status_ptp_error",
+      "value": "Camera returned error %1$s"
     }
   ]
 }

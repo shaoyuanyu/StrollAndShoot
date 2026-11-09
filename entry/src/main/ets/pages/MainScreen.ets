@@ -115,6 +115,18 @@ export struct MainScreen {
     }
   }
 
+  /** 扫描失败：用 toast 把原因说清楚（ISSUE-001）。 */
+  @Monitor('svc.scanErrorVersion')
+  onScanError(): void {
+    const message = this.svc.lastScanError;
+    if (message === '') return;
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message, duration: 3000 });
+    } catch (_e) {
+      // toast 不可用（例如页面正在退出）时不影响扫描主流程
+    }
+  }
+
   /** 下载注册表异步加载 / 增量写入后刷新“已下载”标记。 */
   @Monitor('svc.registryVersion')
   onRegistryChanged(): void {
@@ -635,7 +647,8 @@ export struct MainScreen {
         TabContent() {
           CameraPage({
             scroller: this.cameraScroller,
-            onScan: (quick: boolean) => { this.svc.scanForCamera(quick); },
+            // 全量扫描是用户明确点下的动作，跳过节流；快捷扫描保留 800ms 节流
+            onScan: (quick: boolean) => { this.svc.scanForCamera(quick, !quick); },
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
           })
         }
@@ -659,6 +672,10 @@ export struct MainScreen {
         .tabBar(this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape'), 2))
       }
       .barOverlap(true)
+      // REQ-001：多选要支持「按住拖拽框选」，而画廊里的横向拖动会被 Tabs 抢去
+      // 切标签页，所以关掉标签页之间的左右滑动（用户已确认接受）。
+      // 只设 scrollable，不设 barMode —— 悬浮页签的材质与圆角在模拟器/真机都要复核。
+      .scrollable(false)
       .barFloatingStyle({
         // 底边距要自己把导航手势条的高度加进来：窗口是全屏布局，Tabs 不会
         // 自动避让。官方图库的悬浮栏就压在手势条避让区的上沿，多选操作栏用
@@ -695,7 +712,9 @@ export struct MainScreen {
       // 内容区的渐进磨砂：模糊强度从顶部到底部连续衰减到 0，
       // 没有硬边（backdropBlur 做不到这一点，会在标题栏下边缘留一条线）
       .linearGradientBlur(96, {
-        fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18]],
+        // fractionStops 的每一档是 [模糊程度, 模糊位置]，位置必须严格递增；
+        // 之前最后一档停在 0.18，0.18→1 没有定义，模拟器上会画出三角碎片。
+        fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18], [0, 1]],
         direction: GradientDirection.Bottom
       })
     }

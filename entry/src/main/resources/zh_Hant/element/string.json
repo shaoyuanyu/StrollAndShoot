@@ -93,6 +93,10 @@
       "value": "連接相機失敗"
     },
     {
+      "name": "camera_status_session_conflict",
+      "value": "相機還掛著上一次的連接：請拔插 USB 線，或重新啟動相機後重試"
+    },
+    {
       "name": "camera_status_choose_cache",
       "value": "請選擇快取設定…"
     },
@@ -114,7 +118,7 @@
     },
     {
       "name": "camera_status_no_storage",
-      "value": "已連線（無儲存裝置）"
+      "value": "相機沒有可用的儲存空間（請插入記憶卡）"
     },
     {
       "name": "camera_status_walking_dirs",
@@ -227,6 +231,10 @@
     {
       "name": "camera_main_find",
       "value": "搜尋相機"
+    },
+    {
+      "name": "gallery_scanning_title",
+      "value": "正在載入照片"
     },
     {
       "name": "gallery_scanning",
@@ -733,6 +741,14 @@
       "value": "更新中 %1$d/%2$d"
     },
     {
+      "name": "viewer_scanning_thumb_note",
+      "value": "掃描完成後會自動載入原圖"
+    },
+    {
+      "name": "viewer_scanning_thumb_only",
+      "value": "掃描中，暫時只顯示縮圖 %1$d/%2$d"
+    },
+    {
       "name": "viewer_decoding",
       "value": "正在解碼縮圖…"
     },
@@ -815,6 +831,30 @@
     {
       "name": "error_location_current_failed",
       "value": "取得目前位置失敗：%1$s"
+    },
+    {
+      "name": "camera_status_access_denied",
+      "value": "相機拒絕存取儲存空間：請確認已插卡、相機已開機，且不在播放/選單狀態"
+    },
+    {
+      "name": "camera_status_store_readonly",
+      "value": "記憶卡為唯讀：請檢查卡上的寫入保護開關"
+    },
+    {
+      "name": "camera_status_invalid_storage",
+      "value": "相機傳回無效的儲存識別碼"
+    },
+    {
+      "name": "camera_status_session_lost",
+      "value": "相機會話已中斷：請重新搜尋相機"
+    },
+    {
+      "name": "camera_status_usb_error",
+      "value": "USB 通訊失敗：請檢查連接線或重新插拔"
+    },
+    {
+      "name": "camera_status_ptp_error",
+      "value": "相機傳回錯誤 %1$s"
     }
   ]
 }

@@ -12,6 +12,13 @@ export interface PhotoEntry {
   imagePixWidth?: number;
   imagePixHeight?: number;
   storageId?: number;
+  /**
+   * 扫描时读到的 EXIF 方向，缓存在 metadata_cache.json 里。
+   * 有这三个字段的条目在后续快速扫描中不必再读 16KB EXIF 头（ISSUE-007）。
+   */
+  exifRotate?: number;
+  exifFlipH?: boolean;
+  exifFlipV?: boolean;
 }
 
 /**

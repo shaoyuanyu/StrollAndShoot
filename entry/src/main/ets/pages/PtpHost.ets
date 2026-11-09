@@ -47,11 +47,65 @@ export interface ObjectInfo {
 
 const ptpNative = rawPtp as PtpApi;
 
+/** 传输/通道层失败（bulkTransfer 返回负值、超时、IN 读失败等）。 */
+export const PTP_ERR_USB = -1;
+/** 会话未打开（OpenSession 未成功或被关闭）。 */
+export const PTP_ERR_NOT_OPEN = -2;
+
+/**
+ * PTP 事务失败。
+ *
+ * `code > 0` 是相机返回的 PTP 响应码（例如 `0x200F AccessDenied`），
+ * `code < 0` 是传输层错误（见 `PTP_ERR_USB` / `PTP_ERR_NOT_OPEN`）。
+ * 以前这里把失败折叠成 `null` / `[]`，业务层无法区分「拒绝访问」与「没有存储」，
+ * 于是把 `0x200F` 误报成「相机没有存储设备」。
+ */
+export class PtpError extends Error {
+  readonly operation: string;
+  readonly code: number;
+
+  constructor(operation: string, code: number, detail?: string) {
+    super(detail ?? `${operation} failed (code=${code >= 0 ? '0x' + code.toString(16) : code})`);
+    this.name = 'PtpError';
+    this.operation = operation;
+    this.code = code;
+  }
+}
+
+/** 响应码 → 可读名字，仅用于日志与文案。 */
+export function ptpResponseName(code: number): string {
+  switch (code) {
+    case 0x2001: return 'OK';
+    case 0x2002: return 'GeneralError';
+    case 0x2003: return 'SessionNotOpen';
+    case 0x2004: return 'InvalidTransactionID';
+    case 0x2005: return 'OperationNotSupported';
+    case 0x2006: return 'ParameterNotSupported';
+    case 0x2008: return 'InvalidStorageId';
+    case 0x2009: return 'InvalidObjectHandle';
+    case 0x200A: return 'DevicePropNotSupported';
+    case 0x200B: return 'InvalidObjectFormatCode';
+    case 0x200C: return 'StoreFull';
+    case 0x200D: return 'ObjectWriteProtected';
+    case 0x200E: return 'StoreReadOnly';
+    case 0x200F: return 'AccessDenied';
+    case 0x2010: return 'NoThumbnailPresent';
+    case 0x2013: return 'StoreNotAvailable';
+    case 0x2019: return 'DeviceBusy';
+    default: return '';
+  }
+}
+
 let sharedLog: AppLog | null = null;
 export function setPtpLog(log: AppLog): void { sharedLog = log; }
 function log(msg: string): void {
-  hilog.info(0x0000, TAG, '%{public}s', msg);
-  if (sharedLog) { sharedLog.add(msg); }
+  // AppLog.add 内部已经写 hilog；以前这里再写一次，导致每条 PTP 报文在
+  // hilog 里出现两遍（ISSUE-007 的日志放大）。
+  if (sharedLog) {
+    sharedLog.add(msg);
+  } else {
+    hilog.info(0x0000, TAG, '%{public}s', msg);
+  }
 }
 function logHex(label: string, data: Uint8Array): void {
   let hex = '';
@@ -78,6 +132,8 @@ export { type PhotoEntry } from '../model/PhotoEntry';
  */
 export interface PtpTransport {
   readonly connectedDeviceName: string;
+  /** 相机侧残留了上一次会话（0x201E 且补发 CloseSession 未恢复）。调试用的虚拟相机不提供。 */
+  readonly sessionConflict?: boolean;
   connect(device: usbManager.USBDevice): Promise<boolean>;
   getDeviceInfo(): Promise<DeviceInfo | null>;
   getStorageIDs(): Promise<number[]>;
@@ -97,6 +153,13 @@ export class PtpSession implements PtpTransport {
   private intEp: usbManager.USBEndpoint | null = null;
   private sessionOpen: boolean = false;
   private usbBusy: boolean = false;
+  /** 最近一条命令的响应码；0 表示还没收到过响应。 */
+  private lastResponseCode: number = 0;
+  /**
+   * 相机侧还挂着上一次的 PTP 会话（OpenSession 返回 0x201E），且补发 CloseSession 也没救回来。
+   * 应用崩溃/被系统杀掉时不会走 closeSessionAndPipe，相机会一直保留那个会话。
+   */
+  sessionConflict: boolean = false;
 
   get connectedDeviceName(): string {
     return this.device?.name ?? '';
@@ -159,12 +222,22 @@ export class PtpSession implements PtpTransport {
 
       // Open PTP session
       const openCmd = ptpNative.buildOpenSession(1);
-      const ok = await this.ptpCommand(openCmd, false);
+      let ok = await this.ptpCommand(openCmd, false);
+      if (!ok && this.lastResponseCode === 0x201E) {
+        // 0x201E = SessionAlreadyOpen。上一次进程崩溃/被杀时没来得及 CloseSession，
+        // 相机会一直保留那个会话。规范给的恢复方式是补发 CloseSession，不必拔线。
+        this.sessionConflict = true;
+        log('OpenSession: 相机仍挂着上一次的会话 (0x201E)，补发 CloseSession 后重试');
+        await this.ptpCommand(ptpNative.buildCloseSession(), false);
+        ok = await this.ptpCommand(openCmd, false);
+        log(ok ? '补发 CloseSession 后 OpenSession 成功' : '补发 CloseSession 后仍然失败');
+      }
       if (!ok) {
         log(`OpenSession failed`);
         await this.closeSessionAndPipe();
         return false;
       }
+      this.sessionConflict = false;
       this.sessionOpen = true;
       log('PTP session opened');
       return true;
@@ -181,37 +254,43 @@ export class PtpSession implements PtpTransport {
     if (!this.pipe) return null;
     log('Getting device info...');
     const cmd = ptpNative.buildGetDeviceInfo();
-    const data = await this.ptpCommandGetData(cmd);
-    if (!data) {
-      log('GetDeviceInfo failed');
+    try {
+      const data = await this.ptpCommandGetData(cmd, 'GetDeviceInfo');
+      if (!data) {
+        log('GetDeviceInfo returned no data');
+        return null;
+      }
+      return ptpNative.parseDeviceInfo(data);
+    } catch (err) {
+      // 设备信息只用于相机身份与展示，拿不到时由调用方退回 USB 级信息，不中断扫描。
+      log(`GetDeviceInfo failed: ${(err as Error).message}`);
       return null;
     }
-    return ptpNative.parseDeviceInfo(data);
   }
 
   async getStorageIDs(): Promise<number[]> {
-    if (!this.sessionOpen) return [];
+    if (!this.sessionOpen) throw new PtpError('GetStorageIDs', PTP_ERR_NOT_OPEN);
     const cmd = ptpNative.buildGetStorageIDs();
-    const data = await this.ptpCommandGetData(cmd);
-    if (!data) return [];
+    const data = await this.ptpCommandGetData(cmd, 'GetStorageIDs');
+    if (!data) throw new PtpError('GetStorageIDs', PTP_ERR_USB, 'GetStorageIDs: empty data package');
     return ptpNative.parseStorageIDs(data);
   }
 
   async getObjectHandles(storageId: number, parent?: number, formatCode?: number): Promise<number[]> {
-    if (!this.sessionOpen) return [];
+    if (!this.sessionOpen) throw new PtpError('GetObjectHandles', PTP_ERR_NOT_OPEN);
     const parentHandle = parent ?? 0xFFFFFFFF;
     const code = formatCode ?? 0;
     const cmd = ptpNative.buildGetObjectHandles(storageId, code, parentHandle);
-    const data = await this.ptpCommandGetData(cmd);
-    if (!data) return [];
+    const data = await this.ptpCommandGetData(cmd, 'GetObjectHandles');
+    if (!data) throw new PtpError('GetObjectHandles', PTP_ERR_USB, 'GetObjectHandles: empty data package');
     return ptpNative.parseObjectHandles(data);
   }
 
   async getObjectInfo(handle: number): Promise<ObjectInfo | null> {
-    if (!this.sessionOpen) return null;
+    if (!this.sessionOpen) throw new PtpError('GetObjectInfo', PTP_ERR_NOT_OPEN);
     const cmd = ptpNative.buildGetObjectInfo(handle);
-    const data = await this.ptpCommandGetData(cmd);
-    if (!data) return null;
+    const data = await this.ptpCommandGetData(cmd, 'GetObjectInfo');
+    if (!data) throw new PtpError('GetObjectInfo', PTP_ERR_USB, 'GetObjectInfo: empty data package');
     return ptpNative.parseObjectInfo(data, handle);
   }
 
@@ -220,12 +299,18 @@ export class PtpSession implements PtpTransport {
       try {
         const closeCmd = ptpNative.buildCloseSession();
         log('Sending CloseSession');
-        await this.ptpCommand(closeCmd, false);
-        log('CloseSession acknowledged');
+        const acked = await this.ptpCommand(closeCmd, false);
+        if (acked) {
+          log('CloseSession acknowledged');
+        } else {
+          // 旧代码在 OUT failed 之后仍然打印 acknowledged 并把会话记为已关闭，
+          // 属于状态误报（ISSUE-006）：相机侧可能还留着旧会话。
+          log('CloseSession NOT acknowledged (command send failed)');
+        }
       } catch (_e) {
         log(`CloseSession error: ${JSON.stringify(_e)}`);
       }
-      this.sessionOpen = false;
+      // 管道随后一定会被关掉，内存中的会话状态统一归位；但日志不再撒谎。
     }
     this.sessionOpen = false;
     if (this.pipe) {
@@ -239,7 +324,7 @@ export class PtpSession implements PtpTransport {
   }
 
   async getThumb(handle: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen) return null;
+    if (!this.sessionOpen) throw new PtpError('GetThumb', PTP_ERR_NOT_OPEN);
     for (let wait = 0; wait < 150; wait++) {
       if (!this.usbBusy) break;
       await new Promise<void>((r: () => void) => { setTimeout(r, 200); });
@@ -249,14 +334,14 @@ export class PtpSession implements PtpTransport {
     try {
       log(`Getting thumb for handle 0x${handle.toString(16)}`);
       const cmd = ptpNative.buildGetThumb(handle);
-      return await this.ptpCommandGetLargeData(cmd);
+      return await this.ptpCommandGetLargeData(cmd, 'GetThumb');
     } finally {
       this.usbBusy = false;
     }
   }
 
   async getObject(handle: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen) return null;
+    if (!this.sessionOpen) throw new PtpError('GetObject', PTP_ERR_NOT_OPEN);
     // Wait for USB pipe to become free (up to 30s)
     for (let wait = 0; wait < 150; wait++) {
       if (!this.usbBusy) break;
@@ -270,7 +355,7 @@ export class PtpSession implements PtpTransport {
     try {
       log(`Getting object for handle 0x${handle.toString(16)}`);
       const cmd = ptpNative.buildGetObject(handle);
-      return await this.ptpCommandGetLargeData(cmd);
+      return await this.ptpCommandGetLargeData(cmd, 'GetObject');
     } finally {
       this.usbBusy = false;
     }
@@ -286,7 +371,7 @@ export class PtpSession implements PtpTransport {
    * @returns the partial data, or null if the camera doesn't support this operation
    */
   async getPartialObject(handle: number, offset: number, maxBytes: number): Promise<Uint8Array | null> {
-    if (!this.sessionOpen) return null;
+    if (!this.sessionOpen) throw new PtpError('GetPartialObject', PTP_ERR_NOT_OPEN);
     // Wait for USB pipe to become free
     for (let wait = 0; wait < 150; wait++) {
       if (!this.usbBusy) break;
@@ -300,7 +385,7 @@ export class PtpSession implements PtpTransport {
     try {
       log(`Getting partial object for handle 0x${handle.toString(16)} offset=${offset} maxBytes=${maxBytes}`);
       const cmd = ptpNative.buildGetPartialObject(handle, offset, maxBytes);
-      const result = await this.ptpCommandGetLargeData(cmd);
+      const result = await this.ptpCommandGetLargeData(cmd, 'GetPartialObject');
       if (result && result.length > 0) {
         log(`Got partial data: ${result.length} bytes`);
       } else {
@@ -356,7 +441,8 @@ export class PtpSession implements PtpTransport {
       log(`processResponse: action=${result.action} code=0x${(result.responseCode ?? 0).toString(16)} dataLen=${result.data ? result.data.length : 0}`);
 
       if (result.action === 2) { // response
-        return result.responseCode === 0x2001;
+        this.lastResponseCode = result.responseCode ?? 0;
+        return this.lastResponseCode === 0x2001;
       }
       if (result.action === -1) { // error
         return false;
@@ -367,20 +453,24 @@ export class PtpSession implements PtpTransport {
   }
 
   /**
-   * Send a command that returns data. Returns the data payload.
+   * Send a command that returns data.
+   *
+   * 成功时返回数据包；相机返回非 0x2001 响应码时抛 `PtpError`（带原始 code），
+   * USB/通道失败时抛 `PtpError(PTP_ERR_USB)`。这样业务层才能区分
+   * 「拒绝访问」与「没有数据」，见 ISSUE-002。
    */
-  private async ptpCommandGetData(cmd: Uint8Array): Promise<Uint8Array | null> {
+  private async ptpCommandGetData(cmd: Uint8Array, op: string = 'PTP'): Promise<Uint8Array | null> {
     logHex('CMD OUT', cmd);
     let n = -1;
     try {
       n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
     } catch (err) {
       log(`OUT exception: ${JSON.stringify(err)}`);
-      return null;
+      throw new PtpError(op, PTP_ERR_USB, `${op}: command send failed`);
     }
     if (n < 0) {
       log(`OUT failed: ${n}`);
-      return null;
+      throw new PtpError(op, PTP_ERR_USB, `${op}: command send failed (${n})`);
     }
 
     let dataPayload: Uint8Array | null = null;
@@ -393,11 +483,11 @@ export class PtpSession implements PtpTransport {
         rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
       } catch (err) {
         log(`IN exception: ${JSON.stringify(err)}`);
-        return null;
+        throw new PtpError(op, PTP_ERR_USB, `${op}: read failed`);
       }
       if (rn < 0) {
         log(`IN failed: ${rn}`);
-        return null;
+        throw new PtpError(op, PTP_ERR_USB, `${op}: read failed (${rn})`);
       }
       if (rn === 0) {
         continue; // zero-length packet
@@ -412,34 +502,36 @@ export class PtpSession implements PtpTransport {
         dataPayload = result.data;
       }
       if (result.action === 2) { // got response
-        if (result.responseCode === 0x2001) {
+        const code = result.responseCode ?? 0;
+        if (code === 0x2001) {
           return dataPayload;
         }
-        log(`Response error: 0x${(result.responseCode ?? 0).toString(16)}`);
-        return null;
+        log(`Response error: 0x${code.toString(16)} (${ptpResponseName(code)})`);
+        throw new PtpError(op, code);
       }
       if (result.action === -1) {
-        return null;
+        throw new PtpError(op, PTP_ERR_USB, `${op}: malformed response`);
       }
     }
-    return null;
+    throw new PtpError(op, PTP_ERR_USB, `${op}: no response from camera`);
   }
 
   /**
    * Same as ptpCommandGetData but with larger buffer for image data (thumbnails, full photos).
+   * 失败语义与 `ptpCommandGetData` 一致：相机错误码或 USB 失败都抛 `PtpError`。
    */
-  private async ptpCommandGetLargeData(cmd: Uint8Array): Promise<Uint8Array | null> {
+  private async ptpCommandGetLargeData(cmd: Uint8Array, op: string = 'PTP'): Promise<Uint8Array | null> {
     logHex('CMD OUT', cmd);
     let n = -1;
     try {
       n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
     } catch (err) {
       log(`OUT exception: ${JSON.stringify(err)}`);
-      return null;
+      throw new PtpError(op, PTP_ERR_USB, `${op}: command send failed`);
     }
     if (n < 0) {
       log(`OUT failed: ${n}`);
-      return null;
+      throw new PtpError(op, PTP_ERR_USB, `${op}: command send failed (${n})`);
     }
 
     let dataPayload: Uint8Array | null = null;
@@ -453,11 +545,11 @@ export class PtpSession implements PtpTransport {
         rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
       } catch (err) {
         log(`IN exception: ${JSON.stringify(err)}`);
-        return null;
+        throw new PtpError(op, PTP_ERR_USB, `${op}: read failed`);
       }
       if (rn < 0) {
         log(`IN failed: ${rn}`);
-        return null;
+        throw new PtpError(op, PTP_ERR_USB, `${op}: read failed (${rn})`);
       }
       if (rn === 0) {
         continue;
@@ -477,18 +569,19 @@ export class PtpSession implements PtpTransport {
       }
 
       if (result.action === 2) {
-        if (result.responseCode === 0x2001) {
+        const code = result.responseCode ?? 0;
+        if (code === 0x2001) {
           return dataPayload;
         }
-        log(`Response error: 0x${(result.responseCode ?? 0).toString(16)}`);
-        return null;
+        log(`Response error: 0x${code.toString(16)} (${ptpResponseName(code)})`);
+        throw new PtpError(op, code);
       }
       if (result.action === -1) {
-        return null;
+        throw new PtpError(op, PTP_ERR_USB, `${op}: malformed response`);
       }
     }
     log('Too many iterations, giving up');
-    return null;
+    throw new PtpError(op, PTP_ERR_USB, `${op}: transfer timeout`);
   }
 
   // ---- USB setup ----

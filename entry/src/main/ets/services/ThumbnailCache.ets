@@ -63,8 +63,14 @@ interface ManifestFile {
   entries: Record<string, CacheEntry>;
 }
 
-/** v2 added `corrected`; v1 entries cannot be trusted for orientation. */
-const MANIFEST_VERSION = 2;
+/**
+ * v2 加了 `corrected`；v1 条目无法判断方向是否已烘焙。
+ * v3（ISSUE-012 / ISSUE-007）：不再写“纠正后重新编码”的缩略图，磁盘上只保留
+ * 原始 JPEG + manifest 里的 rotate/flip/origWidth/origHeight，解码时再裁剪。
+ * v2 的 NEF 缩略图是按“无原始尺寸 → 不裁剪”存下的纠正版，带黑边且无法补救，
+ * 所以版本不匹配时整库重建。
+ */
+const MANIFEST_VERSION = 3;
 
 /** Parse a manifest, returning an empty set for unknown/legacy schemas. */
 function readManifestEntries(text: string): Record<string, CacheEntry> {

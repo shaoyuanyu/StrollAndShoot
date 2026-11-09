@@ -261,7 +261,7 @@ static napi_value ParseStorageIDs(napi_env env, napi_callback_info info) {
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     auto raw = GetUint8Array(env, args[0]);
-    auto ids = PTPEngine::parseU32Array(raw.data(), raw.size());
+    auto ids = PTPEngine::parseCountedU32Array(raw.data(), raw.size());
     return MakeU32Array(env, ids);
 }
 
@@ -270,7 +270,7 @@ static napi_value ParseObjectHandles(napi_env env, napi_callback_info info) {
     napi_value args[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     auto raw = GetUint8Array(env, args[0]);
-    auto handles = PTPEngine::parseU32Array(raw.data(), raw.size());
+    auto handles = PTPEngine::parseCountedU32Array(raw.data(), raw.size());
     return MakeU32Array(env, handles);
 }
 

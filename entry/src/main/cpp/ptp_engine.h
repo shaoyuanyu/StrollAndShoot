@@ -222,6 +222,10 @@ public:
     // ---- Parsing ----
     static PTPDeviceInfo parseDeviceInfo(const uint8_t* data, size_t len);
     static PTPObjectInfo parseObjectInfo(const uint8_t* data, size_t len, uint32_t handle);
+    // PTP 数组数据集（GetStorageIDs / GetObjectHandles）是「UINT32 count + count 个 UINT32」，
+    // 必须跳过首 4 字节并按 count 截断；不要用裸 U32 数组解析。
+    static std::vector<uint32_t> parseCountedU32Array(const uint8_t* data, size_t len);
+    // 裸 U32 数组（无 count 前缀），仅在协议明确如此时使用。
     static std::vector<uint32_t> parseU32Array(const uint8_t* data, size_t len);
     static std::string parseUCS2String(const uint8_t* data, size_t maxLen);
 
