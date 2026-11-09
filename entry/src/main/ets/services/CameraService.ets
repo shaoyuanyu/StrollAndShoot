@@ -10,7 +10,8 @@ import { dataSharePredicates } from '@kit.ArkData';
 import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
-import { PtpSession, setPtpLog, PtpError, PTP_ERR_USB, PTP_ERR_NOT_OPEN, type DeviceInfo, type ObjectInfo, type PtpTransport } from '../pages/PtpHost';
+import { PtpSession, PtpPriority, setPtpLog, PtpError, PTP_ERR_USB, PTP_ERR_NOT_OPEN, type DeviceInfo, type ObjectInfo, type PtpTransport } from '../pages/PtpHost';
+import { PtpScheduler } from './PtpScheduler';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -49,6 +50,13 @@ const METADATA_REUSE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const METADATA_BATCH_SIZE = 100;
 /** 复用元数据前的抽样校验条数（防止卡被格式化后 handle 被重用导致张冠李戴）。 */
 const METADATA_REUSE_PROBE = 8;
+/**
+ * 缩略图流水线的并发任务数。
+ *
+ * PTP 管道本身是串行的，这里并发的是「取图 + 解码」：一个任务在等 USB 时，
+ * 另一个任务可以在 TaskPool 里解码。8 足够把管道喂饱，又不会一次占太多内存。
+ */
+const THUMB_PIPELINE = 8;
 
 // ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
 
@@ -103,7 +111,7 @@ interface DownloadJournalEntry {
 @ObservedV2
 export class CameraService {
   private static instance: CameraService;
-  private session: PtpTransport = new PtpSession();
+  private session: PtpTransport = new PtpScheduler(new PtpSession());
   /** 当前 session 是不是调试用的假相机，用来判断是否需要换回真实 USB。 */
   private sessionIsMock: boolean = false;
   private log: AppLog = new AppLog();
@@ -147,6 +155,8 @@ export class CameraService {
   // Full-resolution compressed cache for preloading
   private compressedCache: Map<number, Uint8Array> = new Map();
   private preloadingSet: Set<number> = new Set();
+  /** 等待某张原图预加载完成的调用方；用完成通知替代 200ms 轮询。 */
+  private preloadWaiters: Map<number, Array<(ok: boolean) => void>> = new Map();
   private cacheTotalBytes: number = 0;
   private cacheMaxBytes: number = 200 * 1048576;
   private detailIndex: number = -1;
@@ -1719,84 +1729,144 @@ export class CameraService {
    * After each row is fully loaded, bump thumbnailVersion so GalleryPage
    * re-evaluates row completeness and shows the row all at once.
    */
+  /**
+   * Phase 2b: 缩略图流水线。
+   *
+   * 旧实现每行 4 张 `await Promise.all`：USB 串行，行内 3 张要等 200ms 轮询，
+   * 行末还要等 4 张全部解码完才放下一行，USB 与解码互相卡。
+   * 现在改成固定并发的工作池：取图（USB，调度器串行）与解码（TaskPool）重叠，
+   * 每行在自己的 4 张都完成后才递增 `thumbnailVersion`，所以视觉上仍是整行出现。
+   */
   private async loadThumbnailsRowByRow(
     validCacheKeys: Set<string>
   ): Promise<void> {
     const photos = this.photos;
     if (photos.length === 0) return;
 
-    // Determine row width: use gallery column count (default 4)
-    // The caller passes a reasonable default since we can't access display here.
     const rowWidth = 4;
+    const rowCount = Math.ceil(photos.length / rowWidth);
+    const rowRemaining: number[] = [];
+    for (let r = 0; r < rowCount; r++) {
+      rowRemaining.push(0);
+    }
 
-    let totalLoaded = 0;
+    // 先判定每张的路径，worker 里不再重复查缓存。
+    const skip: boolean[] = [];
+    const cachedEntries: Array<CacheEntry | null> = [];
     let cacheHits = 0;
     let usbLoads = 0;
-    this.thumbDecoded = 0;
-    const totalToLoad = photos.length;
-    this.scanProgress = 0;
-    this.scanTotal = totalToLoad;
-    this.lastDecodedHandle = -1;
-
-    for (let batchStart = 0; batchStart < totalToLoad; batchStart += rowWidth) {
-      const batchEnd = Math.min(batchStart + rowWidth, totalToLoad);
-      const rowPromises: Promise<void>[] = [];
-
-      for (let i = batchStart; i < batchEnd; i++) {
-        const photo = photos[i];
-
-        // Already loaded (from Phase 0 deployCacheSnapshot or prior scan).
-        // 两个集合要同时命中才算真的“已有图”，否则会漏加载、单元格永远停在占位符。
-        if (this.thumbnailLoadedSet.has(photo.handle)
-          && this.thumbnailPixelMapMap.has(photo.handle)) {
-          totalLoaded++;
+    for (let i = 0; i < photos.length; i++) {
+      const photo = photos[i];
+      skip.push(false);
+      cachedEntries.push(null);
+      // 两个集合要同时命中才算真的“已有图”，否则会漏加载、单元格永远停在占位符。
+      if (this.thumbnailLoadedSet.has(photo.handle)
+        && this.thumbnailPixelMapMap.has(photo.handle)) {
+        skip[i] = true;
+        continue;
+      }
+      const key = `${photo.filename}::${photo.size}`;
+      const modDate = photo.modificationDate || '';
+      if (this.cachingEnabled && key) {
+        const cachedEntry = this.thumbCache.findCached(key, modDate);
+        if (cachedEntry) {
+          cachedEntries[i] = cachedEntry;
+          cacheHits++;
+          rowRemaining[Math.floor(i / rowWidth)]++;
           continue;
         }
-
-        // Check disk cache first
-        const key = `${photo.filename}::${photo.size}`;
-        const modDate = photo.modificationDate || '';
-
-        if (this.cachingEnabled && key) {
-          const cachedEntry = this.thumbCache.findCached(key, modDate);
-          if (cachedEntry) {
-            rowPromises.push(this.loadCachedThumbnail(photo.handle, cachedEntry));
-            cacheHits++;
-            totalLoaded++;
-            continue;
-          }
-        }
-
-        // Need USB: getThumb + EXIF + decode
-        usbLoads++;
-        rowPromises.push(this.loadSingleThumbnail(photo, key, modDate));
       }
-
-      if (rowPromises.length > 0) {
-        await Promise.all(rowPromises);
-      }
-
-      // Row complete: bump thumbnailVersion so GalleryPage re-evaluates rowComplete.
-      // 必须只要本行有加载动作就递增：命中磁盘缓存的行不走 USB，以前只在 USB 分支
-      // 置位的标志会让这些行一次都不递增，扫描结束前已挂载的单元格就永远停在占位符。
-      if (rowPromises.length > 0) {
-        this.thumbnailVersion++;
-        // 崩溃时最多丢最近 2 秒的索引，而不是整轮扫描的清单。
-        this.thumbCache.maybePersist();
-      }
-
-      // Update lastDecodedHandle for PhotoViewer on-screen refresh
-      for (let i = batchStart; i < batchEnd; i++) {
-        if (i < totalToLoad && this.thumbnailLoadedSet.has(photos[i].handle)) {
-          this.lastDecodedHandle = photos[i].handle;
-          break; // Only need one
-        }
-      }
-
-      this.scanProgress = batchEnd;
-
-      if (!this.connected) break;
+      usbLoads++;
+      rowRemaining[Math.floor(i / rowWidth)]++;
     }
+
+    this.thumbDecoded = 0;
+    this.scanProgress = 0;
+    this.scanTotal = photos.length;
+    this.lastDecodedHandle = -1;
+
+    let completed = 0;
+    let lastProgressAt = Date.now();
+    const bumpProgress = (): void => {
+      const now = Date.now();
+      if (now - lastProgressAt >= 100 || completed >= photos.length) {
+        this.scanProgress = completed;
+        lastProgressAt = now;
+      }
+    };
+
+    // 8 个 worker 会让第 N+1 行先于第 N 行完成；这里按行号顺序发布，
+    // 只把「从最上面开始连续完成的行」一次性刷给画廊，视觉上仍然是自上而下整行出现。
+    const rowDone: boolean[] = [];
+    for (let r = 0; r < rowCount; r++) {
+      rowDone.push(rowRemaining[r] === 0);
+    }
+    let publishedRow = 0;
+    const publishCompletedRows = (): void => {
+      let advanced = false;
+      while (publishedRow < rowCount && rowDone[publishedRow]) {
+        publishedRow++;
+        advanced = true;
+      }
+      if (!advanced) return;
+      this.thumbnailVersion++;
+      this.thumbCache.maybePersist();
+      // 预览器刷新用：取刚发布区域最后一行的最后一个已有图 handle。
+      const rowStart = (publishedRow - 1) * rowWidth;
+      const rowEnd = Math.min(rowStart + rowWidth, photos.length);
+      for (let j = rowEnd - 1; j >= rowStart; j--) {
+        if (this.thumbnailLoadedSet.has(photos[j].handle)) {
+          this.lastDecodedHandle = photos[j].handle;
+          break;
+        }
+      }
+    };
+
+    const finishOne = (index: number): void => {
+      completed++;
+      const row = Math.floor(index / rowWidth);
+      rowRemaining[row]--;
+      if (rowRemaining[row] === 0) {
+        rowDone[row] = true;
+        publishCompletedRows();
+      }
+      bumpProgress();
+    };
+
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (this.connected) {
+        const i = next++;
+        if (i >= photos.length) return;
+        if (skip[i]) {
+          completed++;
+          bumpProgress();
+          continue;
+        }
+        const photo = photos[i];
+        const cached = cachedEntries[i];
+        try {
+          if (cached) {
+            await this.loadCachedThumbnail(photo.handle, cached);
+          } else {
+            await this.loadSingleThumbnail(photo, `${photo.filename}::${photo.size}`,
+              photo.modificationDate || '');
+          }
+        } finally {
+          finishOne(i);
+        }
+      }
+    };
+
+    const workerCount = Math.min(THUMB_PIPELINE, photos.length);
+    const workers: Promise<void>[] = [];
+    for (let w = 0; w < workerCount; w++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+
+    // 断连时 worker 会提前退出，不要把进度条补满成“已完成”。
+    this.scanProgress = this.connected ? photos.length : completed;
 
     this.log.add(`缩略图阶段: 磁盘命中 ${cacheHits} / USB 读取 ${usbLoads} / 解码成功 ${this.thumbDecoded}`);
 
@@ -2060,6 +2130,29 @@ export class CameraService {
   // (redecodeThumbnailWithOrientation removed — orientation is now applied
   // at initial thumbnail decode via preloadedOrientations)
 
+  /**
+   * 前台取一张原图并放进缓存。
+   *
+   * `preloadingSet` 用来阻止同一张被邻近预加载重复下载；调度器会把这次
+   * `getObject` 排到 PRELOAD/SCAN 前面，用户不用等整条扫描队列。
+   */
+  private async fetchFullPhotoForeground(handle: number, startedAt: number,
+    waited: boolean): Promise<Uint8Array | null> {
+    this.preloadingSet.add(handle);
+    try {
+      const data = await this.session.getObject(handle, PtpPriority.FOREGROUND);
+      if (!data || data.length === 0) return null;
+      const t1 = Date.now();
+      const sizeMB = (data.length / 1048576).toFixed(1);
+      const usbSec = ((t1 - startedAt) / 1000).toFixed(1);
+      this.log.add(`USB下载${waited ? '(等超时)' : ''}: ${sizeMB}MB ${usbSec}s`);
+      this.addToCache(handle, data);
+      return data;
+    } finally {
+      this.preloadingSet.delete(handle);
+    }
+  }
+
   async loadFullPhoto(handle: number): Promise<DecodedPhotoResult | null> {
     try {
       const t0 = Date.now();
@@ -2070,37 +2163,18 @@ export class CameraService {
         data = this.compressedCache.get(handle)!;
         hit = true;
       } else if (this.preloadingSet.has(handle)) {
-        // Being preloaded, wait up to 5s for cache
-        for (let i = 0; i < 25; i++) {
-          await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 200); });
-          if (this.compressedCache.has(handle)) {
-            data = this.compressedCache.get(handle)!;
-            hit = true;
-            break;
-          }
-        }
-        if (!data) {
-          // Timeout — download directly
-          this.preloadingSet.add(handle);
-          data = await this.session.getObject(handle);
-          this.preloadingSet.delete(handle);
-          if (!data || data.length === 0) return null;
-          const t1 = Date.now();
-          const sizeMB = (data.length / 1048576).toFixed(1);
-          const usbSec = ((t1 - t0) / 1000).toFixed(1);
-          this.log.add(`USB下载(等超时): ${sizeMB}MB ${usbSec}s`);
-          this.addToCache(handle, data);
+        // 邻居预加载正在传这张：等完成通知，不再 200ms 轮询。
+        await this.waitForPreload(handle, 5000);
+        if (this.compressedCache.has(handle)) {
+          data = this.compressedCache.get(handle)!;
+          hit = true;
+        } else {
+          data = await this.fetchFullPhotoForeground(handle, t0, true);
+          if (!data) return null;
         }
       } else {
-        this.preloadingSet.add(handle);
-        data = await this.session.getObject(handle);
-        this.preloadingSet.delete(handle);
-        if (!data || data.length === 0) return null;
-        const t1 = Date.now();
-        const sizeMB = (data.length / 1048576).toFixed(1);
-        const usbSec = ((t1 - t0) / 1000).toFixed(1);
-        this.log.add(`USB下载: ${sizeMB}MB ${usbSec}s`);
-        this.addToCache(handle, data);
+        data = await this.fetchFullPhotoForeground(handle, t0, false);
+        if (!data) return null;
       }
 
       // 取图结束（含等待邻近预加载的时间）
@@ -2264,19 +2338,68 @@ export class CameraService {
       if (this.compressedCache.has(photo.handle)) continue;
       if (this.preloadingSet.has(photo.handle)) continue;
       this.preloadingSet.add(photo.handle);
+      let loaded = false;
       try {
-        const data = await this.session.getObject(photo.handle);
+        // PRELOAD 低于前台取图，但高于扫描：用户在看的那张永远先走。
+        const data = await this.session.getObject(photo.handle, PtpPriority.PRELOAD);
         if (data && data.length > 0) {
           this.addToCache(photo.handle, data);
+          loaded = true;
           const sizeMB = (data.length / 1048576).toFixed(1);
           this.log.add(`预加载[${qi}]: ${sizeMB}MB (缓存${this.compressedCache.size}张/${(this.cacheTotalBytes/1048576).toFixed(0)}MB)`);
         }
       } catch (_e) {
         // preload failure is non-critical
+      } finally {
+        this.preloadingSet.delete(photo.handle);
+        this.notifyPreloadWaiters(photo.handle, loaded);
       }
-      this.preloadingSet.delete(photo.handle);
     }
     this.preloading = false;
+  }
+
+  /**
+   * 等某张原图的预加载完成。超时返回 false，由调用方前台直取。
+   * 以前这里是 25 次 200ms 轮询；现在由 `notifyPreloadWaiters` 立即唤醒。
+   */
+  private waitForPreload(handle: number, timeoutMs: number): Promise<boolean> {
+    if (this.compressedCache.has(handle)) return Promise.resolve(true);
+    return new Promise<boolean>((resolve: (value: boolean) => void) => {
+      let settled = false;
+      let timer: number = -1;
+      const finish = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        if (timer >= 0) {
+          clearTimeout(timer);
+          timer = -1;
+        }
+        const waiters = this.preloadWaiters.get(handle);
+        if (waiters) {
+          const idx = waiters.indexOf(finish);
+          if (idx >= 0) waiters.splice(idx, 1);
+          if (waiters.length === 0) this.preloadWaiters.delete(handle);
+        }
+        resolve(ok);
+      };
+      timer = setTimeout(() => { finish(this.compressedCache.has(handle)); }, timeoutMs);
+      let waiters = this.preloadWaiters.get(handle);
+      if (!waiters) {
+        waiters = [];
+        this.preloadWaiters.set(handle, waiters);
+      }
+      waiters.push(finish);
+    });
+  }
+
+  /** 唤醒所有等这张照片的调用方。 */
+  private notifyPreloadWaiters(handle: number, ok: boolean): void {
+    const waiters = this.preloadWaiters.get(handle);
+    if (!waiters) return;
+    this.preloadWaiters.delete(handle);
+    for (const cb of waiters) {
+      cb(ok);
+    }
   }
 
   cancelPreload(): void {
@@ -2311,6 +2434,12 @@ export class CameraService {
   }
 
   clearFullCache(): void {
+    // 清缓存时唤醒等待者，让它们改走前台直取，不要干等到 5s 超时。
+    const waiting: number[] = [];
+    this.preloadWaiters.forEach((_v: Array<(ok: boolean) => void>, k: number) => waiting.push(k));
+    for (const h of waiting) {
+      this.notifyPreloadWaiters(h, false);
+    }
     this.compressedCache.clear();
     this.preloadingSet.clear();
     this.cacheTotalBytes = 0;
@@ -2342,7 +2471,7 @@ export class CameraService {
       previous.closeSessionAndPipe().catch((_e: Error) => { /* best effort */ });
       this.connected = false;
     }
-    this.session = wantMock ? new MockPtpSession() : new PtpSession();
+    this.session = new PtpScheduler(wantMock ? new MockPtpSession() : new PtpSession());
     this.sessionIsMock = wantMock;
     this.log.add(wantMock ? '[Mock] 使用虚拟相机' : '[Mock] 使用真实 USB 相机');
   }

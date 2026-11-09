@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.22.1 / 1022001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.23.0 / 1023000 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -267,8 +267,8 @@ devecocli check lint entry/src/main/ets
 ```json5
 {
   "app": {
-    "versionName": "1.22.1",  // 语义化版本字符串
-    "versionCode": 1022001    // 整数编码，用于程序化比较
+    "versionName": "1.23.0",  // 语义化版本字符串
+    "versionCode": 1023000    // 整数编码，用于程序化比较
   }
 }
 ```
@@ -291,12 +291,12 @@ devecocli check lint entry/src/main/ets
 6. **更新** `AppScope/app.json5` 中的 `versionName` 和 `versionCode`，并同步 `build-profile.json5` 里 `default` 的 `versionName`
 
 - `versionCode` / `versionName` 定义在 `AppScope/app.json5`：前者是整数（0~2147483647，只用于比较新旧，每次发布递增），后者是展示串，设置页「关于 → 版本」直接显示 `versionName`。
-- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.22.1{debug}`），发布包用纯数字（`1.17.0`）。
+- **调试版必须在版本名里标明**：调试包用 `<版本>{debug}`（如 `1.23.0{debug}`），发布包用纯数字（`1.17.0`）。
 - `versionName` 只接受两种形态 —— ① 只有数字和点；② 同时包含 `{` 和 `}`、字符集为数字/字母/下划线/点/花括号。打包工具的校验正则是 `^[0-9.]+|(?=.*[{])(?=.*[}])[0-9a-zA-Z_.{}]+$`，所以 `1.17.0-beta`、`1.17.0 Debug`、`v1.17.0` 都不合法。`{debug}` 会**原样**显示在「关于」页，这是预期行为。
 - 调试标记写在 **product 级** `build-profile.json5` 的 `products[]` 里，只配 `default`：
 
   ```json5
-  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.22.1{debug}", ... }
+  { "name": "default", "signingConfig": "AgentDebug", "versionName": "1.23.0{debug}", ... }
   ```
 
   `AppScope/app.json5` 被两个 product 共用，写在那里会让发布包也带上 `{debug}`；`dist` 不要配 `versionName`，沿用 `app.json5` 的干净版本号。反过来（`app.json5` 写 `{debug}`、`dist` 覆盖）一旦忘了覆盖，发布包就会带调试标记，不要这么干。

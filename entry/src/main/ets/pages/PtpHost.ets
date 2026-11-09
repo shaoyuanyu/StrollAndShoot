@@ -124,6 +124,20 @@ const USB_PROTO_PTP = 0x01;
 export { type PhotoEntry } from '../model/PhotoEntry';
 
 /**
+ * PTP 事务优先级。数值越小越先执行。
+ *
+ * PTP 会话是单管道：无论上层并发多少请求，同一时刻只有一个事务在跑。
+ * 以前用 `usbBusy` + 200ms 轮询排队，一次交接最多白等 200ms；
+ * `PtpScheduler` 改成 promise 队列后，前一个事务一结束就立刻交给下一个，
+ * 并且前台取图可以插到扫描/预加载前面。
+ */
+export enum PtpPriority {
+  FOREGROUND = 0,
+  PRELOAD = 1,
+  SCAN = 2
+}
+
+/**
  * 相机会话的传输契约。
  *
  * `CameraService` 只依赖这组方法，因此调试包可以换上一台假的 PTP 设备
@@ -134,15 +148,17 @@ export interface PtpTransport {
   readonly connectedDeviceName: string;
   /** 相机侧残留了上一次会话（0x201E 且补发 CloseSession 未恢复）。调试用的虚拟相机不提供。 */
   readonly sessionConflict?: boolean;
-  connect(device: usbManager.USBDevice): Promise<boolean>;
-  getDeviceInfo(): Promise<DeviceInfo | null>;
-  getStorageIDs(): Promise<number[]>;
-  getObjectHandles(storageId: number, parent?: number, formatCode?: number): Promise<number[]>;
-  getObjectInfo(handle: number): Promise<ObjectInfo | null>;
-  getThumb(handle: number): Promise<Uint8Array | null>;
-  getObject(handle: number): Promise<Uint8Array | null>;
-  getPartialObject(handle: number, offset: number, maxBytes: number): Promise<Uint8Array | null>;
-  closeSessionAndPipe(): Promise<void>;
+  connect(device: usbManager.USBDevice, priority?: PtpPriority): Promise<boolean>;
+  getDeviceInfo(priority?: PtpPriority): Promise<DeviceInfo | null>;
+  getStorageIDs(priority?: PtpPriority): Promise<number[]>;
+  getObjectHandles(storageId: number, parent?: number, formatCode?: number,
+    priority?: PtpPriority): Promise<number[]>;
+  getObjectInfo(handle: number, priority?: PtpPriority): Promise<ObjectInfo | null>;
+  getThumb(handle: number, priority?: PtpPriority): Promise<Uint8Array | null>;
+  getObject(handle: number, priority?: PtpPriority): Promise<Uint8Array | null>;
+  getPartialObject(handle: number, offset: number, maxBytes: number,
+    priority?: PtpPriority): Promise<Uint8Array | null>;
+  closeSessionAndPipe(priority?: PtpPriority): Promise<void>;
 }
 
 export class PtpSession implements PtpTransport {
@@ -152,7 +168,6 @@ export class PtpSession implements PtpTransport {
   private bulkOut: usbManager.USBEndpoint | null = null;
   private intEp: usbManager.USBEndpoint | null = null;
   private sessionOpen: boolean = false;
-  private usbBusy: boolean = false;
   /** 最近一条命令的响应码；0 表示还没收到过响应。 */
   private lastResponseCode: number = 0;
   /**
@@ -189,7 +204,7 @@ export class PtpSession implements PtpTransport {
     return cameras;
   }
 
-  async connect(device: usbManager.USBDevice): Promise<boolean> {
+  async connect(device: usbManager.USBDevice, _priority?: PtpPriority): Promise<boolean> {
     // Close any existing connection properly before starting a new one
     if (this.pipe) {
       await this.closeSessionAndPipe();
@@ -250,7 +265,7 @@ export class PtpSession implements PtpTransport {
     }
   }
 
-  async getDeviceInfo(): Promise<DeviceInfo | null> {
+  async getDeviceInfo(_priority?: PtpPriority): Promise<DeviceInfo | null> {
     if (!this.pipe) return null;
     log('Getting device info...');
     const cmd = ptpNative.buildGetDeviceInfo();
@@ -268,7 +283,7 @@ export class PtpSession implements PtpTransport {
     }
   }
 
-  async getStorageIDs(): Promise<number[]> {
+  async getStorageIDs(_priority?: PtpPriority): Promise<number[]> {
     if (!this.sessionOpen) throw new PtpError('GetStorageIDs', PTP_ERR_NOT_OPEN);
     const cmd = ptpNative.buildGetStorageIDs();
     const data = await this.ptpCommandGetData(cmd, 'GetStorageIDs');
@@ -276,7 +291,8 @@ export class PtpSession implements PtpTransport {
     return ptpNative.parseStorageIDs(data);
   }
 
-  async getObjectHandles(storageId: number, parent?: number, formatCode?: number): Promise<number[]> {
+  async getObjectHandles(storageId: number, parent?: number, formatCode?: number,
+    _priority?: PtpPriority): Promise<number[]> {
     if (!this.sessionOpen) throw new PtpError('GetObjectHandles', PTP_ERR_NOT_OPEN);
     const parentHandle = parent ?? 0xFFFFFFFF;
     const code = formatCode ?? 0;
@@ -286,7 +302,7 @@ export class PtpSession implements PtpTransport {
     return ptpNative.parseObjectHandles(data);
   }
 
-  async getObjectInfo(handle: number): Promise<ObjectInfo | null> {
+  async getObjectInfo(handle: number, _priority?: PtpPriority): Promise<ObjectInfo | null> {
     if (!this.sessionOpen) throw new PtpError('GetObjectInfo', PTP_ERR_NOT_OPEN);
     const cmd = ptpNative.buildGetObjectInfo(handle);
     const data = await this.ptpCommandGetData(cmd, 'GetObjectInfo');
@@ -294,7 +310,7 @@ export class PtpSession implements PtpTransport {
     return ptpNative.parseObjectInfo(data, handle);
   }
 
-  async closeSessionAndPipe(): Promise<void> {
+  async closeSessionAndPipe(_priority?: PtpPriority): Promise<void> {
     if (this.sessionOpen && this.pipe && this.bulkOut && this.bulkIn) {
       try {
         const closeCmd = ptpNative.buildCloseSession();
@@ -323,42 +339,23 @@ export class PtpSession implements PtpTransport {
     log('Session closed');
   }
 
-  async getThumb(handle: number): Promise<Uint8Array | null> {
+  /**
+   * 这三个取图方法以前各自用 `usbBusy` 标志 + 200ms 轮询互斥。
+   * 串行化已经上移到 `PtpScheduler`：同一会话的所有事务都在一条 promise 队列里，
+   * 前一个结束立刻放行下一个，不再有 200ms 的交接空档。这里只负责发事务。
+   */
+  async getThumb(handle: number, _priority?: PtpPriority): Promise<Uint8Array | null> {
     if (!this.sessionOpen) throw new PtpError('GetThumb', PTP_ERR_NOT_OPEN);
-    for (let wait = 0; wait < 150; wait++) {
-      if (!this.usbBusy) break;
-      await new Promise<void>((r: () => void) => { setTimeout(r, 200); });
-    }
-    if (this.usbBusy) return null;
-    this.usbBusy = true;
-    try {
-      log(`Getting thumb for handle 0x${handle.toString(16)}`);
-      const cmd = ptpNative.buildGetThumb(handle);
-      return await this.ptpCommandGetLargeData(cmd, 'GetThumb');
-    } finally {
-      this.usbBusy = false;
-    }
+    log(`Getting thumb for handle 0x${handle.toString(16)}`);
+    const cmd = ptpNative.buildGetThumb(handle);
+    return await this.ptpCommandGetLargeData(cmd, 'GetThumb');
   }
 
-  async getObject(handle: number): Promise<Uint8Array | null> {
+  async getObject(handle: number, _priority?: PtpPriority): Promise<Uint8Array | null> {
     if (!this.sessionOpen) throw new PtpError('GetObject', PTP_ERR_NOT_OPEN);
-    // Wait for USB pipe to become free (up to 30s)
-    for (let wait = 0; wait < 150; wait++) {
-      if (!this.usbBusy) break;
-      await new Promise<void>((r: () => void) => setTimeout(r, 200));
-    }
-    if (this.usbBusy) {
-      log('USB busy timeout');
-      return null;
-    }
-    this.usbBusy = true;
-    try {
-      log(`Getting object for handle 0x${handle.toString(16)}`);
-      const cmd = ptpNative.buildGetObject(handle);
-      return await this.ptpCommandGetLargeData(cmd, 'GetObject');
-    } finally {
-      this.usbBusy = false;
-    }
+    log(`Getting object for handle 0x${handle.toString(16)}`);
+    const cmd = ptpNative.buildGetObject(handle);
+    return await this.ptpCommandGetLargeData(cmd, 'GetObject');
   }
 
   /**
@@ -370,31 +367,18 @@ export class PtpSession implements PtpTransport {
    * @param maxBytes number of bytes to read (typically 16384)
    * @returns the partial data, or null if the camera doesn't support this operation
    */
-  async getPartialObject(handle: number, offset: number, maxBytes: number): Promise<Uint8Array | null> {
+  async getPartialObject(handle: number, offset: number, maxBytes: number,
+    _priority?: PtpPriority): Promise<Uint8Array | null> {
     if (!this.sessionOpen) throw new PtpError('GetPartialObject', PTP_ERR_NOT_OPEN);
-    // Wait for USB pipe to become free
-    for (let wait = 0; wait < 150; wait++) {
-      if (!this.usbBusy) break;
-      await new Promise<void>((r: () => void) => setTimeout(r, 200));
+    log(`Getting partial object for handle 0x${handle.toString(16)} offset=${offset} maxBytes=${maxBytes}`);
+    const cmd = ptpNative.buildGetPartialObject(handle, offset, maxBytes);
+    const result = await this.ptpCommandGetLargeData(cmd, 'GetPartialObject');
+    if (result && result.length > 0) {
+      log(`Got partial data: ${result.length} bytes`);
+    } else {
+      log('GetPartialObject returned no data (camera may not support it)');
     }
-    if (this.usbBusy) {
-      log('USB busy timeout');
-      return null;
-    }
-    this.usbBusy = true;
-    try {
-      log(`Getting partial object for handle 0x${handle.toString(16)} offset=${offset} maxBytes=${maxBytes}`);
-      const cmd = ptpNative.buildGetPartialObject(handle, offset, maxBytes);
-      const result = await this.ptpCommandGetLargeData(cmd, 'GetPartialObject');
-      if (result && result.length > 0) {
-        log(`Got partial data: ${result.length} bytes`);
-      } else {
-        log('GetPartialObject returned no data (camera may not support it)');
-      }
-      return result;
-    } finally {
-      this.usbBusy = false;
-    }
+    return result;
   }
 
   // ---- PTP transaction helpers ----

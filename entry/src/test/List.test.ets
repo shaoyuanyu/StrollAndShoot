@@ -5,6 +5,7 @@ import gpsFormatTest from './GpsFormat.test';
 import gpsMockTrackTest from './GpsMockTrack.test';
 import galleryZoomTest from './GalleryZoom.test';
 import persistenceTest from './Persistence.test';
+import ptpSchedulerTest from './PtpScheduler.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -14,4 +15,5 @@ export default function testsuite() {
   gpsMockTrackTest();
   galleryZoomTest();
   persistenceTest();
+  ptpSchedulerTest();
 }

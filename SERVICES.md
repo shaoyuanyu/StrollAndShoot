@@ -218,6 +218,39 @@ interface PhotoEntry {
   3. **内核 / HDF 驱动**：随系统镜像由设备厂商构建，三方应用没有加载内核模块的接口，也不能通过 AppGallery 分发。
 - 补充：`usbManager` 没有设备插拔监听，只能轮询 `getDevices()`；大文件吞吐可改用 API 18 的 `usbSubmitTransfer`（异步批量、可取消），当前同步 `bulkTransfer` 的 192KB 上限见下节。
 
+### PTP 事务调度（PtpScheduler，2026-11-09）
+
+`CameraService.session` 现在固定包一层 `services/PtpScheduler.ets`：所有 PTP 事务进一条 promise 队列，串行执行，按优先级插队（`FOREGROUND` 前台原图 > `PRELOAD` 邻近预加载 > `SCAN` 扫描）。
+
+- **不要再在 `PtpSession` / 调用方里用 `usbBusy` 或 200ms 轮询做互斥**：旧实现每交接一次最多白等 200ms，真机上连续 `Getting thumb` 的起点是 204ms 一跳；1288 张缩略图耗时 227s（176ms/张）。
+- 队列必须覆盖**所有** PTP 事务（含 `getObjectInfo` / `getObjectHandles`），否则会和取图交错。
+- 每个事务的优先级由调用方传入。`PtpScheduler` 的默认值：`getObject` 前台、`getThumb` / `getObjectInfo` / `getObjectHandles` 扫描、`connect` / `closeSessionAndPipe` 前台；`preloadAdjacent` 显式传 `PRELOAD`。
+- 队列只保证**事务**串行，不保证一个业务操作原子完成：取图、EXIF、解码之间会让出队列，正好用来重叠。
+- `PtpScheduler` 不负责取消已提交的事务；`bulkTransfer` 本身不可取消。快速滑图时旧请求仍会跑完，要彻底解决得等 P3（`usbSubmitTransfer` + `usbCancelTransfer`）。
+
+### 缩略图流水线与预加载等待（P1，2026-11-09）
+
+- `loadThumbnailsRowByRow` 改成 8 个 worker 的工作池：每个 worker 跑「取图（USB）+ EXIF + 解码」，USB 由 `PtpScheduler` 串行、解码在 TaskPool 并行，不再按行 `await Promise.all` 卡住整条管道。
+- **行仍然整行出现**：`rowDone` + `publishedRow` 按行号顺序发布，只有从最上面开始连续完成的行才 `thumbnailVersion++`，不会出现第 2 行先于第 1 行。
+- `scanProgress` 按 100ms 节流，不再每张都触发一次 UI 重建。
+- `loadFullPhoto` 等邻近预加载改成 `preloadWaiters` 完成通知（`waitForPreload`），不再 25 × 200ms 轮询；超时后前台 `getObject(FOREGROUND)` 直接插队。
+- `entry/src/test/PtpScheduler.test.ets` 覆盖串行与优先级插队。
+
+**实测（2026-11-09，Nikon Z50_2，1288 张，清空缓存后的全量扫描）**：
+
+| 阶段 | 改造前 | 改造后 | 变化 |
+|---|---|---|---|
+| 元数据 1288 条 | 46.9 s | 43.0 s | 基本不变（相机事务中位 32 ms/条） |
+| 缩略图 1288 张 | 239.6 s（186 ms/张） | 65.5 s（51 ms/张） | **3.7×** |
+| 合计 | 286.9 s | 108.5 s | **2.6×** |
+
+1288/1288 解码成功，无 `NO_THUMB` / `[TASKPOOL_THUMB] FAIL`。收益全部来自缩略图阶段：去掉 200ms 轮询 + 取图/解码流水线；元数据阶段仍是相机侧固定事务延迟，未继续优化。热扫描（缓存命中）不走 USB，约 2s 级。
+
+### 暂不做 / 以后做
+
+- **P2（延后 EXIF 方向）已排除**：相机缩略图本身没有 EXIF（实测 160×120 无 APP1），跳过一次 `GetPartialObject` 会让用户先看到旋转的照片，与体验一致性冲突。
+- **P3（USB 异步 / 更大缓冲）标记为最后做**：`usbSubmitTransfer` 能否同端点多笔在途、单笔能否超过 192KB，都受系统实现约束；先做分块扫描 + PC gphoto2 基线，确认是相机上限还是手机栈上限再试。
+
 ### USB 传输上限
 
 单次 `bulkTransfer` 的总数据必须小于 200KB，超出会返回 -1。缓冲区取 192KB（196608 字节）留出余量。
