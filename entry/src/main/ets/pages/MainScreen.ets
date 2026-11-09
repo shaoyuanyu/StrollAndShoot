@@ -5,6 +5,7 @@ import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 import { CameraService } from '../services/CameraService';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { HandednessService } from '../services/HandednessService';
+import { UsbAttachWatcher } from '../services/UsbAttachWatcher';
 import { GalleryPage } from './GalleryPage';
 import { CameraPage } from './CameraPage';
 import { SettingsPage } from './SettingsPage';
@@ -31,6 +32,7 @@ export struct MainScreen {
   private pageId: number = -1;
   private tabsController: TabsController = new TabsController();
   @Local svc: CameraService = CameraService.getInstance();
+  @Local usbWatcher: UsbAttachWatcher = UsbAttachWatcher.getInstance();
   /**
    * Tabs 的受控索引，只用于 Tabs({ index }) 与内容逻辑。
    * 它由 onChange 更新，而 onChange 在切换动画结束后才触发；不要拿它驱动
@@ -67,6 +69,7 @@ export struct MainScreen {
   /** 点底部操作栏「下载」时递增，GalleryPage 监听后执行。 */
   @Local downloadVersion: number = 0;
   @Local handedness: HandednessService = HandednessService.getInstance();
+  private usbDialogShowing: boolean = false;
 
   /**
    * 浮岛材质。真·沉浸光感只能用在 Navigation 标题栏里，所以浮岛虽然画在
@@ -91,6 +94,11 @@ export struct MainScreen {
     // 智感握姿：订阅握持手，下载浮岛贴到拇指易触及的一侧。
     // 机型不支持时服务内部会静默降级为固定右侧。
     HandednessService.getInstance().start();
+    // 由通知冷启动时，UsbAttachWatcher 可能在 MainScreen 创建前就递增了版本；
+    // @Monitor 不会为初始值触发，这里补一次。
+    if (this.usbWatcher.attachVersion > 0) {
+      setTimeout(() => { this.onUsbCameraAttached(); }, 350);
+    }
   }
 
   aboutToDisappear(): void {
@@ -125,6 +133,59 @@ export struct MainScreen {
     } catch (_e) {
       // toast 不可用（例如页面正在退出）时不影响扫描主流程
     }
+  }
+
+  /** USB 插入相机：切到相机页并询问是否开始扫描。 */
+  @Monitor('usbWatcher.attachVersion')
+  onUsbCameraAttached(): void {
+    if (this.usbDialogShowing) return;
+    if (this.svc.scanning) return;
+    if (!this.isTopPage()) {
+      this.svc.getLog().add('USB 相机接入：当前不在首屏，跳过提示');
+      return;
+    }
+    if (this.gallerySelectMode) {
+      this.exitSelectMode();
+    }
+    this.currentTab = 1;
+    this.visualTab = 1;
+    this.uiState.lastTab = 1;
+    // 等 Tabs 的 220ms 切换动画走完再弹，避免对话框和页面切换叠在一起。
+    setTimeout(() => { this.showUsbCameraDialog(); }, 260);
+  }
+
+  /** 当前 NavDestination 是否在栈顶；预览器/二级页打开时不要抢前台。 */
+  private isTopPage(): boolean {
+    if (this.pageId < 0) return true;
+    const names = this.pageInfos.getAllPathName();
+    return names.length === 0 || names.length - 1 === this.pageId;
+  }
+
+  private showUsbCameraDialog(): void {
+    if (this.usbDialogShowing || this.svc.scanning) return;
+    this.usbDialogShowing = true;
+    this.getUIContext().showAlertDialog({
+      title: $r('app.string.usb_camera_found_title'),
+      message: $r('app.string.usb_camera_found_message', this.usbWatcher.cameraName),
+      autoCancel: true,
+      cancel: () => {
+        this.usbDialogShowing = false;
+      },
+      primaryButton: {
+        value: $r('app.string.usb_camera_found_scan'),
+        fontColor: $r('app.color.primary'),
+        action: () => {
+          this.usbDialogShowing = false;
+          this.svc.scanForCamera(false, true);
+        }
+      },
+      secondaryButton: {
+        value: $r('app.string.usb_camera_found_later'),
+        action: () => {
+          this.usbDialogShowing = false;
+        }
+      }
+    });
   }
 
   /** 下载注册表异步加载 / 增量写入后刷新“已下载”标记。 */

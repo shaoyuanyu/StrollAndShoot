@@ -855,6 +855,30 @@
     {
       "name": "camera_status_ptp_error",
       "value": "相机返回错误 %1$s"
+    },
+    {
+      "name": "usb_camera_found_title",
+      "value": "发现相机"
+    },
+    {
+      "name": "usb_camera_found_message",
+      "value": "检测到「%1$s」已通过 USB 连接，是否开始扫描？"
+    },
+    {
+      "name": "usb_camera_found_scan",
+      "value": "开始扫描"
+    },
+    {
+      "name": "usb_camera_found_later",
+      "value": "稍后"
+    },
+    {
+      "name": "usb_camera_notice_title",
+      "value": "相机已连接"
+    },
+    {
+      "name": "usb_camera_notice_text",
+      "value": "「%1$s」已连接，点此打开应用导入照片"
     }
   ]
 }

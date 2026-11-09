@@ -855,6 +855,30 @@
     {
       "name": "camera_status_ptp_error",
       "value": "Camera returned error %1$s"
+    },
+    {
+      "name": "usb_camera_found_title",
+      "value": "Camera detected"
+    },
+    {
+      "name": "usb_camera_found_message",
+      "value": "'%1$s' is connected via USB. Start scanning?"
+    },
+    {
+      "name": "usb_camera_found_scan",
+      "value": "Start scanning"
+    },
+    {
+      "name": "usb_camera_found_later",
+      "value": "Later"
+    },
+    {
+      "name": "usb_camera_notice_title",
+      "value": "Camera connected"
+    },
+    {
+      "name": "usb_camera_notice_text",
+      "value": "'%1$s' is connected. Tap to open the app and import photos."
     }
   ]
 }

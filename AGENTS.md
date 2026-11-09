@@ -611,6 +611,7 @@ HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_kno
 | `services/GpsRecorder.ets` | 连续定位、后台长时任务、按天聚合、模拟轨迹 |
 | `services/ThumbnailCache.ets` | 缩略图磁盘缓存、manifest、过期清理 |
 | `services/AppLog.ets` | 内存环形缓冲 + `app_log.txt` 追加写 + hilog |
+| `services/UsbAttachWatcher.ets` | USB 相机插入监听：前台提示扫描、后台通知 |
 | `pages/PtpHost.ets` | USB/PTP 会话层 |
 | `model/SettingsStore.ets` | 持久化设置 |
 | `model/LanguageStore.ets` | 应用语言偏好（单独 PersistenceV2 key，默认跟随系统） |

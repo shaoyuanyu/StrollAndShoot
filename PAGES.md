@@ -12,7 +12,7 @@
 
 ### MainScreen.ets
 
-NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时取该缩略图的屏幕矩形（`getRectangleById('thumb_<handle>')`，px）与附近 81 个单元格的位置缓存，连同 `positionLookup` 回调一起作为 NavPathStack 参数传给预览器，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。缩略图位图不必传：预览器自己从 `svc.thumbnailPixelMapMap` 取。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。
+NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时取该缩略图的屏幕矩形（`getRectangleById('thumb_<handle>')`，px）与附近 81 个单元格的位置缓存，连同 `positionLookup` 回调一起作为 NavPathStack 参数传给预览器，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。缩略图位图不必传：预览器自己从 `svc.thumbnailPixelMapMap` 取。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。USB 插入相机时，`@Monitor('usbWatcher.attachVersion')` 会切到相机页并弹「发现相机」确认框；预览器/二级页在栈顶时不抢前台。
 
 标签页索引拆成两个：`currentTab` 是 `Tabs({ index })` 的受控索引，只在 `onChange`（切换动画结束后）更新；`visualTab` 是标题栏、底部页签、浮岛等视觉状态用的索引，在 `Tabs.onSelected`（点击页签 / 滑动离手开始切换动画时）更新。**不要把 `currentTab` 用于标题栏条件**，否则旧页的按钮会在新页上停留整个 220ms 动画。官方 `Tabs` 的 `onChange` 说明与示例 17 就是这个用法。
 

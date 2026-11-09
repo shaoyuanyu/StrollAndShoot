@@ -8,6 +8,7 @@ import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { GpsGeocoder } from '../services/GpsGeocoder';
+import { UsbAttachWatcher } from '../services/UsbAttachWatcher';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
@@ -22,6 +23,11 @@ export default class EntryAbility extends UIAbility {
    * 仅调试包生效；release 包里不会执行。
    */
   onNewWant(want: Want): void {
+    const usbCamera = want.parameters ? want.parameters['usbCamera'] : undefined;
+    if (usbCamera !== undefined && String(usbCamera) === '1') {
+      // 点「相机已连接」通知回到前台时，等 onForeground 再提示，避免在后台弹窗。
+      UsbAttachWatcher.getInstance().noteNoticeOpen();
+    }
     const shot = want.parameters ? want.parameters['shot'] : undefined;
     if (shot === undefined) return;
     if (!MockPtpDevice.isDebugBuild()) return;
@@ -41,6 +47,11 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     // service / utils 里的运行时文案通过资源管理器取，必须在加载页面前注入。
     L10n.init(this.context.resourceManager);
+    UsbAttachWatcher.getInstance().start();
+    const usbCamera = want.parameters ? want.parameters['usbCamera'] : undefined;
+    if (usbCamera !== undefined && String(usbCamera) === '1') {
+      UsbAttachWatcher.getInstance().noteNoticeOpen();
+    }
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
@@ -51,6 +62,7 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
+    UsbAttachWatcher.getInstance().stop();
     this.flushPersistence();
   }
 
@@ -146,11 +158,13 @@ export default class EntryAbility extends UIAbility {
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
+    UsbAttachWatcher.getInstance().setAppForeground(true);
   }
 
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
+    UsbAttachWatcher.getInstance().setAppForeground(false);
     this.flushPersistence();
   }
 }

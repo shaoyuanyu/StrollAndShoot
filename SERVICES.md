@@ -35,6 +35,18 @@
 - DATA_TRANSFER 的官方约束：进度首次更新超过 10 分钟未更新会被取消，且「更新进度的通知类型必须为实况窗」。单次扫描/下载在几分钟内结束，暂时不受影响；要做超长传输需要接实况窗。
 - 实况窗（LiveView）的 `event` 只支持官方 13 类场景（打车/配送/取餐/航班/排队/比分/租赁/计时/运动/导航/打卡/快递/高铁），**照片导入不在其中**，不要硬套。
 
+### USB 相机插入监听（`services/UsbAttachWatcher.ets`，2026-11-09）
+
+原生三方应用**不能**像 Android 那样“插上相机自动拉起”：静态订阅公共事件仅系统应用开放，后台启动 UIAbility 需要 `ohos.permission.START_ABILITIES_FROM_BACKGROUND`（仅系统应用可申请）。所以只做运行期能做的两件事：
+
+- `start()` 在 `EntryAbility.onCreate` 调用，动态订阅 `usual.event.hardware.usb.action.USB_DEVICE_ATTACHED`；`stop()` 在 `onDestroy` 调用，`onForeground` / `onBackground` 维护前后台标志。
+- 相机插入后延时 800ms 再枚举（相机常重枚举 `2-2 → 2-3 → 2-4`），用 `utils/UsbAttachUtil.ets` 的 VID/PID/产品名做键，15 秒内只处理一次；`CameraService.scanning` 或 `connected && usable` 时跳过。
+- **前台**：`@Trace attachVersion++`，`MainScreen.@Monitor('usbWatcher.attachVersion')` 切到相机页并弹「发现相机」对话框；点「开始扫描」走 `scanForCamera(false, true)`。预览器/二级页在栈顶时不抢前台。
+- **后台（进程还活着）**：发普通通知（`id=4211`，与 `TransferNotice` 的 4210 错开），WantAgent 带 `usbCamera=1`；点通知回前台后由 `EntryAbility.onNewWant` → `setAppForeground(true)` 触发提示。通知未授权时静默跳过。
+- **冷启动不变**：应用没运行就收不到事件；插着相机启动也不会主动弹，仍走用户手动「搜索相机」。
+
+**不要**试图用静态订阅 / `START_ABILITIES_FROM_BACKGROUND` 做自动拉起：前者仅系统应用，后者仅系统应用可申请；真要系统级体验只能预置应用/系统应用。
+
 ### 下载注册表与「最近删除」
 
 - 键为 `${cameraIdentity}::${filename}::${size}`；旧版 `${filename}::${size}` 记录仍可兼容读取。

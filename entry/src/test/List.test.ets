@@ -6,6 +6,7 @@ import gpsMockTrackTest from './GpsMockTrack.test';
 import galleryZoomTest from './GalleryZoom.test';
 import persistenceTest from './Persistence.test';
 import ptpSchedulerTest from './PtpScheduler.test';
+import usbAttachUtilTest from './UsbAttachUtil.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -16,4 +17,5 @@ export default function testsuite() {
   galleryZoomTest();
   persistenceTest();
   ptpSchedulerTest();
+  usbAttachUtilTest();
 }
