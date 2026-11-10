@@ -145,6 +145,10 @@
       "value": "正在取得中繼資料…"
     },
     {
+      "name": "camera_phase_loading_photos",
+      "value": "正在載入照片..."
+    },
+    {
       "name": "camera_phase_thumbnails",
       "value": "載入縮圖"
     },

@@ -112,6 +112,18 @@ std::vector<uint8_t> PTPEngine::buildGetPartialObject(uint32_t objectHandle,
     return buildCommand(PTP_OC_GetPartialObject, {objectHandle, offset, maxBytes});
 }
 
+// MTP GetObjectPropList 的 5 个参数固定为
+// (ObjectHandle, ObjectFormat, PropertyCode, PropertyGroupCode, Depth)，
+// 0xFFFFFFFF 表示“全部/不递归限制”。
+std::vector<uint8_t> PTPEngine::buildGetObjectPropList(uint32_t objectHandle,
+                                                       uint32_t formatCode,
+                                                       uint32_t propertyCode,
+                                                       uint32_t groupCode,
+                                                       uint32_t depth) {
+    return buildCommand(PTP_OC_GetObjectPropList,
+                        {objectHandle, formatCode, propertyCode, groupCode, depth});
+}
+
 // ---- getResp: parse response container (usb.c:466) ----
 uint16_t PTPEngine::getResp(const uint8_t* data, size_t len, PTPContainer& resp) {
     if (len < 12) return 0xFFFF; // error
@@ -401,8 +413,110 @@ PTPObjectInfo PTPEngine::parseObjectInfo(const uint8_t* data, size_t len, uint32
     return obj;
 }
 
-// PTP 规范：GetStorageIDs / GetObjectHandles 的数据阶段是
-//   NumberOfElements (UINT32) + Elements[] (UINT32 各一)
+// ---- GetObjectPropList 数据集解析（MTP 1.1） ----
+//
+// 数据段布局：UINT32 NumberOfElements，随后每个元素：
+//   UINT32 ObjectHandle | UINT16 PropertyCode | UINT16 DataType | 变长 Value
+// 同一对象的多个属性连续排列，所以按 handle 合并成一条记录。
+// 相机实现千奇百怪，这里遇到不认识的 DataType 就整体放弃（Complete=false），
+// 由上层决定要不要用这批数据。
+
+static uint16_t rdU16(const uint8_t* p) {
+    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+
+static uint32_t rdU32(const uint8_t* p) {
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+static bool propFixedSize(uint16_t datatype, size_t* size) {
+    switch (datatype) {
+        case 0x0001: case 0x0002: *size = 1; return true;   // INT8 / UINT8
+        case 0x0003: case 0x0004: *size = 2; return true;   // INT16 / UINT16
+        case 0x0005: case 0x0006: *size = 4; return true;   // INT32 / UINT32
+        case 0x0007: case 0x0008: *size = 8; return true;   // INT64 / UINT64
+        case 0x0009: case 0x000A: *size = 16; return true;  // INT128 / UINT128
+        default: return false;
+    }
+}
+
+PTPObjectPropList PTPEngine::parseObjectPropList(const uint8_t* data, size_t len) {
+    PTPObjectPropList out;
+    if (data == nullptr || len < 4) return out;
+    out.Declared = rdU32(data);
+    size_t off = 4;
+    bool ok = true;
+
+    while (off + 8 <= len) {
+        const uint32_t handle = rdU32(data + off);
+        const uint16_t code = rdU16(data + off + 4);
+        const uint16_t datatype = rdU16(data + off + 6);
+        off += 8;
+
+        bool hasFormat = false;
+        bool hasSize = false;
+        bool hasParent = false;
+        uint16_t format = 0;
+        uint32_t size = 0;
+        uint32_t parent = 0;
+        std::string strVal;
+
+        if (datatype == 0xFFFF) {
+            strVal = readPtpString(data, len, &off);
+            if (off > len) { ok = false; break; }
+        } else {
+            size_t sz = 0;
+            if (!propFixedSize(datatype, &sz) || off + sz > len) { ok = false; break; }
+            if (code == 0xDC02 && sz >= 2) {
+                format = rdU16(data + off);
+                hasFormat = true;
+            } else if (code == 0xDC04) {
+                if (sz == 8) {
+                    const uint64_t v = static_cast<uint64_t>(rdU32(data + off)) |
+                                       (static_cast<uint64_t>(rdU32(data + off + 4)) << 32);
+                    size = v > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(v);
+                } else if (sz == 4) {
+                    size = rdU32(data + off);
+                }
+                hasSize = true;
+            } else if (code == 0xDC0B && sz >= 4) {
+                parent = rdU32(data + off);
+                hasParent = true;
+            }
+            off += sz;
+        }
+
+        bool seen = false;
+        for (size_t i = 0; i < out.PropCodes.size(); i++) {
+            if (out.PropCodes[i] == code) { seen = true; break; }
+        }
+        if (!seen && out.PropCodes.size() < 64) {
+            out.PropCodes.push_back(code);
+        }
+
+        if (out.Objects.empty() || out.Objects.back().Handle != handle) {
+            PTPObjectPropEntry fresh;
+            fresh.Handle = handle;
+            out.Objects.push_back(fresh);
+        }
+        PTPObjectPropEntry& cur = out.Objects.back();
+        if (hasFormat) cur.Format = format;
+        if (hasSize) cur.Size = size;
+        if (hasParent) cur.Parent = parent;
+        if (!strVal.empty()) {
+            if (code == 0xDC07) cur.Filename = strVal;
+            else if (code == 0xDC08) cur.DateCreated = strVal;
+            else if (code == 0xDC09) cur.DateModified = strVal;
+        }
+    }
+
+    out.Complete = ok && off == len &&
+        (out.Declared == 0 || out.Objects.size() == out.Declared);
+    return out;
+}
+
+// PTP 规范：GetStorageIDs / GetObjectHandles 的数据阶段是//   NumberOfElements (UINT32) + Elements[] (UINT32 各一)
 // 旧实现把整段按 4 字节切开，于是 count 本身被当成第一个元素，凭空多出一个
 // 伪 storage / 伪句柄（Nikon 实测：StorageIDs count 2、ObjectHandles 1289，
 // 每次扫描多出 10 次 0x2008 与 6 次 0x2009）。

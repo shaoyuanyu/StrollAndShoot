@@ -10,7 +10,8 @@ import { dataSharePredicates } from '@kit.ArkData';
 import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
-import { PtpSession, PtpPriority, setPtpLog, PtpError, PTP_ERR_USB, PTP_ERR_NOT_OPEN, type DeviceInfo, type ObjectInfo, type PtpTransport } from '../pages/PtpHost';
+import { PtpSession, PtpPriority, setPtpLog, setPtpQuietOps, PtpError, PTP_ERR_USB,
+  PTP_ERR_NOT_OPEN, type DeviceInfo, type ObjectInfo, type PtpTransport } from '../pages/PtpHost';
 import { PtpScheduler } from './PtpScheduler';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
@@ -48,8 +49,20 @@ const SCAN_MIN_INTERVAL_MS = 800;
  * 可以用「全量扫描」强制刷新。
  */
 const METADATA_REUSE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-/** 元数据分批上屏的粒度（ISSUE-008）。 */
-const METADATA_BATCH_SIZE = 100;
+/**
+ * 断点续扫的有效期。
+ *
+ * 只有「上一轮扫描没跑完」（`metadata_cache.json` 里 `complete=false`）才会进入续扫。
+ * 超过这个时间就当缓存不可信，宁可全量重读。
+ */
+const RESUME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** 交织扫描时每隔多少张把元数据落一次盘（断点续扫用）。 */
+const SCAN_PERSIST_EVERY = 256;
+/**
+ * 交织扫描的批大小：每读 64 张的元数据就先把这一批的缩略图取回来。
+ * 太小会让「发布相册列表」过频，太大又会让首屏多等。
+ */
+const SCAN_CHUNK = 64;
 /** 复用元数据前的抽样校验条数（防止卡被格式化后 handle 被重用导致张冠李戴）。 */
 const METADATA_REUSE_PROBE = 8;
 /**
@@ -198,6 +211,8 @@ export class CameraService {
   private metadataCacheByHandle: Map<number, PhotoEntry> = new Map();
   /** metadata_cache.json 的写入时间，用于判断是否还能复用。 */
   private metadataCacheSavedAt: number = 0;
+  /** metadata_cache.json 是否来自一轮**跑完**的扫描；false 表示可用于断点续扫。 */
+  private metadataCacheComplete: boolean = true;
 
   // Orientation cache (EXIF Orientation → rotate/flipH/flipV)
   private orientationMap: Map<number, OrientationTransform> = new Map();
@@ -209,6 +224,43 @@ export class CameraService {
   // Original photo dimensions read from EXIF during scan (via GetPartialObject).
   // Used to compute precise thumbnail content area for black-bar-free cropping.
   private exifOrigDims: Map<number, OrientedSize> = new Map();
+
+  // ---- 扫描阶段性能测量与自适应（每轮扫描重置） ----
+  /** 遍历目录耗时。 */
+  private statWalkMs: number = 0;
+  /** 逐张 GetObjectInfo 的总耗时与次数。 */
+  private statInfoMs: number = 0;
+  private statInfoCount: number = 0;
+  /** GetThumb 的总耗时与次数。 */
+  private statThumbMs: number = 0;
+  private statThumbCount: number = 0;
+  /** GetPartialObject（读原图 EXIF 头）的总耗时与次数。 */
+  private statExifMs: number = 0;
+  private statExifCount: number = 0;
+  /** 缩略图阶段累计：磁盘命中 / USB 读取（交织时按批累加）。 */
+  private thumbCacheHits: number = 0;
+  private thumbUsbLoads: number = 0;
+  /** 命中 manifest 但文件已失效、被迫回退 USB 的张数。 */
+  private thumbCacheFallback: number = 0;
+  /** 缩略图写缓存盘的总耗时。 */
+  private statSaveMs: number = 0;
+  /** 缩略图 TaskPool 解码的总耗时。 */
+  private statDecodeMs: number = 0;
+  /** GetObjectPropList 探测是否已做过（每个会话只试一次）。 */
+  private propListProbed: boolean = false;
+  /** 相机自报支持的操作码，用来判断 GetObjectPropList(0x9805) 值不值得试。 */
+  private deviceOps: number[] = [];
+  /**
+   * 缩略图 JPEG 自带的 EXIF 方向是否可信：
+   * `null` = 还在验证，`0` = 不可信（继续读原图），`1` = 可信（省掉 GetPartialObject）。
+   * 只靠“缩略图有 EXIF”就相信它是危险的：相机可能给缩略图写的是“不旋转”。
+   * 因此先用一小批照片与原图比对，全部一致、且样本里包含竖拍，才切换到可信模式。
+   */
+  private thumbExifTrust: number | null = null;
+  private thumbExifSamples: number = 0;
+  private thumbExifPortrait: number = 0;
+  private thumbExifMismatch: number = 0;
+  private thumbExifMissing: number = 0;
 
   // ---- Camera identity & thumbnail caching ----
 
@@ -1321,6 +1373,9 @@ export class CameraService {
         this.usbSerialNumber = cameras[0].serial || '';
         if (deviceInfo) {
           this.log.add(`PTP DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" serial="${deviceInfo.serialNumber}" ver="${deviceInfo.deviceVersion}"`);
+          this.deviceOps = deviceInfo.operationsSupported ?? [];
+          this.log.add(`PTP 支持操作 ${this.deviceOps.length} 个` +
+            `${this.deviceOps.includes(0x9805) ? '（含 GetObjectPropList）' : '（无 GetObjectPropList）'}`);
           this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
           this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
         } else {
@@ -1487,6 +1542,52 @@ export class CameraService {
   }
 
   /**
+   * 试一次 GetObjectPropList（MTP 0x9805），判断能不能用一次事务拿回全部对象属性。
+   *
+   * 扫描的瓶颈是「每张一次 USB 往返」：Nikon 上 GetObjectInfo 约 30ms，
+   * 1288 张就是 40s。若相机支持这个 MTP 扩展，同样 1288 张只要一笔事务。
+   * 相机不支持是正常情况（返回 0x2005），这里只记录，不改变扫描流程。
+   */
+  private async probeObjectPropList(): Promise<void> {
+    if (this.propListProbed) return;
+    this.propListProbed = true;
+    const advertised = this.deviceOps.includes(0x9805);
+    // Nikon Z50_2 实测：不支持时 0x9805 不回响应，IN 端点在 10s 超时后才放弃，
+    // 而且之后 3 条命令各失败一次、丢了 3 张照片（2026-11-09 真机）。
+    // 所以“先试一下”只对自报支持的相机做，别再拿真实相机赌。
+    if (!advertised) {
+      this.log.add('[PROP_LIST] 相机未列出 GetObjectPropList，跳过探测');
+      return;
+    }
+    const t0 = Date.now();
+    try {
+      const list = await this.session.getObjectPropList(0xFFFFFFFF, 0, 0xFFFFFFFF, 0, 0xFFFFFFFF);
+      const ms = Date.now() - t0;
+      this.log.add(`[PROP_LIST] 耗时 ${ms}ms，声明 ${list.declared} / 解析 ${list.objects.length} 条 ` +
+        `/ ${list.bytes}B / 完整=${list.complete ? '是' : '否'}（相机自报=${advertised ? '支持' : '未列出'}）`);
+      const codes: string[] = [];
+      for (const c of list.codes) {
+        codes.push('0x' + c.toString(16));
+      }
+      this.log.add(`[PROP_LIST] 属性码 ${codes.length} 个: ${codes.join(',')}`);
+      this.log.add(`[PROP_LIST] 数据头: ${list.head}`);
+      if (list.objects.length > 0) {
+        const f = list.objects[0];
+        this.log.add(`[PROP_LIST] 样例 ${f.filename} size=${f.size} ` +
+          `fmt=0x${f.format.toString(16)} date=${f.dateCreated || '(空)'} parent=0x${f.parent.toString(16)}`);
+        const withName = list.objects.filter((o) => o.filename.length > 0).length;
+        const withSize = list.objects.filter((o) => o.size > 0).length;
+        const withDate = list.objects.filter((o) => o.dateCreated.length > 0).length;
+        this.log.add(`[PROP_LIST] 字段覆盖: 文件名 ${withName} / 体积 ${withSize} / 日期 ${withDate}`);
+      }
+    } catch (err) {
+      const ms = Date.now() - t0;
+      this.log.add(`[PROP_LIST] 不可用（${ms}ms）: ${(err as Error).message}` +
+        `（相机自报=${advertised ? '支持' : '未列出'}）`);
+    }
+  }
+
+  /**
    * Traverse directories (instant with format filtering), then load photo
    * metadata and thumbnails in a single pass with a progress bar.
    *
@@ -1497,6 +1598,21 @@ export class CameraService {
     this.statusText = L10n.tr('camera_status_fetching_list');
     this.scanProgress = 0;
     this.scanTotal = 0;
+    // 逐笔事务的流水日志在 1288 张时会把日志环形缓冲冲掉，也白花拼串时间。
+    setPtpQuietOps(true);
+    this.statWalkMs = 0;
+    this.statInfoMs = 0;
+    this.statInfoCount = 0;
+    this.statThumbMs = 0;
+    this.statThumbCount = 0;
+    this.statExifMs = 0;
+    this.statExifCount = 0;
+    this.statSaveMs = 0;
+    this.statDecodeMs = 0;
+    this.thumbCacheHits = 0;
+    this.thumbUsbLoads = 0;
+    this.thumbCacheFallback = 0;
+    this.thumbDecoded = 0;
 
     try {
       const storageIDs = await this.session.getStorageIDs();
@@ -1515,11 +1631,13 @@ export class CameraService {
       this.formatFilterWorks = null; // re-detect for this connection
 
       let foundCount = 0;
+      const walkStart = Date.now();
       const allHandles = await this.collectPhotoHandles(storageIDs, 0xFFFFFFFF, 0,
         (count: number) => {
           foundCount += count;
           this.photoCount = foundCount;
         });
+      this.statWalkMs = Date.now() - walkStart;
       const handles = allHandles;
       hilog.info(DOMAIN, TAG, `ObjectHandles total: ${allHandles.length}`);
 
@@ -1544,55 +1662,98 @@ export class CameraService {
       // 只对新增照片调 GetObjectInfo。抽样校验防止卡被格式化后 handle 被重用（ISSUE-009）。
       const cachedMeta = this.prepareMetadataReuse(quickMode);
       const canReuse = cachedMeta.size > 0 && await this.verifyMetadataSample(cachedMeta, handles);
+      const reuseMeta = canReuse ? cachedMeta : new Map<number, PhotoEntry>();
+      // 续扫时缓存只覆盖一部分 handle，仍需逐张读剩下的。
+      const fullReuse = canReuse && reuseMeta.size >= handles.length;
+
+      // 只有本轮真的要逐张读元数据时才值得探测合批能力（复用缓存时探测纯属浪费）。
+      if (!canReuse) {
+        await this.probeObjectPropList();
+      }
 
       const photoList: PhotoEntry[] = [];
       const validCacheKeys: Set<string> = new Set();
-      // 缓存为空时才需要渐进上屏：已有缓存快照时画廊本来就有内容（ISSUE-008）。
-      const progressive = this.photos.length === 0;
       let reused = 0;
       let fetched = 0;
       let infoFailed = 0;
 
-      for (let i = 0; i < handles.length; i++) {
-        const h = handles[i];
-        let entry: PhotoEntry | null = null;
-        const cached = canReuse ? cachedMeta.get(h) : undefined;
-        if (cached) {
-          entry = cached;
-          reused++;
-        } else {
-          try {
-            const info = await this.session.getObjectInfo(h);
-            if (info) {
-              entry = {
-                handle: h,
-                filename: info.filename,
-                size: info.objectCompressedSize,
-                objectFormat: info.objectFormat,
-                captureDate: info.captureDate || '',
-                modificationDate: info.modificationDate || '',
-                imagePixWidth: info.imagePixWidth || 0,
-                imagePixHeight: info.imagePixHeight || 0,
-                storageId: info.storageId || 0
-              };
-              fetched++;
-            }
-          } catch (err) {
-            // 单张失败（相机可能在扫描途中删了文件）不打断整轮扫描。
-            infoFailed++;
-            if (infoFailed <= 3) {
-              this.log.add(`元数据失败 handle=0x${h.toString(16)}: ${(err as Error).message}`);
+      // 交织只在“真的要读相机”时有意义：整份复用缓存时元数据是瞬时的，
+      // 先一次读完再统一取缩略图更省事。断点续扫要读剩下的几千张，必须交织，
+      // 否则用户要盯着旧快照一动不动地等到元数据读完。
+      // 反过来 `!interleave` 就等价于「整份命中缓存」，循环里不会有 USB 调用。
+      const interleave = !fullReuse;
+      const chunkSize = interleave ? SCAN_CHUNK : handles.length;
+      if (interleave) {
+        // 相机 handle 基本按拍摄顺序递增，从后往前读：画廊顶部（最新）那几行最先有图。
+        handles.reverse();
+        this.scanPhaseText = L10n.tr('camera_phase_loading_photos');
+      }
+
+      let processed = 0;
+      let lastPersisted = 0;
+      while (processed < handles.length) {
+        const chunkEnd = Math.min(processed + chunkSize, handles.length);
+        for (; processed < chunkEnd; processed++) {
+          const h = handles[processed];
+          let entry: PhotoEntry | null = null;
+          const cached = reuseMeta.get(h);
+          if (cached) {
+            entry = cached;
+            reused++;
+          } else {
+            try {
+              const infoStart = Date.now();
+              const info = await this.session.getObjectInfo(h);
+              this.statInfoMs += Date.now() - infoStart;
+              this.statInfoCount++;
+              if (info) {
+                entry = {
+                  handle: h,
+                  filename: info.filename,
+                  size: info.objectCompressedSize,
+                  objectFormat: info.objectFormat,
+                  captureDate: info.captureDate || '',
+                  modificationDate: info.modificationDate || '',
+                  imagePixWidth: info.imagePixWidth || 0,
+                  imagePixHeight: info.imagePixHeight || 0,
+                  storageId: info.storageId || 0
+                };
+                fetched++;
+              }
+            } catch (err) {
+              // 单张失败（相机可能在扫描途中删了文件）不打断整轮扫描。
+              infoFailed++;
+              if (infoFailed <= 3) {
+                this.log.add(`元数据失败 handle=0x${h.toString(16)}: ${(err as Error).message}`);
+              }
             }
           }
+          if (entry) {
+            photoList.push(entry);
+            validCacheKeys.add(`${entry.filename}::${entry.size}`);
+          }
+          this.scanProgress = processed + 1;
         }
-        if (entry) {
-          photoList.push(entry);
-          validCacheKeys.add(`${entry.filename}::${entry.size}`);
-        }
-        this.scanProgress = i + 1;
 
-        if (progressive && (i + 1) % METADATA_BATCH_SIZE === 0 && photoList.length > 0) {
-          this.publishPhotoList(photoList);
+        if (interleave) {
+          // 已有缓存快照时列表「只增不减」：否则画廊会先缩到 64 张再慢慢长回去。
+          // 冷启动（photos 为空）时这条恒成立，行为与之前一致。
+          if (photoList.length >= this.photos.length) {
+            this.publishPhotoList(photoList);
+          }
+          // 先把这一批的缩略图取回来，再读下一批元数据。总时长不变，
+          // 但首屏不用等 1285 张元数据全部读完（真机实测那要 28s）。
+          await this.loadThumbnailsRowByRow(validCacheKeys, false, false);
+          this.scanTotal = handles.length;
+          this.scanProgress = processed;
+
+          // 断点续扫：每读 256 张就把已完成的条目落盘（complete=false）。
+          // 应用被杀 / 退后台被回收 / 扫描失败时，下次全量扫描能从这里接着走。
+          if (this.cameraIdentity && this.cachingEnabled &&
+              fetched > 0 && processed - lastPersisted >= SCAN_PERSIST_EVERY) {
+            this.saveMetadataCache(photoList, false);
+            lastPersisted = processed;
+          }
         }
       }
 
@@ -1605,22 +1766,30 @@ export class CameraService {
       }
       this.cleanupStaleMemoryCache(validHandles);
 
-      // Persist metadata cache for next quick scan
-      if (this.cameraIdentity && this.cachingEnabled) {
-        this.saveMetadataCache(photoList);
+      // 元数据读完了，但缩略图可能还没取完：先按“未完成”落盘，
+      // 缩略图全取完再改成 complete=true。整份复用缓存时不重写（内容没变）。
+      if (this.cameraIdentity && this.cachingEnabled && fetched > 0) {
+        this.saveMetadataCache(photoList, false);
       }
 
       this.log.add(`元数据获取完成: ${photoList.length} 张` +
         `（复用 ${reused} / 读取 ${fetched} / 失败 ${infoFailed}）`);
 
-      // ---- Phase 2b: load thumbnails, row by row ----
-      this.scanPhaseText = L10n.tr('camera_phase_thumbnails');
-      this.statusText = L10n.tr('camera_phase_loading_thumbnails');
-      await this.loadThumbnailsRowByRow(validCacheKeys);
+      // ---- Phase 2b: 缩略图 ----
+      if (interleave) {
+        // 交织模式下每批都已取过图，这里只做最后的发布与缓存收尾。
+        await this.loadThumbnailsRowByRow(validCacheKeys, true, false);
+        this.scanProgress = handles.length;
+      } else {
+        this.scanPhaseText = L10n.tr('camera_phase_thumbnails');
+        this.statusText = L10n.tr('camera_phase_loading_thumbnails');
+        await this.loadThumbnailsRowByRow(validCacheKeys);
+      }
 
       // 缩略图阶段才拿到的方向/尺寸回写元数据缓存：下次快速扫描连 16KB EXIF 头都不用读。
+      // 这一步同时把缓存标记为 complete=true，下一次全量扫描就不会误走断点续扫。
       if (this.cameraIdentity && this.cachingEnabled) {
-        this.saveMetadataCache(this.photos);
+        this.saveMetadataCache(this.photos, true);
       }
 
       // Compute scan stats for UI display
@@ -1632,6 +1801,7 @@ export class CameraService {
       }
 
       this.log.add('缩略图加载完成');
+      this.logScanTiming();
 
       this.statusText = L10n.tr('camera_status_photo_count',
         L10n.plural('photo_count', this.photoCount, this.photoCount));
@@ -1650,6 +1820,7 @@ export class CameraService {
       this.scanStatsText = '';
       return false;
     } finally {
+      setPtpQuietOps(false);
       this.scanProgress = 0;
       this.scanTotal = 0;
     }
@@ -1672,21 +1843,35 @@ export class CameraService {
   }
 
   /**
-   * 快速扫描可复用的元数据。返回空 Map 表示这次必须全量读取。
-   * `loadMetadataCache()` 会顺带填充 `metadataCacheByHandle` 与写入时间。
+   * 可复用的元数据。返回空 Map 表示这次必须逐张读。
+   *
+   * 两条路径：
+   * - **快速扫描**：缓存（7 天有效期）整份复用，只对新增 handle 读；
+   * - **全量扫描**：只有当上一轮扫描**没跑完**（`complete=false`，24 小时内）才断点续扫，
+   *   复用已读到的条目。跑完过的缓存不参与全量扫描，保持“全量＝重读一遍”的语义。
    */
   private prepareMetadataReuse(quickMode: boolean): Map<number, PhotoEntry> {
-    if (!quickMode || !this.cachingEnabled || !this.cameraIdentity) {
+    if (!this.cachingEnabled || !this.cameraIdentity) {
       return new Map<number, PhotoEntry>();
     }
     const entries = this.loadMetadataCache();
     if (!entries || entries.length === 0) {
       return new Map<number, PhotoEntry>();
     }
-    if (this.metadataCacheSavedAt <= 0 ||
-        Date.now() - this.metadataCacheSavedAt > METADATA_REUSE_MAX_AGE_MS) {
-      this.log.add('元数据缓存超过有效期，本次全量重读');
+    if (!quickMode && this.metadataCacheComplete) {
+      // 上一次扫描完整跑完：全量扫描就是要重读，不复用。
       return new Map<number, PhotoEntry>();
+    }
+    const maxAge = quickMode ? METADATA_REUSE_MAX_AGE_MS : RESUME_MAX_AGE_MS;
+    if (this.metadataCacheSavedAt <= 0 ||
+        Date.now() - this.metadataCacheSavedAt > maxAge) {
+      this.log.add('元数据缓存超过有效期，本次重新读取');
+      return new Map<number, PhotoEntry>();
+    }
+    if (!this.metadataCacheComplete) {
+      // 断点续扫：快速扫描也会走这条路（半份缓存），所以不能按扫描模式判断。
+      const minutes = Math.max(1, Math.round((Date.now() - this.metadataCacheSavedAt) / 60000));
+      this.log.add(`断点续扫: 上次扫描未完成，复用 ${entries.length} 条元数据（${minutes} 分钟前保存）`);
     }
     return this.metadataCacheByHandle;
   }
@@ -1706,15 +1891,23 @@ export class CameraService {
     if (cachedMeta.size === 0 || handles.length === 0) {
       return false;
     }
-    const probed: number[] = [];
-    const step = Math.max(1, Math.floor(handles.length / METADATA_REUSE_PROBE));
-    for (let i = 0; i < handles.length && probed.length < METADATA_REUSE_PROBE; i += step) {
-      if (cachedMeta.has(handles[i])) {
-        probed.push(handles[i]);
+    // 从「缓存里真的有」的 handle 中均匀抽样。断点续扫时缓存只覆盖一部分 handle，
+    // 若按全部 handle 抽样，命中率可能低到 1 个甚至 0 个（0 个会直接放弃复用，
+    // 白白丢掉续扫进度）。
+    const present: number[] = [];
+    for (const h of handles) {
+      if (cachedMeta.has(h)) {
+        present.push(h);
       }
     }
-    if (probed.length === 0) {
+    if (present.length === 0) {
+      this.log.add('元数据缓存与相机不匹配：缓存里的 handle 都不在相机上，本次全量重读');
       return false;
+    }
+    const probed: number[] = [];
+    const step = Math.max(1, Math.floor(present.length / METADATA_REUSE_PROBE));
+    for (let i = 0; i < present.length && probed.length < METADATA_REUSE_PROBE; i += step) {
+      probed.push(present[i]);
     }
     for (const h of probed) {
       const cached = cachedMeta.get(h)!;
@@ -1750,7 +1943,9 @@ export class CameraService {
    * 每行在自己的 4 张都完成后才递增 `thumbnailVersion`，所以视觉上仍是整行出现。
    */
   private async loadThumbnailsRowByRow(
-    validCacheKeys: Set<string>
+    validCacheKeys: Set<string>,
+    finalize: boolean = true,
+    manageProgress: boolean = true
   ): Promise<void> {
     const photos = this.photos;
     if (photos.length === 0) return;
@@ -1792,10 +1987,11 @@ export class CameraService {
       rowRemaining[Math.floor(i / rowWidth)]++;
     }
 
-    this.thumbDecoded = 0;
-    this.scanProgress = 0;
-    this.scanTotal = photos.length;
-    this.lastDecodedHandle = -1;
+    if (manageProgress) {
+      this.scanProgress = 0;
+      this.scanTotal = photos.length;
+      this.lastDecodedHandle = -1;
+    }
 
     let completed = 0;
     let lastProgressAt = Date.now();
@@ -1857,11 +2053,18 @@ export class CameraService {
         }
         const photo = photos[i];
         const cached = cachedEntries[i];
+        const cacheKey = `${photo.filename}::${photo.size}`;
         try {
           if (cached) {
-            await this.loadCachedThumbnail(photo.handle, cached);
+            const ok = await this.loadCachedThumbnail(photo.handle, cacheKey, cached);
+            if (!ok) {
+              // manifest 里的条目指向的文件已经不在了（例如「缓存管理」刚清过缓存）。
+              // 必须回退到 USB，否则这张会永远停在占位符。
+              this.thumbCacheFallback++;
+              await this.loadSingleThumbnail(photo, cacheKey, photo.modificationDate || '');
+            }
           } else {
-            await this.loadSingleThumbnail(photo, `${photo.filename}::${photo.size}`,
+            await this.loadSingleThumbnail(photo, cacheKey,
               photo.modificationDate || '');
           }
         } finally {
@@ -1878,12 +2081,20 @@ export class CameraService {
     await Promise.all(workers);
 
     // 断连时 worker 会提前退出，不要把进度条补满成“已完成”。
-    this.scanProgress = this.connected ? photos.length : completed;
+    if (manageProgress) {
+      this.scanProgress = this.connected ? photos.length : completed;
+    }
 
-    this.log.add(`缩略图阶段: 磁盘命中 ${cacheHits} / USB 读取 ${usbLoads} / 解码成功 ${this.thumbDecoded}`);
+    this.thumbCacheHits += cacheHits;
+    this.thumbUsbLoads += usbLoads;
+    if (finalize) {
+      this.log.add(`缩略图阶段: 磁盘命中 ${this.thumbCacheHits} / USB 读取 ${this.thumbUsbLoads}` +
+        ` / 解码成功 ${this.thumbDecoded}` +
+        `${this.thumbCacheFallback > 0 ? ` / 缓存失效回退 ${this.thumbCacheFallback}` : ''}`);
+    }
 
-    // Phase 2b complete: final cleanup
-    if (this.cachingEnabled) {
+    // Phase 2b complete: final cleanup（交织模式下每批都调，收尾只做一次）
+    if (finalize && this.cachingEnabled) {
       await this.thumbCache.flush();
       if (validCacheKeys.size > 0) {
         const purged = await this.thumbCache.purgeStale(validCacheKeys);
@@ -1912,13 +2123,16 @@ export class CameraService {
   ): Promise<void> {
     try {
       const h = photo.handle;
+      const thumbStart = Date.now();
       const thumbData = await this.session.getThumb(h);
+      this.statThumbMs += Date.now() - thumbStart;
+      this.statThumbCount++;
       if (!thumbData || thumbData.length === 0) {
         this.log.add(`[NO_THUMB] handle=0x${h.toString(16)} ${photo.filename}`);
         return;
       }
 
-      // 方向：元数据缓存 → 本次扫描已解析 → 读 EXIF 头
+      // 方向：元数据缓存 → 本次扫描已解析 → 缩略图自带 EXIF → 读原图 EXIF 头
       let orient: OrientationTransform | null = null;
       if (photo.exifRotate !== undefined && photo.exifFlipH !== undefined &&
           photo.exifFlipV !== undefined) {
@@ -1934,7 +2148,31 @@ export class CameraService {
         dim = new OrientedSize(photo.imagePixWidth, photo.imagePixHeight);
       }
 
-      if (orient === null || dim === null) {
+      // 缩略图 JPEG 常常原样带着原图的 EXIF，能直接读到方向。
+      // 省掉一次 GetPartialObject 就是省掉每张一次 USB 往返（实测 15–30ms）。
+      let thumbOrient: OrientationTransform | null = null;
+      if (orient === null && this.thumbExifTrust !== 0) {
+        thumbOrient = await CameraService.readThumbOrientation(thumbData);
+        if (thumbOrient === null) {
+          this.thumbExifMissing++;
+          if (this.thumbExifSamples === 0 && this.thumbExifMissing >= 8) {
+            this.thumbExifTrust = 0;
+            this.log.add('缩略图不带 EXIF 方向，继续逐张读原图 EXIF 头');
+          }
+        } else if (this.thumbExifTrust === 1) {
+          orient = thumbOrient;
+        }
+      }
+
+      // 还要不要读原图 16KB：
+      //   尺寸未知 → 必须读（读不到原始比例，缩略图的黑边就裁不掉）
+      //   方向未知 → 必须读
+      //   验证期且缩略图给了方向 → 也要读一次，用原图方向做真值比对
+      const verifying = thumbOrient !== null && this.thumbExifTrust === null;
+      const needPartial = dim === null || orient === null || verifying;
+
+      if (needPartial) {
+        const exifStart = Date.now();
         let partial: Uint8Array | null = null;
         try {
           partial = await this.session.getPartialObject(h, 0, 16384);
@@ -1942,10 +2180,16 @@ export class CameraService {
           // 相机不支持 GetPartialObject 时不该让整张缩略图失败
           this.log.add(`[EXIF] handle=0x${h.toString(16)} 读取失败: ${(err as Error).message}`);
         }
+        this.statExifMs += Date.now() - exifStart;
+        this.statExifCount++;
         if (partial && partial.length > 0) {
           try {
             if (orient === null) {
-              orient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
+              const origOrient = await this.getOrientation(h, partial.buffer as ArrayBuffer);
+              orient = origOrient;
+              if (verifying) {
+                this.trackThumbExif(origOrient, thumbOrient!);
+              }
             }
             if (dim === null) {
               dim = CameraService.parseExifDims(partial.buffer as ArrayBuffer);
@@ -1999,7 +2243,7 @@ export class CameraService {
       const modDate = entry.modificationDate || '';
       const cached = this.thumbCache.findCached(key, modDate);
       if (cached) {
-        cacheLoads.push(this.loadCachedThumbnail(entry.handle, cached));
+        cacheLoads.push(this.loadCachedThumbnail(entry.handle, key, cached).then(() => {}));
       }
     }
 
@@ -2021,6 +2265,8 @@ export class CameraService {
       const rawEntries = raw['entries'] as PhotoEntry[] | undefined;
       const savedAt = raw['savedAt'] as number;
       this.metadataCacheSavedAt = typeof savedAt === 'number' ? savedAt : 0;
+      // 旧文件没有 complete 字段，按“已完成”处理。
+      this.metadataCacheComplete = raw['complete'] !== false;
       this.metadataCacheByHandle = new Map<number, PhotoEntry>();
       if (rawEntries) {
         for (const entry of rawEntries) {
@@ -2038,22 +2284,26 @@ export class CameraService {
   }
 
   /** Persist PhotoEntry[] to metadata_cache.json */
-  private saveMetadataCache(entries: PhotoEntry[]): void {
+  private saveMetadataCache(entries: PhotoEntry[], complete: boolean = true): void {
     if (!this.cameraIdentity) return;
     try {
       fileIo.mkdirSync(this.thumbCache.getCacheDir(), true);
     } catch (_e) { /* best effort */ }
     try {
       const path = this.thumbCache.getCacheDir() + '/metadata_cache.json';
-      const text = JSON.stringify({ version: 2, savedAt: Date.now(), entries: entries });
+      // `complete=false` 表示这轮扫描还没跑完：下次全量扫描据它决定是否断点续扫。
+      // 扫描结束时再写一次 `complete=true`，从此刻起缓存只用于快速扫描的复用。
+      const text = JSON.stringify({ version: 2, savedAt: Date.now(), complete: complete, entries: entries });
       AtomicFile.writeText(path, text);
+      this.metadataCacheComplete = complete;
       // 同步内存索引，让同一进程内下一次快速扫描也能复用。
       this.metadataCacheByHandle = new Map<number, PhotoEntry>();
       for (const entry of entries) {
         this.metadataCacheByHandle.set(entry.handle, entry);
       }
       this.metadataCacheSavedAt = Date.now();
-      this.log.add(`元数据缓存已保存: ${entries.length} 条`);
+      this.log.add(`元数据缓存已保存: ${entries.length} 条` +
+        `${complete ? '' : '（扫描未完成，可续扫）'}`);
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'saveMetadataCache failed: %{public}s', JSON.stringify(err));
     }
@@ -2082,6 +2332,72 @@ export class CameraService {
     }
   }
 
+  /**
+   * 从 GetThumb 返回的 JPEG 里读 EXIF 方向。
+   *
+   * 相机没写 EXIF、或属性为空时返回 `null`，调用方回退到「读原图 16KB」。
+   * 这里只解析元数据、不解码像素，单张约 1ms。
+   */
+  private static async readThumbOrientation(data: Uint8Array): Promise<OrientationTransform | null> {
+    try {
+      const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      const src = image.createImageSource(buf);
+      try {
+        const raw = await src.getImageProperty(image.PropertyKey.ORIENTATION);
+        if (!raw) return null;
+        return CameraService.mapExifOrientation(raw);
+      } finally {
+        try { src.release(); } catch (_e) { /* best effort */ }
+      }
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
+   * 缩略图 EXIF 方向的取样比对。
+   *
+   * 只要出现一次不一致，就永久判为不可信（本会话），后续继续逐张读原图；
+   * 样本够多且包含竖拍（rotate≠0 或 flip）才敢切换，否则“全是横拍”的
+   * 全部一致无法证明什么。
+   */
+  private trackThumbExif(orig: OrientationTransform, thumb: OrientationTransform): void {
+    const same = orig.rotate === thumb.rotate && orig.flipH === thumb.flipH &&
+      orig.flipV === thumb.flipV;
+    this.thumbExifSamples++;
+    if (!same) {
+      this.thumbExifMismatch++;
+      if (this.thumbExifTrust !== 0) {
+        this.thumbExifTrust = 0;
+        this.log.add(`缩略图EXIF方向与原图不一致（原图 ${orig.rotate}/${orig.flipH}/${orig.flipV}，` +
+          `缩略图 ${thumb.rotate}/${thumb.flipH}/${thumb.flipV}），继续读原图 EXIF`);
+      }
+      return;
+    }
+    if (orig.rotate !== 0 || orig.flipH || orig.flipV) {
+      this.thumbExifPortrait++;
+    }
+    if (this.thumbExifTrust === null && this.thumbExifSamples >= 12 && this.thumbExifPortrait >= 3) {
+      this.thumbExifTrust = 1;
+      this.log.add(`缩略图EXIF方向可信：${this.thumbExifSamples} 个样本（竖拍 ${this.thumbExifPortrait}）` +
+        `全部一致，后续跳过 GetPartialObject`);
+    }
+  }
+
+  /** 把本轮的阶段耗时汇总成一行日志，用来判断下一次该优化哪一段。 */
+  private logScanTiming(): void {
+    const avg = (ms: number, n: number): string => n > 0 ? `${Math.round(ms / n)}` : '-';
+    this.log.add(`扫描耗时: 遍历 ${this.statWalkMs}ms | ` +
+      `元数据 ${this.statInfoMs}ms/${this.statInfoCount}张(均${avg(this.statInfoMs, this.statInfoCount)}ms) | ` +
+      `缩略图USB ${this.statThumbMs}ms/${this.statThumbCount}张(均${avg(this.statThumbMs, this.statThumbCount)}ms) | ` +
+      `EXIF头 ${this.statExifMs}ms/${this.statExifCount}次(均${avg(this.statExifMs, this.statExifCount)}ms) | ` +
+      `落盘 ${this.statSaveMs}ms | 解码 ${this.statDecodeMs}ms`);
+    const trustText = this.thumbExifTrust === 1 ? '可信（已跳过读原图）'
+      : this.thumbExifTrust === 0 ? '不可信（继续读原图）' : '样本不足';
+    this.log.add(`缩略图EXIF方向: ${trustText} / 样本 ${this.thumbExifSamples} ` +
+      `/ 竖拍 ${this.thumbExifPortrait} / 不一致 ${this.thumbExifMismatch} / 无EXIF ${this.thumbExifMissing}`);
+  }
+
   private async decodeThumbnail(
     handle: number,
     data: Uint8Array,
@@ -2097,9 +2413,11 @@ export class CameraService {
       //    按 manifest 里的 rotate/flip/origWidth/origHeight 再裁一次即可。
       //    这样就少了每张一次的 ImagePacker 编码 + 覆盖写（ISSUE-007）。
       if (this.cachingEnabled && cacheKey && modDate) {
+        const saveStart = Date.now();
         await this.thumbCache.saveRawThumbnail(cacheKey, modDate, data, handle,
           orient?.rotate ?? 0, orient?.flipH ?? false, orient?.flipV ?? false,
           exifDim?.w, exifDim?.h);
+        this.statSaveMs += Date.now() - saveStart;
       }
 
       // 为 TaskPool 复制一份 ArrayBuffer（源数据不会被缓存，直接转移所有权）
@@ -2116,7 +2434,9 @@ export class CameraService {
       );
 
       try {
+        const decodeStart = Date.now();
         const pixelMap = await taskpool.execute(task) as image.PixelMap;
+        this.statDecodeMs += Date.now() - decodeStart;
         const info = await pixelMap.getImageInfo();
         this.thumbnailPixelMapMap.set(handle, pixelMap);
         this.orientedDisplaySizes.set(handle, new OrientedSize(info.size.width, info.size.height));
@@ -2566,10 +2886,25 @@ export class CameraService {
     this.lastDecodedHandle = -1;
     this.metadataCacheByHandle.clear();
     this.metadataCacheSavedAt = 0;
+    this.resetSessionCapabilities();
     this.clearFullCache();
     this.thumbCache.close();
     this.statusText = L10n.tr('camera_status_disconnected');
     this.log.add('已断开连接');
+  }
+
+  /**
+   * 换相机/断线时清掉「这台相机学到的能力」：换一台相机后，
+   * 上一台的 GetObjectPropList 支持情况、缩略图 EXIF 可信度都不再成立。
+   */
+  private resetSessionCapabilities(): void {
+    this.deviceOps = [];
+    this.propListProbed = false;
+    this.thumbExifTrust = null;
+    this.thumbExifSamples = 0;
+    this.thumbExifPortrait = 0;
+    this.thumbExifMismatch = 0;
+    this.thumbExifMissing = 0;
   }
 
   /**
@@ -2712,12 +3047,22 @@ export class CameraService {
   /**
    * Load a thumbnail from the disk-based ThumbnailCache.
    * Used instead of USB GetThumb when a valid cache entry exists.
+   *
+   * @returns true 表示已经从磁盘画出缩略图；false 表示这条缓存已失效
+   *          （文件被删/读不出来），调用方必须回退到 USB 取图。
    */
-  private async loadCachedThumbnail(handle: number, entry: CacheEntry): Promise<void> {
+  private async loadCachedThumbnail(handle: number, key: string,
+    entry: CacheEntry): Promise<boolean> {
     try {
       const filePath = this.thumbCache.getCacheDir() + '/' + entry.cacheFileName;
       const fileBuf: ArrayBuffer | null = await this.thumbCache.readFileToBuffer(filePath);
-      if (!fileBuf) return;
+      if (!fileBuf) {
+        // manifest 说命中、磁盘上却没有：把这条记录摘掉，避免下次扫描继续“命中”它。
+        this.thumbCache.invalidate(key);
+        hilog.info(DOMAIN, TAG, '[CACHE_HIT] stale entry handle=0x%{public}s',
+          handle.toString(16));
+        return false;
+      }
 
       // A `corrected` entry already has rotate/flip/crop baked into the JPEG.
       // Anything else is the raw camera thumbnail: apply the recorded EXIF
@@ -2739,10 +3084,13 @@ export class CameraService {
       this.thumbnailLoadedSet.add(handle);
       hilog.info(DOMAIN, TAG, '[CACHE_HIT] handle=0x%{public}s %{public}dx%{public}d',
         handle.toString(16), info.size.width, info.size.height);
+      return true;
     } catch (err) {
       hilog.error(DOMAIN, TAG, '[CACHE_HIT] FAIL handle=0x%{public}s err=%{public}s',
         handle.toString(16), JSON.stringify(err));
       this.log.add(`缓存加载失败: handle=0x${handle.toString(16)}`);
+      this.thumbCache.invalidate(key);
+      return false;
     }
   }
 

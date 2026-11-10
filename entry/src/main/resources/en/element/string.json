@@ -145,6 +145,10 @@
       "value": "Fetching metadata…"
     },
     {
+      "name": "camera_phase_loading_photos",
+      "value": "Loading photos..."
+    },
+    {
       "name": "camera_phase_thumbnails",
       "value": "Loading thumbnails"
     },

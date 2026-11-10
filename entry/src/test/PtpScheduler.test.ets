@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import usbManager from '@ohos.usbManager';
-import { PtpPriority, type PtpTransport, type DeviceInfo, type ObjectInfo } from '../main/ets/pages/PtpHost';
+import { PtpPriority, type PtpTransport, type DeviceInfo, type ObjectInfo,
+  type ObjectPropEntry, type ObjectPropList } from '../main/ets/pages/PtpHost';
 import { PtpScheduler } from '../main/ets/services/PtpScheduler';
 
 /**
@@ -51,6 +52,15 @@ class FakeTransport implements PtpTransport {
   async getPartialObject(_handle: number, _offset: number, _maxBytes: number,
     _priority?: PtpPriority): Promise<Uint8Array | null> {
     return new Uint8Array(0);
+  }
+
+  async getObjectPropList(_objectHandle: number, _formatCode: number, _propertyCode: number,
+    _groupCode: number, _depth: number, _priority?: PtpPriority): Promise<ObjectPropList> {
+    const objects: ObjectPropEntry[] = [];
+    const list: ObjectPropList = {
+      objects: objects, codes: [], declared: 0, complete: false, bytes: 0, head: ''
+    };
+    return list;
   }
 
   async closeSessionAndPipe(_priority?: PtpPriority): Promise<void> {

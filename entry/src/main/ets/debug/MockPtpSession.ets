@@ -1,7 +1,8 @@
 import usbManager from '@ohos.usbManager';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MockPtpDevice, MOCK_ROOT } from './MockPtpDevice';
-import type { DeviceInfo, ObjectInfo, PtpTransport } from '../pages/PtpHost';
+import type { DeviceInfo, ObjectInfo, ObjectPropEntry, ObjectPropList,
+  PtpTransport } from '../pages/PtpHost';
 
 const TAG = 'MockPtpSession';
 const DOMAIN = 0x0000;
@@ -87,6 +88,20 @@ export class MockPtpSession implements PtpTransport {
     const end = Math.min(bytes.length, offset + maxBytes);
     if (offset >= bytes.length) return new Uint8Array(0);
     return bytes.slice(offset, end);
+  }
+
+  /**
+   * 虚拟相机不支持 GetObjectPropList：真实相机不支持时也是同一个语义
+   * （抛出带响应码的错误），这里抛 0x2005，让扫描走降级路径。
+   */
+  async getObjectPropList(_objectHandle: number, _formatCode: number, _propertyCode: number,
+    _groupCode: number, _depth: number): Promise<ObjectPropList> {
+    await delay(30);
+    const entries: ObjectPropEntry[] = [];
+    const list: ObjectPropList = {
+      objects: entries, codes: [], declared: 0, complete: false, bytes: 0, head: ''
+    };
+    return list;
   }
 
   async closeSessionAndPipe(): Promise<void> {

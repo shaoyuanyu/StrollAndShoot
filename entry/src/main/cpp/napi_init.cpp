@@ -95,6 +95,16 @@ static napi_value MakeDeviceInfoObj(napi_env env, const PTPDeviceInfo& di) {
     setStr("model", di.Model);
     setStr("deviceVersion", di.DeviceVersion);
     setStr("serialNumber", di.SerialNumber);
+    // 相机自报支持的操作码。扫描用它判断 GetObjectPropList(0x9805) 要不要试，
+    // 不必为“探测一次不支持的操作”付一次 USB 往返。
+    napi_value ops;
+    napi_create_array_with_length(env, di.OperationsSupported.size(), &ops);
+    for (size_t i = 0; i < di.OperationsSupported.size(); i++) {
+        napi_value v;
+        napi_create_uint32(env, di.OperationsSupported[i], &v);
+        napi_set_element(env, ops, i, v);
+    }
+    napi_set_named_property(env, obj, "operationsSupported", ops);
     return obj;
 }
 
@@ -224,6 +234,22 @@ static napi_value BuildGetPartialObject(napi_env env, napi_callback_info info) {
     return MakeUint8Array(env, data);
 }
 
+static napi_value BuildGetObjectPropList(napi_env env, napi_callback_info info) {
+    size_t argc = 5;
+    napi_value args[5] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    uint32_t objectHandle = 0xFFFFFFFF, formatCode = 0, propertyCode = 0xFFFFFFFF;
+    uint32_t groupCode = 0, depth = 0xFFFFFFFF;
+    if (argc > 0) napi_get_value_uint32(env, args[0], &objectHandle);
+    if (argc > 1) napi_get_value_uint32(env, args[1], &formatCode);
+    if (argc > 2) napi_get_value_uint32(env, args[2], &propertyCode);
+    if (argc > 3) napi_get_value_uint32(env, args[3], &groupCode);
+    if (argc > 4) napi_get_value_uint32(env, args[4], &depth);
+    auto data = g_engine.buildGetObjectPropList(objectHandle, formatCode, propertyCode,
+                                                groupCode, depth);
+    return MakeUint8Array(env, data);
+}
+
 // ---- Response processor ----
 
 static napi_value ProcessResponse(napi_env env, napi_callback_info info) {
@@ -324,6 +350,70 @@ static napi_value ParseObjectInfo(napi_env env, napi_callback_info info) {
     return MakeObjectInfoObj(env, obj);
 }
 
+static napi_value ParseObjectPropList(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    auto raw = GetUint8Array(env, args[0]);
+    auto list = PTPEngine::parseObjectPropList(raw.data(), raw.size());
+
+    napi_value result;
+    napi_create_object(env, &result);
+
+    napi_value objs;
+    napi_create_array_with_length(env, list.Objects.size(), &objs);
+    for (size_t i = 0; i < list.Objects.size(); i++) {
+        const PTPObjectPropEntry& e = list.Objects[i];
+        napi_value o;
+        napi_create_object(env, &o);
+        auto setU32 = [&](const char* key, uint32_t val) {
+            napi_value v;
+            napi_create_uint32(env, val, &v);
+            napi_set_named_property(env, o, key, v);
+        };
+        auto setStr = [&](const char* key, const std::string& val) {
+            napi_value v;
+            napi_create_string_utf8(env, val.c_str(), NAPI_AUTO_LENGTH, &v);
+            napi_set_named_property(env, o, key, v);
+        };
+        setU32("handle", e.Handle);
+        setU32("format", e.Format);
+        setU32("size", e.Size);
+        setU32("parent", e.Parent);
+        setStr("filename", e.Filename);
+        setStr("dateCreated", e.DateCreated);
+        setStr("dateModified", e.DateModified);
+        napi_set_element(env, objs, i, o);
+    }
+    napi_set_named_property(env, result, "objects", objs);
+    napi_set_named_property(env, result, "codes", MakeU32Array(env, list.PropCodes));
+
+    napi_value declared;
+    napi_create_uint32(env, list.Declared, &declared);
+    napi_set_named_property(env, result, "declared", declared);
+
+    napi_value complete;
+    napi_get_boolean(env, list.Complete, &complete);
+    napi_set_named_property(env, result, "complete", complete);
+
+    napi_value bytes;
+    napi_create_uint32(env, static_cast<uint32_t>(raw.size()), &bytes);
+    napi_set_named_property(env, result, "bytes", bytes);
+
+    // 数据段开头 32 字节的 hex：解析失败时用来判断相机到底回了什么格式。
+    static const char* kHex = "0123456789abcdef";
+    std::string head;
+    size_t headLen = raw.size() < 32 ? raw.size() : 32;
+    for (size_t i = 0; i < headLen; i++) {
+        head.push_back(kHex[(raw[i] >> 4) & 0xF]);
+        head.push_back(kHex[raw[i] & 0xF]);
+    }
+    napi_value headValue;
+    napi_create_string_utf8(env, head.c_str(), NAPI_AUTO_LENGTH, &headValue);
+    napi_set_named_property(env, result, "head", headValue);
+    return result;
+}
+
 // ---- Module init ----
 
 EXTERN_C_START
@@ -338,11 +428,13 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"buildGetThumb",    nullptr, BuildGetThumb,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"buildGetObject",   nullptr, BuildGetObject,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"buildGetPartialObject", nullptr, BuildGetPartialObject, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"buildGetObjectPropList", nullptr, BuildGetObjectPropList, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"processResponse",    nullptr, ProcessResponse,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseDeviceInfo",    nullptr, ParseDeviceInfo,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseStorageIDs",    nullptr, ParseStorageIDs,    nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseObjectHandles", nullptr, ParseObjectHandles, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"parseObjectInfo",    nullptr, ParseObjectInfo,    nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"parseObjectPropList", nullptr, ParseObjectPropList, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
     return exports;

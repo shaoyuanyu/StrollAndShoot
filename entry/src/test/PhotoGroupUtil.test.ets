@@ -57,7 +57,24 @@ export default function photoGroupUtilTest() {
       expect(groups[0].allPhotos.length).assertEqual(2);
     });
 
-    it('分组按拍摄时间倒序，时间相同按 basename 排序', 0, () => {
+    it('内容优先：同一秒的连拍按 basename 降序，整条列表单调', 0, () => {
+      // 相机时间戳只到秒，连拍会有多张落在同一秒（Z50_2 实测 1288 个文件只有 360 个时间）。
+      // 兜底键必须与整体方向一致（降序），否则会出现 4479 → 4477 → 4478 这种来回跳。
+      const photos: PhotoEntry[] = [
+        photo(1, 'DSC_4477.JPG', '20260101T100000'),
+        photo(2, 'DSC_4478.JPG', '20260101T100000'),
+        photo(3, 'DSC_4479.JPG', '20260101T100000'),
+        photo(4, 'DSC_4476.JPG', '20260101T095959')
+      ];
+      const groups: DisplayGroup[] = groupPhotosByBasename(photos);
+      expect(groups.length).assertEqual(4);
+      expect(groups[0].basename).assertEqual('DSC_4479');
+      expect(groups[1].basename).assertEqual('DSC_4478');
+      expect(groups[2].basename).assertEqual('DSC_4477');
+      expect(groups[3].basename).assertEqual('DSC_4476');
+    });
+
+    it('分组按拍摄时间倒序', 0, () => {
       const photos: PhotoEntry[] = [
         photo(1, 'A.JPG', '20260101T100000'),
         photo(2, 'C.JPG', '20260103T100000'),

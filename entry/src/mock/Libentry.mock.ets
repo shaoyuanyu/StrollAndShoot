@@ -18,6 +18,26 @@ interface MockDeviceInfo {
   model: string;
   deviceVersion: string;
   serialNumber: string;
+  operationsSupported: number[];
+}
+
+interface MockObjectPropEntry {
+  handle: number;
+  format: number;
+  size: number;
+  parent: number;
+  filename: string;
+  dateCreated: string;
+  dateModified: string;
+}
+
+interface MockObjectPropList {
+  objects: MockObjectPropEntry[];
+  codes: number[];
+  declared: number;
+  complete: boolean;
+  bytes: number;
+  head: string;
 }
 
 interface MockObjectInfo {
@@ -48,6 +68,9 @@ const NativeMock: Record<string, Object> = {
     new Uint8Array([16,0,0,0, 1,0, 0x0A,0x10, 0,0,0,0, 0,0,0,0]),
   'buildGetObject': (_h: number): Uint8Array =>
     new Uint8Array([16,0,0,0, 1,0, 9,0x10, 0,0,0,0, 0,0,0,0]),
+  'buildGetObjectPropList': (_h: number): Uint8Array =>
+    new Uint8Array([32,0,0,0, 1,0, 5,0x98, 0,0,0,0,
+      0xFF,0xFF,0xFF,0xFF, 0,0,0,0, 0xFF,0xFF,0xFF,0xFF, 0,0,0,0, 0xFF,0xFF,0xFF,0xFF]),
   'processResponse': (_data: Uint8Array, _expect: boolean): MockProcessResult => {
     const ok: MockProcessResult = { action: 2, responseCode: 0x2001 };
     return ok;
@@ -56,7 +79,8 @@ const NativeMock: Record<string, Object> = {
     const info: MockDeviceInfo = {
       manufacturer: 'MockCam', model: 'Mock PTP', deviceVersion: '1.0',
       serialNumber: 'MOCK', vendorExtensionID: 0, standardVersion: 100,
-      vendorExtensionVersion: 0, vendorExtensionDesc: '', functionalMode: 0
+      vendorExtensionVersion: 0, vendorExtensionDesc: '', functionalMode: 0,
+      operationsSupported: [0x1001, 0x1002, 0x1003, 0x1004, 0x1007, 0x1008, 0x1009, 0x100A]
     };
     return info;
   },
@@ -69,6 +93,13 @@ const NativeMock: Record<string, Object> = {
       captureDate: '20250101T000000', modificationDate: '20250101T000000'
     };
     return obj;
+  },
+  'parseObjectPropList': (_data: Uint8Array): MockObjectPropList => {
+    const objects: MockObjectPropEntry[] = [];
+    const list: MockObjectPropList = {
+      objects: objects, codes: [], declared: 0, complete: false, bytes: 0, head: ''
+    };
+    return list;
   },
 };
 export default NativeMock;

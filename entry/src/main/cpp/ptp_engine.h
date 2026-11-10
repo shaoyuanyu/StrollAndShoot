@@ -35,6 +35,8 @@ static constexpr uint16_t PTP_OC_GetObjectInfo       = 0x1008;
 static constexpr uint16_t PTP_OC_GetObject           = 0x1009;
 static constexpr uint16_t PTP_OC_GetThumb            = 0x100A;
 static constexpr uint16_t PTP_OC_GetPartialObject    = 0x101B;
+// MTP 扩展操作：一次事务返回一批对象的属性（相机可能不支持，返回 0x2005）
+static constexpr uint16_t PTP_OC_GetObjectPropList   = 0x9805;
 
 // PTP Response Codes (ptp.h)
 static constexpr uint16_t PTP_RC_OK                  = 0x2001;
@@ -137,6 +139,26 @@ struct PTPObjectInfo {
     std::string Keywords;
 };
 
+// ---- GetObjectPropList 数据集（MTP 1.1） ----
+// 一次事务拿回一批对象的属性，用来替代「每张一次 GetObjectInfo」。
+// 只保留扫描用得上的字段；相机没实现的属性留空。
+struct PTPObjectPropEntry {
+    uint32_t Handle = 0;
+    uint16_t Format = 0;
+    uint32_t Size = 0;        // 超过 4GB 时截到 0xFFFFFFFF
+    uint32_t Parent = 0;
+    std::string Filename;     // 0xDC07
+    std::string DateCreated;  // 0xDC08
+    std::string DateModified; // 0xDC09
+};
+
+struct PTPObjectPropList {
+    std::vector<PTPObjectPropEntry> Objects;
+    std::vector<uint32_t> PropCodes;  // 实际出现的属性码（去重，最多 64 个）
+    uint32_t Declared = 0;            // 数据段开头的 NumberOfElements
+    bool Complete = false;            // 整个数据段都被正确解析且数量对得上
+};
+
 // ---- PTP Storage Info ----
 struct PTPStorageInfo {
     uint16_t StorageType;
@@ -199,6 +221,11 @@ public:
     std::vector<uint8_t> buildGetPartialObject(uint32_t objectHandle,
                                                 uint32_t offset,
                                                 uint32_t maxBytes);
+    std::vector<uint8_t> buildGetObjectPropList(uint32_t objectHandle,
+                                                uint32_t formatCode,
+                                                uint32_t propertyCode,
+                                                uint32_t groupCode,
+                                                uint32_t depth);
 
     // ---- Response handling ----
     // Process a raw USB IN transfer. Returns:
@@ -222,6 +249,7 @@ public:
     // ---- Parsing ----
     static PTPDeviceInfo parseDeviceInfo(const uint8_t* data, size_t len);
     static PTPObjectInfo parseObjectInfo(const uint8_t* data, size_t len, uint32_t handle);
+    static PTPObjectPropList parseObjectPropList(const uint8_t* data, size_t len);
     // PTP 数组数据集（GetStorageIDs / GetObjectHandles）是「UINT32 count + count 个 UINT32」，
     // 必须跳过首 4 字节并按 count 截断；不要用裸 U32 数组解析。
     static std::vector<uint32_t> parseCountedU32Array(const uint8_t* data, size_t len);

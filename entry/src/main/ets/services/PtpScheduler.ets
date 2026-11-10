@@ -1,6 +1,7 @@
 import usbManager from '@ohos.usbManager';
 import hilog from '@ohos.hilog';
-import { PtpPriority, type PtpTransport, type DeviceInfo, type ObjectInfo } from '../pages/PtpHost';
+import { PtpPriority, type PtpTransport, type DeviceInfo, type ObjectInfo,
+  type ObjectPropList } from '../pages/PtpHost';
 
 /**
  * 一个排队中的 PTP 事务。
@@ -76,6 +77,13 @@ export class PtpScheduler implements PtpTransport {
   getPartialObject(handle: number, offset: number, maxBytes: number,
     priority: PtpPriority = PtpPriority.SCAN): Promise<Uint8Array | null> {
     return this.enqueue(priority, () => this.inner.getPartialObject(handle, offset, maxBytes));
+  }
+
+  getObjectPropList(objectHandle: number, formatCode: number, propertyCode: number,
+    groupCode: number, depth: number,
+    priority: PtpPriority = PtpPriority.SCAN): Promise<ObjectPropList> {
+    return this.enqueue(priority,
+      () => this.inner.getObjectPropList(objectHandle, formatCode, propertyCode, groupCode, depth));
   }
 
   closeSessionAndPipe(priority: PtpPriority = PtpPriority.FOREGROUND): Promise<void> {

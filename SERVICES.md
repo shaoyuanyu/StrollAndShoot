@@ -92,11 +92,55 @@ hdc shell cat /data/app/el2/100/base/io.github.shaoyuanyu.strollandshoot/haps/en
 - `saveEncodedThumbnail()` 仍保留但没有调用点（v2 时代的“解码后再编码覆盖”已被移除）
 - 扫描结束调用 `purgeStale(validKeys)` 删除已经不在相机上的条目
 
+**内存 manifest 必须与磁盘对得上（2026-11-09 真机 bug）**
+
+症状：在「缓存管理」清掉一台相机的缓存后**不重启应用**直接扫描，画廊从头到尾只有占位符，
+日志是 `磁盘命中 16016 / USB 读取 0 / 解码成功 0`（16016 = 1288 张 × 12 次重复尝试）。
+
+根因：`ThumbnailCache` 是 `CameraService` 里的单例，manifest 和 `loaded` 都在内存里；
+「缓存管理」调用的是**静态** `ThumbnailCache.deleteCameraCache()`，只删目录、不碰这个实例。
+于是下一次扫描 `init()` 因同目录提前返回、`loadManifest()` 因 `loaded=true` 直接返回，
+manifest 里 1288 条记录全部“命中”，但文件已经没了：`readFileToBuffer()` 返回 null，
+旧代码 `if (!fileBuf) return;` 静默返回 → 这张永远没被标记为已加载 → 每个交织批次都重试一遍。
+
+修法（三层）：
+1. `loadManifest()` 每次扫描前用 `fileIo.accessSync(manifestPath)` 校验 manifest 还在，不在就清空内存状态重新按磁盘加载；
+2. `loadCachedThumbnail()` 改为返回 `boolean`：读不出文件时 `invalidate(key)` 摘掉坏记录并**回退 USB 取图**，不再静默停在占位符；
+3. `invalidate()` 只改 manifest（删条目、减 totalBytes、置 dirty），下次 `purgeStale` 会顺手清掉孤儿文件。
+
+日志摘要新增 `缓存失效回退 N`，用来确认是否又出现了“命中但读不出”的情况。
+
+### 断点续扫（2026-11-09，1.27.0；1.27.1 修正）
+
+冷扫描一轮约 2 分钟，跑到一半被系统回收（退后台被杀、崩溃、用户强退）就全白跑。
+现在元数据边读边落盘，下次扫描从断点继续：
+
+- `metadata_cache.json` 的 envelope 增加 **`complete`**：扫描过程中写 `false`，整轮（含缩略图）跑完才写 `true`。
+  旧文件没有该字段，按 `true` 处理。
+- 交织扫描每读 **`SCAN_PERSIST_EVERY = 256` 张**落一次盘；元数据读完、缩略图未读完时也写一次 `false`。
+  **本轮一张都没新读（整份复用缓存）时不重写**——内容没变，没必要在日志里制造“未完成”的假象。
+- `prepareMetadataReuse(quickMode)` 两条路径：
+  - 快速扫描：`complete=true` 也照样复用（7 天有效期）；
+  - 全量扫描：**只有 `complete=false` 且 24 小时内**才复用（`RESUME_MAX_AGE_MS`）。跑完过的缓存不参与全量扫描，
+    保持“全量＝重读一遍”的语义。
+- 续扫复用的是**部分** handle 集合：`reuseMeta` 命中就跳过 `GetObjectInfo`，没命中的照常读；
+  `fullReuse = 复用条数 ≥ handle 数`，`interleave = !fullReuse`。
+- 复用前仍然跑 `verifyMetadataSample()`（最多 8 个样本比对文件名+体积），防止卡被格式化后 handle 重被使用。
+  **样本从「缓存里真的存在的 handle」里均匀抽**：早期的写法按全部 handle 抽样，断点续扫只有 1/5 命中缓存时
+  往往只抽到 1 个样本，运气差会抽到 0 个而直接放弃复用（真机日志：`复用校验通过: 1 个样本一致`）。
+- 缩略图不需要单独记进度：JPEG + manifest 本身就是逐张持久的，续扫时命中就跳过 `GetThumb` + `GetPartialObject`。
+- 日志：`断点续扫: 上次扫描未完成，复用 N 条元数据（M 分钟前保存）` / `元数据缓存已保存: N 条（扫描未完成，可续扫）`。
+  前者按 `complete` 判断，**快速扫描同样会打**——真机上“杀进程后重新点快速扫描”才是最自然的验证路径。
+
+**续扫的可见进度**：`interleave = !fullReuse` 意味着续扫一定交织——每读 64 张的元数据就把这一批连缩略图一起上屏。
+同时发布加了「只增不减」的闸门（`photoList.length >= this.photos.length` 才 `publishPhotoList`），
+否则已有 256 张快照的画廊会先缩到 64 张再长回来。冷启动时 `this.photos` 为空，闸门恒成立，行为与之前一致。
+
 ### 扫描的四个阶段（`scanForCamera(quickMode)`）
 
 - **Phase 0**（仅快速扫描，且相机之前同意过缓存）：从 `metadata_cache.json` 读出上一次的 `PhotoEntry[]`，同时从磁盘并行加载缩略图，画廊立刻有内容
 - **Phase 1**：递归遍历目录，收集 handle；单张 `getObjectInfo` 失败只跳过那一张，不打断整轮
-- **Phase 2a**：逐个 `getObjectInfo` 取元数据；**快速扫描会复用 `metadata_cache.json`**（按 handle 命中，先抽样 8 个 `GetObjectInfo` 比对文件名/体积，7 天有效期），只对新增照片读取（ISSUE-009）。缓存为空时每 100 张排一次序并上屏（ISSUE-008）。结束后写 `metadata_cache.json`
+- **Phase 2a**：逐个 `getObjectInfo` 取元数据；**快速扫描会复用 `metadata_cache.json`**（按 handle 命中，先抽样 8 个 `GetObjectInfo` 比对文件名/体积，7 天有效期），只对新增照片读取（ISSUE-009）。真要读相机时按 `SCAN_CHUNK = 64` 交织上屏（见下文「交织扫描」），整份命中缓存时才一次读完。结束后写 `metadata_cache.json`
 - **Phase 2b**：按 4 张一行加载缩略图，每行完成递增一次 `thumbnailVersion`，结束时 `purgeStale` 并写一行摘要 `缩略图阶段: 已在内存 X / 磁盘命中 Y / USB 读取 Z / 解码成功 W`，然后再存一次元数据（把本阶段学到的 EXIF 方向写回去）
 - 失败只更新状态文案，**不清空 `photos` / `photoCount`**（ISSUE-005）
 
@@ -326,11 +370,96 @@ interface PhotoEntry {
 - 以上尚未在无设备环境下完成真机体感验收；行为与日志已就位，等下次真机确认。
 - `onMainAnimationEnd` 忽略 `index !== mainIdx` 的过期回调，避免快速连滑时被上一段动画拉回旧页；取图过程中 USB 断开（`PTP_ERR_USB`）会主动关会话并置 `connected=false`，下一次搜索重新连接。
 
+### 扫描阶段的测量与能力探测（P4，2026-11-09）
+
+扫描的成本几乎全是「每张照片的 USB 往返次数 × 相机侧延迟」：冷扫描每张要 3 笔
+（`GetObjectInfo` 元数据 → `GetThumb` 缩略图 → `GetPartialObject` 读原图 EXIF 方向），
+Nikon Z50_2 上单笔约 30–40ms，1288 张就是分钟级。所以这一段只做两类事：少跑几笔、跑得早知道。
+
+**1. 阶段计时（每轮扫描重置，结束写一行摘要）**
+
+`扫描耗时: 遍历 Xms | 元数据 Yms/N张(均Zms) | 缩略图USB Ums/N张 | EXIF头 Vms/M次 | 落盘 Wms | 解码 Tms`
+再加一行 `缩略图EXIF方向: 可信/不可信/样本不足 / 样本 / 竖拍 / 不一致 / 无EXIF`。
+
+- `statWalkMs` / `statInfoMs`+`statInfoCount` / `statThumbMs`+`statThumbCount` / `statExifMs`+`statExifCount` / `statSaveMs` / `statDecodeMs`
+- 有了这几个数才能分清瓶颈在 USB 往返、写盘还是解码，不要再凭“感觉慢”去改。
+
+**2. `GetObjectPropList`（MTP 0x9805）探测**
+
+- Native 新增 `buildGetObjectPropList` / `parseObjectPropList`；`parseDeviceInfo` 现在也把
+  `operationsSupported` 交给 ArkTS（判断相机有没有自报 0x9805）。
+- 只有本轮**确实要逐张读元数据**（元数据缓存没复用成功）**且相机自报支持 0x9805** 时才试一次，
+  整会话一次（`propListProbed`）。
+- 日志 `[PROP_LIST] ... 声明 N / 解析 M 条 / 字节数 / 完整与否`，另有属性码列表、字段覆盖率与数据头 hex。
+- **2026-11-09 真机（Nikon Z50_2）实测：不支持，而且探测有副作用**。Op 未列入 `operationsSupported`，
+  发过去后相机不回响应，IN 端点在 **10s 超时**后才放弃；紧接着的 3 条 `GetObjectInfo` 各失败一次
+  （`command send failed (-1)`，各约 5s），**丢了 3 张照片**。所以现在只在相机自报支持时才探测，
+  不再“先试一下”。
+- 即便支持也**暂时只探测不使用**：MTP 属性里没有 `ImagePixWidth/Height`，而缩略图裁黑边必须知道
+  原始比例，真要替代 `GetObjectInfo` 还得先解决尺寸来源。
+
+**3. 缩略图自带 EXIF 方向（自适应，默认仍然读原图）**
+
+- `loadSingleThumbnail` 先用 `readThumbOrientation(thumbData)` 从 GetThumb 返回的 JPEG 里读方向；
+  读到了并且判定可信时，跳过这一次 `GetPartialObject`。
+- 可信判定：与原图方向**逐个比对**，出现一次不一致就永久判为不可信；样本 ≥12 且其中竖拍 ≥3 才切换。
+  早期照片里连续 8 张都没有 EXIF 时直接放弃探测。
+- 之前实测 Nikon Z50_2 的缩略图 160×120 不含 APP1，所以这台相机上会走“无 EXIF → 继续读原图”的
+  分支，行为与 1.25.1 一致；这条路径是给其它相机留的，判定逻辑保证不会把横竖拍搞错。
+
+**4. 交织扫描（2026-11-09，1.26.0）**
+
+冷扫描的时序原来是「28s 全量元数据 → 87s 全量缩略图」：首屏缩略图要等 55s 才出现，
+而这段时间用户盯着占位符。现在按 `SCAN_CHUNK = 64` 分批：
+
+```
+读 64 张元数据 → 发布相册列表 → 取这 64 张的缩略图 → 下一批
+```
+
+- 总时长不变（USB 是一根管道，事务数没变），但**首屏缩略图从 55s 提前到 2–4s**。
+- 判定条件是 `interleave = !fullReuse`：只要这一轮真的要逐张读相机（冷扫描、新照片、断点续扫）就交织；
+  整份命中缓存时元数据是瞬时的，仍走“一次读完再统一取缩略图”的老路径。
+  1.26.0 里这个条件是 `progressive && !canReuse`，导致**断点续扫时用户要盯着旧快照一动不动等到元数据读完**，1.27.1 改掉。
+- 交织时把 handle 数组反过来遍历：相机 handle 基本按拍摄顺序递增，从后往前读，
+  画廊顶部（最新）那几行最先有图。
+- 每批发布前有个「只增不减」闸门（`photoList.length >= this.photos.length`）：
+  已有缓存快照时不能让列表先缩到 64 张；冷启动 `this.photos` 为空，闸门恒成立。
+- `loadThumbnailsRowByRow(validCacheKeys, finalize, manageProgress)` 新增两个开关：
+  每批调用时 `finalize=false`（不 flush/purge/close 缓存）、`manageProgress=false`
+  （进度由外层按“已处理张数”统一维护），收尾时再调一次 `finalize=true`。
+- 相位文案改用 `camera_phase_loading_photos`（正在加载照片...），不再在元数据/缩略图之间来回切。
+
+**真机实测（2026-11-09，Nikon Z50_2，1288 张，冷缓存）**：
+
+| 阶段 | 耗时 | 说明 |
+|---|---|---|
+| 遍历目录 | 92 ms | 格式筛选可用，每层 2 笔 |
+| 元数据 | 27.8 s / 1285 张 | 21.6 ms/笔（串行，无排队） |
+| 缩略图阶段 | 87 s | 2570 笔（GetThumb + GetPartialObject）= **33.9 ms/笔** |
+| ├ 落盘 | 7.5 s | 被 USB 等待完全盖住 |
+| └ 解码 | 44.4 s | 8 worker 并行，同样被盖住 |
+
+结论：**扫描时间 = 事务数 × 每笔的相机侧延迟**，写盘与解码都不是瓶颈。
+每张照片冷扫描 3 笔（元数据 / 缩略图 / EXIF 方向），1288 张≈3855 笔≈130s。
+prop list 不可用 → 元数据没法合批；缩略图是每个文件一次读；EXIF 方向**不能省**
+（竖拍有 90°/270° 两种，缩略图又无 EXIF，靠黑边几何只能判断横竖、分不出方向，会有一半竖拍放倒）。
+
+**5. 省掉的无效开销**
+
+- `PtpSession.readBuf`：192KB 读缓冲整会话复用。旧代码在每次读取的循环里 `new Uint8Array(196608)`，
+  1288 张缩略图约 240MB 垃圾。
+- `setPtpQuietOps(true)`：扫描期间关掉逐笔流水日志（命令 hex、RAW IN、processResponse、Got data）。
+  1288 张会有 6000 行，既刷掉 AppLog 环形缓冲里真正有用的摘要，也要花时间拼 hex。错误日志不受影响。
+
 ### 暂不做 / 以后做
 
-- **P2（延后 EXIF 方向）已排除**：相机缩略图本身没有 EXIF（实测 160×120 无 APP1），跳过一次 `GetPartialObject` 会让用户先看到旋转的照片，与体验一致性冲突。
+- **P2（扫描期延后 EXIF 方向）不做**：先看到未旋转的照片与体验一致性冲突。改成上面的「缩略图自带 EXIF 才跳过」，宁可多花一笔 `GetPartialObject`，也不让方向错。
 - **P3 的进一步优化**：同 endpoint 多笔 in-flight 已被 `TRANSFER_OVERFLOW` 证伪；PC gphoto2 基线已做（约 3.3MB/s，反而不如手机），说明手机端约 40MB/s 不是 USB 链路瓶颈，继续在传输层抠带宽的收益有限。
-- **扫描阶段的下一步**：瓶颈是每笔 30ms 的相机延迟，不是块大小。可考虑 `GetObjectPropList` 批量取元数据、减少首次扫描的 `GetPartialObject`（方向缓存后已跳过），这两项都超出 P3 的传输层范围。
+- **扫描阶段已做的都做了**：交织（首屏）+ 只对自报支持的相机探测 prop list + 缓冲复用 + 流水日志静音。
+  剩下的 130s 是相机侧每笔 22–34ms 的固定延迟 × 3855 笔，宿主端已经没有可砍的东西。
+- **还能再快，但要改产品行为**（需用户确认）：扫描只预先加载前 N 张（比如 200 张，约 15s），
+  其余缩略图等用户滑到再按需取。扫描会“立刻结束”，但快速滑动时会先看到占位符——
+  与之前修过的“很多缩略图无法显示”是同一类体验风险。
 
 ### USB 传输上限
 
@@ -356,8 +485,8 @@ interface PhotoEntry {
 
 `libentry.so` 暴露的函数，类型声明在 `entry/src/main/cpp/types/libentry/Index.d.ts`：
 
-- 命令构造：`buildOpenSession`、`buildCloseSession`、`buildGetDeviceInfo`、`buildGetStorageIDs`、`buildGetObjectHandles`、`buildGetObjectInfo`、`buildGetThumb`、`buildGetObject`、`buildGetPartialObject`
-- 响应解析：`processResponse`、`parseDeviceInfo`、`parseStorageIDs`、`parseObjectHandles`、`parseObjectInfo`
+- 命令构造：`buildOpenSession`、`buildCloseSession`、`buildGetDeviceInfo`、`buildGetStorageIDs`、`buildGetObjectHandles`、`buildGetObjectInfo`、`buildGetThumb`、`buildGetObject`、`buildGetPartialObject`、`buildGetObjectPropList`
+- 响应解析：`processResponse`、`parseDeviceInfo`、`parseStorageIDs`、`parseObjectHandles`、`parseObjectInfo`、`parseObjectPropList`
 
 `processResponse(data, expectData)` 负责累积多包 USB 数据，返回动作码：`0` 数据还在累积（继续读），`1` 拿到数据包，`2` 拿到响应包（`responseCode` 为 `0x2001` 表示成功）。
 

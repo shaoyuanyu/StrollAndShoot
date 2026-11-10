@@ -58,7 +58,11 @@ export function groupPhotosByBasename(photos: PhotoEntry[]): DisplayGroup[] {
     const da = a.displayPhoto.captureDate || '';
     const db = b.displayPhoto.captureDate || '';
     if (da !== db) return db.localeCompare(da);
-    return a.basename.localeCompare(b.basename);
+    // 同一秒内必须跟整体方向一致。相机的时间戳只精确到秒，连拍会有 4–8 张落在同一秒
+    // （Z50_2 实测 1288 个文件只有 360 个不同时间），这里原来按 basename 升序兜底，
+    // 与“时间降序”相反，表现为 4482 → 4480 → 4481 → 4477 这种来回跳（2026-11-09 真机）。
+    // 改成降序后整条列表按 (时间降序, 文件名降序) 单调排列。
+    return b.basename.localeCompare(a.basename);
   });
   return groups;
 }

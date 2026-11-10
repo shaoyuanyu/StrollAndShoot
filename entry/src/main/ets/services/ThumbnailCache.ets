@@ -156,6 +156,30 @@ export class ThumbnailCache {
     return this.cacheDir;
   }
 
+  /** manifest 文件是否还在（目录被外部删除时返回 false）。 */
+  private manifestFileExists(): boolean {
+    if (this.manifestPath === '') return false;
+    try {
+      return fileIo.accessSync(this.manifestPath);
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  /**
+   * 丢弃一条已失效的缓存记录（文件被删/读不出来时由上层调用）。
+   * 不删文件、只改 manifest，避免下次扫描继续“命中”同一条坏记录。
+   */
+  invalidate(key: string): void {
+    const entry = this.manifest.get(key);
+    if (!entry) return;
+    if (entry.sizeBytes !== undefined) {
+      this.totalBytes -= entry.sizeBytes;
+    }
+    this.manifest.delete(key);
+    this.dirty = true;
+  }
+
   /** Ensure the cache directory exists (create recursively if needed). */
   private ensureCacheDir(): void {
     try {
@@ -167,7 +191,17 @@ export class ThumbnailCache {
 
   /** Load the manifest from disk, repair missing entries and remove orphan JPEGs. */
   async loadManifest(): Promise<void> {
-    if (this.loaded) return;
+    if (this.loaded) {
+      // 「缓存管理」里的“清除缓存”只删目录，删不到这个单例的内存状态。
+      // 不校验就会保留一整份指向已删文件的 manifest：之后每次 findCached 都命中、
+      // 每次读文件都失败，画廊从头到尾只有占位符（2026-11-09 真机）。
+      if (this.manifestFileExists()) return;
+      this.manifest.clear();
+      this.totalBytes = 0;
+      this.dirty = false;
+      this.loaded = false;
+      hilog.info(DOMAIN, TAG, 'manifest disappeared, cache state reset');
+    }
     this.loaded = true;
     this.ensureCacheDir();
 

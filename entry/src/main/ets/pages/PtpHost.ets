@@ -35,11 +35,14 @@ interface PtpApi {
   buildGetThumb(objectHandle: number): Uint8Array;
   buildGetObject(objectHandle: number): Uint8Array;
   buildGetPartialObject(objectHandle: number, offset: number, maxBytes: number): Uint8Array;
+  buildGetObjectPropList(objectHandle: number, formatCode: number, propertyCode: number,
+    groupCode: number, depth: number): Uint8Array;
   processResponse(data: Uint8Array, expectData: boolean): ProcessResult;
   parseDeviceInfo(data: Uint8Array): DeviceInfo;
   parseStorageIDs(data: Uint8Array): number[];
   parseObjectHandles(data: Uint8Array): number[];
   parseObjectInfo(data: Uint8Array, handle: number): ObjectInfo;
+  parseObjectPropList(data: Uint8Array): ObjectPropList;
 }
 
 interface ProcessResult {
@@ -53,6 +56,8 @@ export interface DeviceInfo {
   deviceVersion: string;
   serialNumber: string;
   vendorExtensionID: number;
+  /** 相机自报支持的操作码；旧包/虚拟相机可能没有。 */
+  operationsSupported?: number[];
 }
 export interface ObjectInfo {
   filename: string;
@@ -63,6 +68,31 @@ export interface ObjectInfo {
   imagePixWidth: number;
   imagePixHeight: number;
   storageId: number;
+}
+
+/** GetObjectPropList 返回的单条对象属性（只有相机给了的字段才有意义）。 */
+export interface ObjectPropEntry {
+  handle: number;
+  format: number;
+  size: number;
+  parent: number;
+  filename: string;
+  dateCreated: string;
+  dateModified: string;
+}
+
+export interface ObjectPropList {
+  objects: ObjectPropEntry[];
+  /** 实际出现的属性码（去重），用于判断相机给了哪些字段。 */
+  codes: number[];
+  /** 数据段声明的元素个数。 */
+  declared: number;
+  /** 数据段是否完整解析且数量对得上。 */
+  complete: boolean;
+  /** 数据段字节数。 */
+  bytes: number;
+  /** 数据段开头 32 字节的 hex。 */
+  head: string;
 }
 
 const ptpNative = rawPtp as PtpApi;
@@ -118,6 +148,20 @@ export function ptpResponseName(code: number): string {
 
 let sharedLog: AppLog | null = null;
 export function setPtpLog(log: AppLog): void { sharedLog = log; }
+
+/**
+ * 扫描期间逐笔事务的日志开关。
+ *
+ * 1288 张缩略图每张 4–5 行日志（命令 hex、原始 IN、processResponse、Got data），
+ * 一轮扫描就是 6000 行：既把 AppLog 500 条的环形缓冲整个刷掉（连扫描摘要
+ * 和 PROP_LIST 探测结果都留不下），也白白花时间拼 hex 字符串。
+ * 扫描开始时关掉这些流水日志，错误日志不受影响。
+ */
+let quietOps = false;
+export function setPtpQuietOps(quiet: boolean): void { quietOps = quiet; }
+function logOp(msg: string): void {
+  if (!quietOps) log(msg);
+}
 function log(msg: string): void {
   // AppLog.add 内部已经写 hilog；以前这里再写一次，导致每条 PTP 报文在
   // hilog 里出现两遍（ISSUE-007 的日志放大）。
@@ -178,6 +222,12 @@ export interface PtpTransport {
   getObject(handle: number, priority?: PtpPriority): Promise<Uint8Array | null>;
   getPartialObject(handle: number, offset: number, maxBytes: number,
     priority?: PtpPriority): Promise<Uint8Array | null>;
+  /**
+   * MTP 扩展：一次事务取回一批对象的属性。
+   * 相机不支持时抛 `PtpError`（通常是 0x2005），由调用方降级。
+   */
+  getObjectPropList(objectHandle: number, formatCode: number, propertyCode: number,
+    groupCode: number, depth: number, priority?: PtpPriority): Promise<ObjectPropList>;
   closeSessionAndPipe(priority?: PtpPriority): Promise<void>;
 }
 
@@ -207,6 +257,13 @@ export class PtpSession implements PtpTransport {
   private lastProcMaxMs: number = 0;
   /** 连续成功次数，用于升档。 */
   private goodStreak: number = 0;
+  /**
+   * 小数据事务（GetThumb / GetPartialObject / GetObjectPropList）共用的读缓冲。
+   * 以前每次 `new Uint8Array(196608)` 都在循环里新建，1288 张缩略图就是
+   * 1288 次 192KB 分配（约 240MB 垃圾），GC 抖动会拖慢整轮扫描。
+   * processResponse 会把数据拷走，所以同一块缓冲复用是安全的。
+   */
+  private readBuf: Uint8Array | null = null;
 
   get connectedDeviceName(): string {
     return this.device?.name ?? '';
@@ -343,6 +400,23 @@ export class PtpSession implements PtpTransport {
     return ptpNative.parseObjectInfo(data, handle);
   }
 
+  /**
+   * 批量取对象属性（MTP 0x9805）。
+   *
+   * 这是扫描阶段唯一的“合批”机会：每张一次 GetObjectInfo 在 Nikon 上约 30ms，
+   * 1288 张就是 40s；一次事务能打包回全部对象时，这段可以降到几秒。
+   * 相机不支持会返回 0x2005，调用方捕获后照旧走逐张路径。
+   */
+  async getObjectPropList(objectHandle: number, formatCode: number, propertyCode: number,
+    groupCode: number, depth: number, _priority?: PtpPriority): Promise<ObjectPropList> {
+    if (!this.sessionOpen) throw new PtpError('GetObjectPropList', PTP_ERR_NOT_OPEN);
+    const cmd = ptpNative.buildGetObjectPropList(objectHandle, formatCode, propertyCode,
+      groupCode, depth);
+    const data = await this.ptpCommandGetLargeData(cmd, 'GetObjectPropList');
+    if (!data) throw new PtpError('GetObjectPropList', PTP_ERR_USB, 'GetObjectPropList: empty data');
+    return ptpNative.parseObjectPropList(data);
+  }
+
   async closeSessionAndPipe(_priority?: PtpPriority): Promise<void> {
     if (this.sessionOpen && this.pipe && this.bulkOut && this.bulkIn) {
       try {
@@ -379,14 +453,14 @@ export class PtpSession implements PtpTransport {
    */
   async getThumb(handle: number, _priority?: PtpPriority): Promise<Uint8Array | null> {
     if (!this.sessionOpen) throw new PtpError('GetThumb', PTP_ERR_NOT_OPEN);
-    log(`Getting thumb for handle 0x${handle.toString(16)}`);
+    logOp(`Getting thumb for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetThumb(handle);
     return await this.ptpCommandGetLargeData(cmd, 'GetThumb');
   }
 
   async getObject(handle: number, priority?: PtpPriority): Promise<Uint8Array | null> {
     if (!this.sessionOpen) throw new PtpError('GetObject', PTP_ERR_NOT_OPEN);
-    log(`Getting object for handle 0x${handle.toString(16)}`);
+    logOp(`Getting object for handle 0x${handle.toString(16)}`);
     const cmd = ptpNative.buildGetObject(handle);
     if (this.asyncBroken) {
       // 该会话已确认 usbSubmitTransfer 不可用，整条会话退回同步 bulk。
@@ -431,7 +505,7 @@ export class PtpSession implements PtpTransport {
    * Send a command with no data phase. Returns true if response is OK.
    */
   private async ptpCommand(cmd: Uint8Array, expectData: boolean): Promise<boolean> {
-    logHex('CMD OUT', cmd);
+    if (!quietOps) logHex('CMD OUT', cmd);
     let n = -1;
     try {
       n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
@@ -464,9 +538,9 @@ export class PtpSession implements PtpTransport {
       }
 
       const inData = new Uint8Array(buf.buffer, 0, rn);
-      logHex('RAW IN', inData);
+      if (!quietOps) logHex('RAW IN', inData);
       const result = ptpNative.processResponse(inData, expectData);
-      log(`processResponse: action=${result.action} code=0x${(result.responseCode ?? 0).toString(16)} dataLen=${result.data ? result.data.length : 0}`);
+      logOp(`processResponse: action=${result.action} code=0x${(result.responseCode ?? 0).toString(16)} dataLen=${result.data ? result.data.length : 0}`);
 
       if (result.action === 2) { // response
         this.lastResponseCode = result.responseCode ?? 0;
@@ -488,7 +562,7 @@ export class PtpSession implements PtpTransport {
    * 「拒绝访问」与「没有数据」，见 ISSUE-002。
    */
   private async ptpCommandGetData(cmd: Uint8Array, op: string = 'PTP'): Promise<Uint8Array | null> {
-    logHex('CMD OUT', cmd);
+    if (!quietOps) logHex('CMD OUT', cmd);
     let n = -1;
     try {
       n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
@@ -504,8 +578,9 @@ export class PtpSession implements PtpTransport {
     let dataPayload: Uint8Array | null = null;
 
     // Read IN until we get both data and response
+    const smallBuf = new Uint8Array(1024);
     for (let attempt = 0; attempt < 10; attempt++) {
-      const buf = new Uint8Array(1024);
+      const buf = smallBuf;
       let rn = -1;
       try {
         rn = await usbManager.bulkTransfer(this.pipe!, this.bulkIn!, buf, 10000);
@@ -522,9 +597,9 @@ export class PtpSession implements PtpTransport {
       }
 
       const inData = new Uint8Array(buf.buffer, 0, rn);
-      logHex('RAW IN', inData);
+      if (!quietOps) logHex('RAW IN', inData);
       const result = ptpNative.processResponse(inData, true);
-      log(`processResponse: action=${result.action} code=0x${(result.responseCode ?? 0).toString(16)} dataLen=${result.data ? result.data.length : 0}`);
+      logOp(`processResponse: action=${result.action} code=0x${(result.responseCode ?? 0).toString(16)} dataLen=${result.data ? result.data.length : 0}`);
 
       if (result.action === 1 && result.data && result.data.length > 0) {
         dataPayload = result.data;
@@ -549,7 +624,7 @@ export class PtpSession implements PtpTransport {
    * 失败语义与 `ptpCommandGetData` 一致：相机错误码或 USB 失败都抛 `PtpError`。
    */
   private async ptpCommandGetLargeData(cmd: Uint8Array, op: string = 'PTP'): Promise<Uint8Array | null> {
-    logHex('CMD OUT', cmd);
+    if (!quietOps) logHex('CMD OUT', cmd);
     let n = -1;
     try {
       n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
@@ -566,7 +641,11 @@ export class PtpSession implements PtpTransport {
     let rawCount = 0;
 
     // Read IN until we get both data and response.
-    const buf = new Uint8Array(196608);  // 192KB — under HMOS 200KB limit
+    // 192KB — under HMOS 200KB limit。整会话复用，避免每张缩略图都新建。
+    if (this.readBuf === null) {
+      this.readBuf = new Uint8Array(196608);
+    }
+    const buf = this.readBuf;
     for (let attempt = 0; attempt < 350; attempt++) {
       let rn = -1;
       try {
@@ -592,7 +671,7 @@ export class PtpSession implements PtpTransport {
 
       if (result.action === 1 && result.data && result.data.length > 0) {
         dataPayload = result.data;
-        log(`Got data: ${result.data.length} bytes (${rawCount} raw reads)`);
+        logOp(`Got data: ${result.data.length} bytes (${rawCount} raw reads)`);
         continue; // wait for response
       }
 
@@ -681,7 +760,7 @@ export class PtpSession implements PtpTransport {
       }
       const result = ptpNative.processResponse(buf.subarray(0, rn), true);
       if (result.action === 1 && result.data && result.data.length > 0) {
-        log(`Got data: ${result.data.length} bytes (bulk fallback)`);
+        logOp(`Got data: ${result.data.length} bytes (bulk fallback)`);
         return await this.readResponseAfterData(op, result.data);
       }
       if (result.action === 2) {
@@ -707,7 +786,7 @@ export class PtpSession implements PtpTransport {
    */
   private async ptpCommandGetObjectData(cmd: Uint8Array, op: string = 'GetObject',
     chunkBytes: number = LARGE_DATA_CHUNK): Promise<Uint8Array | null> {
-    logHex('CMD OUT', cmd);
+    if (!quietOps) logHex('CMD OUT', cmd);
     let n = -1;
     try {
       n = await usbManager.bulkTransfer(this.pipe!, this.bulkOut!, cmd, 5000);
@@ -754,7 +833,7 @@ export class PtpSession implements PtpTransport {
       }
       if (result.action === 1 && result.data && result.data.length > 0) {
         dataPayload = result.data;
-        log(`Got data: ${result.data.length} bytes (async)`);
+        logOp(`Got data: ${result.data.length} bytes (async)`);
         // 响应包只有 12B 左右，用 bulk 读，不再为它建 1MB ashmem。
         return await this.readResponseAfterData(op, dataPayload);
       }
