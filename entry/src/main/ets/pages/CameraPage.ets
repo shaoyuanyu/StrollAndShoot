@@ -445,12 +445,23 @@ export struct CameraPage {
 
       // 无线块：蓝牙是所有无线模式的前置；Wi-Fi 部分按 AP / STA 分。
       Column({ space: 10 }) {
-        this.ModeHeader(
-          this.wirelessBlockTitle(),
-          '',
-          this.wifiConnected(),
-          this.wirelessStatusText(),
-          this.wirelessStatusColor())
+        // 不用 ModeHeader：它的 title/status 是 @Builder 值参数，切模式时
+        // 不会刷新（AGENTS.md 记过这个坑）。这里把整行内联，直接读状态。
+        Row({ space: 8 }) {
+          Row()
+            .width(6).height(6).borderRadius(pillRadius(6))
+            .backgroundColor(this.wifiConnected()
+              ? $r('app.color.status_connected') : $r('app.color.text_tertiary'))
+          Text(this.wirelessBlockTitle())
+            .fontSize(FontSize.Body)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+          Blank()
+          Text(this.wirelessStatusText())
+            .fontSize(FontSize.Caption)
+            .fontColor(this.wirelessStatusColor())
+        }
+        .width('100%')
 
         // 蓝牙：配对与保活，是无线模式的前置
         Row({ space: 8 }) {
