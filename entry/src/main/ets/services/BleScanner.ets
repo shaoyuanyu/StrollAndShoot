@@ -3,6 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { NikonBlowfish } from './NikonBlowfish';
 import { BleTimePayload, BleGeoPayload, type BleGeoFix } from './BlePayloads';
 import { NikonPairing, decodePairingMessage, type PairingMessage } from './NikonPairing';
+import { BleIdentityStore } from './BleIdentityStore';
 
 /** 扫描到的一台 BLE 相机。 */
 export interface BleCameraDevice {
@@ -713,26 +714,53 @@ export class BleCameraLink {
   }
 
   /**
-   * 首配：两段式（鸿蒙剧本，照 ZPill 2026-10-22 真机定案）。
+   * 配对入口。
    *
-   * **段 1**（BLE 上）：四步握手 → 写 0x2002 控制器名 → 写 0x2005 唤起无线。
-   * **收尾**：断开 BLE → 等 3 秒让位窗 → 经典蓝牙发现 + `pairDevice` 绑定。
-   * **段 2**：重连 GATT → **用同一份 device/nonce 复用握手**。
-   *
-   * 之所以必须断开再绑：相机要等 BLE 链路释放才在配对态暴露经典蓝牙；而
-   * 「已配对设备」是在**回链的复用握手**上才落地的（NOT1 也是 bond 之后才
-   * 出现）。只做段 1 永远停在相机那一侧的「开始配对」页。
+   * 有落盘身份 → **只做复用握手**（相机只认这一份 device/nonce，发全新
+   * stage1 会被 `Remote device has an error` 秒拒）。
+   * 没有身份 → 两段式首配（段 1 握手 + 经典蓝牙绑定 + 段 2 复用握手）。
    */
   async pair(cameraName: string = ''): Promise<string | null> {
     try {
-      return await this.pairInternal(cameraName);
+      const store = BleIdentityStore.getInstance();
+      if (store.hasIdentity()) {
+        return await this.resumePairing(store);
+      }
+      return await this.pairFresh(cameraName, store);
     } catch (err) {
       this.onLog(`配对异常: ${(err as Error).message}`);
       return null;
     }
   }
 
-  private async pairInternal(cameraName: string): Promise<string | null> {
+  /** 已配对相机的重连：用保存的身份复用握手，不再打扰相机的配对页。 */
+  private async resumePairing(store: BleIdentityStore): Promise<string | null> {
+    this.onLog(`配对: 已有身份（serial ${store.serial}），走复用握手`);
+    const blowfish = new NikonBlowfish(this.onLog);
+    if (!await blowfish.selfTest()) {
+      this.onLog('配对: Blowfish 自测失败，终止');
+      return null;
+    }
+    const pairing = new NikonPairing(blowfish, this.onLog);
+    const stage1 = pairing.createStage1(store.identityDevice, store.identityNonce);
+    const serial = await this.handshake(pairing, stage1, true);
+    if (serial === null) {
+      this.onLog('配对: 复用握手失败。若相机里已删掉本设备，请在相机菜单重新进入配对页后再连');
+      return null;
+    }
+    this.identityDevice = store.identityDevice;
+    this.identityNonce = store.identityNonce;
+    this.identitySerial = serial.length > 0 ? serial : store.serial;
+    await this.writeControllerName();
+    // 相机有没有真正收下，看 0x2004 给不给内容。
+    await BleCameraLink.sleep(300);
+    await this.logConnectionConfig();
+    this.paired = true;
+    this.onLog(`配对完成: 复用握手通过，相机序列号 ${this.identitySerial}`);
+    return this.identitySerial;
+  }
+
+  private async pairFresh(cameraName: string, store: BleIdentityStore): Promise<string | null> {
     const blowfish = new NikonBlowfish(this.onLog);
     if (!await blowfish.selfTest()) {
       this.onLog('配对: Blowfish 自测失败，终止');
@@ -780,22 +808,66 @@ export class BleCameraLink {
     }
     const stage1b = pairing.createStage1(this.identityDevice, this.identityNonce);
     const serial2 = await this.handshake(pairing, stage1b, true);
-    if (serial2 !== null && serial2.length > 0) {
+    if (serial2 === null) {
+      // 段 2 没跑通 = 注册没落地。身份仍留在内存里，但先不落盘，
+      // 免得下次拿一份相机没认的身份去复用，永远握不上。
+      this.onLog('配对: 段 2 复用握手未完成，配对未落地（下次仍需在相机上重新配对）');
+      return null;
+    }
+    if (serial2.length > 0) {
       this.identitySerial = serial2;
     }
     await this.writeControllerName();
 
+    // 身份落盘：之后每次连接都走复用握手，不再打扰相机配对页。
+    store.save(this.deviceId, this.cameraName, this.identityDevice,
+      this.identityNonce, this.identitySerial);
+    this.onLog(`配对: 身份已落盘（serial ${this.identitySerial}）`);
+
     // 相机认不认这次配对，看 0x2004 给不给内容（102B = LSS 全布局）。
     await BleCameraLink.sleep(400);
-    const config = await this.readConnectionConfig();
-    if (config !== null && config.length > 0) {
-      this.onLog(`配对: 0x2004 凭据 ${config.length}B`
-        + BleCameraLink.describeBytes(config));
-    }
+    await this.logConnectionConfig();
 
     this.paired = true;
     this.onLog('配对完成: 段 1 + 经典绑定 + 段 2 复用握手均已落地');
     return this.identitySerial;
+  }
+
+  /** 读 0x2004 并落日志：相机承认本次会话才会回 102B。 */
+  private async logConnectionConfig(): Promise<void> {
+    const config = await this.readConnectionConfig();
+    if (config !== null && config.length > 0) {
+      this.onLog(`配对: 0x2004 凭据 ${config.length}B`
+        + BleCameraLink.describeBytes(config));
+    } else {
+      this.onLog('配对: 0x2004 仍为空');
+    }
+  }
+
+  /**
+   * 确保 GATT 服务表已建好。
+   *
+   * bond 之后重连时，服务发现缓存通常是空的；没拉过服务表就直接订阅特征，
+   * `setCharacteristicChangeIndication` 会报 401 Invalid parameter
+   * （2026-11-11 真机实测：段 2 回链后就断在这儿）。
+   */
+  private async ensureServices(): Promise<void> {
+    const gatt = this.gatt;
+    if (gatt === null) return;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const services = await gatt.getServices();
+        if (services.length > 0) {
+          // 服务表到位后再等一拍，让链路加密/参数更新落定。
+          await BleCameraLink.sleep(300);
+          return;
+        }
+      } catch (_e) {
+        // 重试
+      }
+      await BleCameraLink.sleep(400);
+    }
+    this.onLog('配对: GATT 服务表仍为空，订阅可能失败');
   }
 
   /** 写 0x2002 控制器名（32B ASCII 零填充）。 */
@@ -821,6 +893,9 @@ export class BleCameraLink {
       this.onLog('配对: 链路不在，握手跳过');
       return null;
     }
+    // bond 之后重连，GATT 服务缓存往往是空的；不先拉一次服务表，
+    // setCharacteristicChangeIndication 会直接报 401 Invalid parameter。
+    await this.ensureServices();
     // 先开 0x2008 通知，相机半睡时也要靠 GATT 流量叫醒。
     try {
       await this.enableIndication(NIKON_CHAR_CONTROL);
