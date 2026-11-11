@@ -358,7 +358,26 @@ export class BleCameraLink {
       characteristicValue: new Uint8Array(0).buffer as ArrayBuffer,
       descriptors: []
     };
-    const out = await gatt.readCharacteristicValue(char);
+    const out = await new Promise<ble.BLECharacteristic>(
+      (resolve: (v: ble.BLECharacteristic) => void, reject: (e: Error) => void) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error('read 超时'));
+        }, 1500);
+        gatt.readCharacteristicValue(char).then((value: ble.BLECharacteristic) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(value);
+        }).catch((err: BusinessError) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error(`read ${err.code}: ${err.message}`));
+        });
+      });
     return new Uint8Array(out.characteristicValue);
   }
 
@@ -395,39 +414,35 @@ export class BleCameraLink {
   }
 
   /**
-   * 读一遍所有带 read 权限的特征（除 0x2000 / 0x2008）。
+   * 读一组已知的关键特征，用于确认读权限并触发相机收口配对。
    *
-   * ZPill 在 HarmonyOS 上的实证：相机要靠「访问加密读权限的特征」才会
-   * 真正收口配对，只做四步握手 + 0x2002 时相机仍停在等待页。这里照它的
-   * 做法全表读一遍，失败不阻断握手。
+   * 不遍历全表：HarmonyOS 的 `getServices()` 返回的特征没有可靠的
+   * `properties` 字段（实测全被过滤成 0 个），逐个试读又会被只写特征拖到
+   * 超时。这里只读 8 个确定有 read 权限的。
    */
-  async readAllReadable(): Promise<number> {
-    const gatt = this.gatt;
-    if (gatt === null) return 0;
+  async readKeyCharacteristics(): Promise<number> {
+    if (this.gatt === null) return 0;
+    const keys: string[] = [
+      '00002003-3dd4-4255-8d62-6dc7b9bd5561', // 相机名
+      '00002004-3dd4-4255-8d62-6dc7b9bd5561', // 连接配置
+      '00002009-3dd4-4255-8d62-6dc7b9bd5561', // LSS 能力位
+      '0000200b-3dd4-4255-8d62-6dc7b9bd5561', // 序列号
+      '00002a19-3dd4-4255-8d62-6dc7b9bd5561', // 电池
+      '00002a24-0000-1000-8000-00805f9b34fb', // 型号
+      '00002a26-0000-1000-8000-00805f9b34fb', // 固件
+      '00002a29-0000-1000-8000-00805f9b34fb'  // 厂商
+    ];
     let count = 0;
-    try {
-      const services = await gatt.getServices();
-      for (const service of services) {
-        const chars = service.characteristics ?? [];
-        for (const ch of chars) {
-          const uuid = (ch.characteristicUuid ?? '').toLowerCase();
-          if (uuid === NIKON_CHAR_PAIRING || uuid === NIKON_CHAR_CONTROL) continue;
-          // GATT 标准 read 位 = 0x02
-          const props = Number(ch.properties ?? 0);
-          if ((props & 0x02) === 0) continue;
-          try {
-            const value = await this.readCharacteristic(uuid);
-            count++;
-            this.onLog(`读特征 ${uuid.slice(4, 8)} → ${value === null ? 'null' : value.length + 'B'}`);
-          } catch (_e) {
-            // 单个特征读失败不影响握手
-          }
-        }
+    for (const uuid of keys) {
+      try {
+        const value = await this.readCharacteristic(uuid);
+        count++;
+        this.onLog(`读特征 ${uuid.slice(4, 8)} → ${value === null ? 'null' : value.length + 'B'}`);
+      } catch (err) {
+        this.onLog(`读特征 ${uuid.slice(4, 8)} 失败: ${(err as Error).message}`);
       }
-    } catch (err) {
-      this.onLog(`全表读取失败: ${(err as Error).message}`);
     }
-    this.onLog(`全表读取完成: ${count} 个特征`);
+    this.onLog(`关键特征读取完成: ${count}/${keys.length}`);
     return count;
   }
 
@@ -583,8 +598,8 @@ export class BleCameraLink {
     } catch (_e) {
       this.onLog('配对: 唤醒 poke 未回，继续握手');
     }
-    // 全表读一遍可读特征：相机要靠「访问加密读权限的特征」收口配对。
-    await this.readAllReadable();
+    // 读关键特征：相机要靠「访问加密读权限的特征」收口配对。
+    await this.readKeyCharacteristics();
     const stage1 = pairing.createStage1();
     this.onLog('配对: 开启 0x2000 indicate');
     await this.enableIndication(NIKON_CHAR_PAIRING);
