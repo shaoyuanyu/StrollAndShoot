@@ -22,6 +22,7 @@ export struct CameraPage {
   @Event onScanWifi: () => void = () => {};
   @Event onScanBle: () => void = () => {};
   @Event onConnectBle: (deviceId: string) => void = (_id: string) => {};
+  @Event onDisconnectBle: () => void = () => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -386,7 +387,11 @@ export struct CameraPage {
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
         Blank()
-        if (this.svc.bleServices.length > 0) {
+        if (this.svc.bleConnecting) {
+          Text($r('app.string.camera_ble_connecting'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.primary'))
+        } else if (this.svc.bleConnected) {
           Text($r('app.string.camera_ble_services', this.svc.bleServices.length))
             .fontSize(FontSize.Caption)
             .fontColor($r('app.color.status_connected'))
@@ -412,6 +417,14 @@ export struct CameraPage {
           }
         })
 
+      if (this.svc.bleConnected) {
+        Text($r('app.string.camera_ble_disconnect'))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.button_danger'))
+          .width('100%')
+          .onClick(() => { this.onDisconnectBle(); })
+      }
+
       if (this.svc.bleCameras.length > 0) {
         Column() {
           ForEach(this.svc.bleCameras, (cam: BleCameraDevice) => {
@@ -432,6 +445,7 @@ export struct CameraPage {
             .width('100%')
             .padding({ top: 10, bottom: 10 })
             .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+            .enabled(!this.svc.bleConnecting && !this.svc.bleConnected)
             .onClick(() => { this.onConnectBle(cam.deviceId); })
           }, (cam: BleCameraDevice) => cam.deviceId)
         }

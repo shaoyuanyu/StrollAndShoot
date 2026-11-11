@@ -149,6 +149,15 @@
       "value": "正在搜尋藍牙相機..."
     },
     {
+      "name": "camera_ble_connecting",
+      "value": "正在連線藍牙相機..."
+    },
+    {
+      "name": "camera_ble_disconnect",
+      "value": "中斷藍牙"
+    },
+
+    {
       "name": "camera_ble_services",
       "value": "已連線，列舉到 %1$d 行 GATT 服務"
     },

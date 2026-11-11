@@ -177,6 +177,10 @@ export class CameraService {
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
   @Trace bleScanning: boolean = false;
+  /** BLE 连接进行中（bond + GATT 最长几十秒，UI 必须给反馈）。 */
+  @Trace bleConnecting: boolean = false;
+  /** BLE 已连接。 */
+  @Trace bleConnected: boolean = false;
   /** 已连接相机的 GATT 服务列表（调试用）。 */
   @Trace bleServices: string[] = [];
   private bleScanner: BleScanner | null = null;
@@ -1578,19 +1582,38 @@ export class CameraService {
 
   /** 连接一台 BLE 相机并列出 GATT 服务（验证 BLE 通道用）。 */
   async connectBle(deviceId: string): Promise<boolean> {
-    this.stopBleScan();
-    if (this.bleLink === null) {
-      this.bleLink = new BleCameraLink((msg: string) => { this.log.add(msg); });
-    }
-    const ok = await this.bleLink.connect(deviceId);
-    if (!ok) {
-      this.bleServices = [];
-      this.reportScanFailure(L10n.tr('camera_status_ble_connect_failed'));
+    if (this.bleConnecting) {
+      this.log.add('BLE 正在连接中，忽略重复点击');
       return false;
     }
-    this.bleServices = await this.bleLink.listServices();
-    this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
-    return true;
+    this.stopBleScan();
+    this.bleConnecting = true;
+    this.bleConnected = false;
+    this.bleServices = [];
+    try {
+      if (this.bleLink === null) {
+        this.bleLink = new BleCameraLink(
+          (msg: string) => { this.log.add(msg); },
+          (connected: boolean) => {
+            this.bleConnected = connected;
+            if (!connected) {
+              this.bleServices = [];
+            }
+          });
+      }
+      const ok = await this.bleLink.connect(deviceId);
+      if (!ok) {
+        this.bleServices = [];
+        this.reportScanFailure(L10n.tr('camera_status_ble_connect_failed'));
+        return false;
+      }
+      this.bleConnected = true;
+      this.bleServices = await this.bleLink.listServices();
+      this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
+      return true;
+    } finally {
+      this.bleConnecting = false;
+    }
   }
 
   /** 断开 BLE。 */
@@ -1598,6 +1621,7 @@ export class CameraService {
     if (this.bleLink !== null) {
       await this.bleLink.disconnect();
     }
+    this.bleConnected = false;
     this.bleServices = [];
   }
 

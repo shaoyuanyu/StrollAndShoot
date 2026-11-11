@@ -1,4 +1,4 @@
-import { ble, constant } from '@kit.ConnectivityKit';
+import { ble, connection as btConnection, constant } from '@kit.ConnectivityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 /** 扫描到的一台 BLE 相机。 */
@@ -61,14 +61,11 @@ export class BleScanner {
     if (this.scanning) return;
     this.scanning = true;
     this.seen.clear();
-    const options: ble.ScanOptions = {
-      interval: 0,
-      dutyMode: ble.ScanDuty.SCAN_MODE_LOW_LATENCY,
-      matchMode: ble.MatchMode.MATCH_MODE_AGGRESSIVE
-    };
     try {
       ble.on('BLEDeviceFind', this.handleFind);
-      ble.startBLEScan([], options);
+      // 空数组会被拒（401 Invalid parameter）；一个空 filter 对象表示「不过滤」。
+      const filter: ble.ScanFilter = {};
+      ble.startBLEScan([filter]);
       this.onLog('BLE 开始扫描');
     } catch (err) {
       this.scanning = false;
@@ -102,14 +99,84 @@ export class BleScanner {
 export class BleCameraLink {
   private gatt: ble.GattClientDevice | null = null;
   private readonly onLog: (msg: string) => void;
+  private readonly onState: (connected: boolean) => void;
   connected: boolean = false;
 
-  constructor(onLog: (msg: string) => void) {
+  constructor(onLog: (msg: string) => void,
+              onState: (connected: boolean) => void = (_c: boolean) => {}) {
     this.onLog = onLog;
+    this.onState = onState;
   }
 
+  /**
+   * 系统蓝牙配对（bond）。
+   *
+   * 尼康相机的 BLE 要求先完成系统层绑定再开 GATT，否则 `connect()` 一直不
+   * 回调（本项目实测：10 秒超时、没有任何状态事件）。ZPill 在 HarmonyOS 上
+   * 的流程也是 `pairDevice` → 等 `BOND_STATE_BONDED` → `createGattClientDevice`。
+   */
+  private async bond(deviceId: string): Promise<boolean> {
+    return new Promise<boolean>((resolve: (v: boolean) => void) => {
+      let settled = false;
+      const finish = (v: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolve(v);
+      };
+      const cb = (param: btConnection.BondStateParam): void => {
+        if (param.deviceId !== deviceId) return;
+        this.onLog(`BLE 配对状态: ${param.state}`);
+        if (param.state === btConnection.BondState.BOND_STATE_BONDED) {
+          btConnection.off('bondStateChange', cb);
+          finish(true);
+        } else if (param.state !== btConnection.BondState.BOND_STATE_BONDING) {
+          btConnection.off('bondStateChange', cb);
+          finish(false);
+        }
+      };
+      try {
+        btConnection.on('bondStateChange', cb);
+        btConnection.pairDevice(deviceId).catch((err: BusinessError) => {
+          this.onLog(`pairDevice 失败: ${err.code} ${err.message}`);
+          btConnection.off('bondStateChange', cb);
+          finish(false);
+        });
+        setTimeout(() => {
+          btConnection.off('bondStateChange', cb);
+          this.onLog('BLE 配对超时');
+          finish(false);
+        }, 30000);
+      } catch (err) {
+        this.onLog(`pairDevice 异常: ${(err as BusinessError).message}`);
+        finish(false);
+      }
+    });
+  }
+
+  /**
+   * 连接一台相机。
+   *
+   * 顺序：**先 GATT 直连**（多数相机不要求系统绑定，8 秒内能连上），失败
+   * 再走 `pairDevice` + 重连。之前是「先 bond 再 GATT」，bond 的 30 秒超时
+   * 会把每次点击都拖成半分钟，UI 又没反馈，用户只能反复点，反而把刚连上
+   * 的会话踢掉。
+   */
   async connect(deviceId: string): Promise<boolean> {
     await this.disconnect();
+    this.onLog(`BLE 直连 ${deviceId}`);
+    if (await this.connectGatt(deviceId)) {
+      return true;
+    }
+    this.onLog('BLE 直连失败，尝试系统配对后重连');
+    const bonded = await this.bond(deviceId);
+    this.onLog(bonded ? 'BLE 系统配对完成' : 'BLE 系统配对未完成');
+    if (!bonded) {
+      return false;
+    }
+    return await this.connectGatt(deviceId);
+  }
+
+  private async connectGatt(deviceId: string): Promise<boolean> {
     try {
       const gatt = ble.createGattClientDevice(deviceId);
       this.gatt = gatt;
@@ -122,10 +189,20 @@ export class BleCameraLink {
         };
         try {
           gatt.on('BLEConnectionStateChange', (state: ble.BLEConnectionChangeState) => {
+            this.onLog(`BLE 连接状态: ${state.state}`);
             if (state.state === constant.ProfileConnectionState.STATE_CONNECTED) {
+              // 连上就请求 MTU：相机在发现服务前长时间收不到 MTU 请求会断链。
+              try {
+                gatt.setBLEMtuSize(517);
+              } catch (_e) {
+                // MTU 协商失败不阻断服务发现
+              }
+              this.connected = true;
+              this.onState(true);
               finish(true);
             } else if (state.state === constant.ProfileConnectionState.STATE_DISCONNECTED) {
               this.connected = false;
+              this.onState(false);
               finish(false);
             }
           });
@@ -134,7 +211,10 @@ export class BleCameraLink {
           this.onLog(`BLE 连接异常: ${(err as BusinessError).message}`);
           finish(false);
         }
-        setTimeout(() => { finish(false); }, 10000);
+        setTimeout(() => {
+          this.onLog('BLE 连接超时（10s 无状态事件）');
+          finish(false);
+        }, 10000);
       });
       this.connected = ok;
       if (ok) {
@@ -171,8 +251,12 @@ export class BleCameraLink {
 
   async disconnect(): Promise<void> {
     const gatt = this.gatt;
+    const wasConnected = this.connected;
     this.gatt = null;
     this.connected = false;
+    if (wasConnected) {
+      this.onState(false);
+    }
     if (gatt === null) return;
     try {
       gatt.disconnect();

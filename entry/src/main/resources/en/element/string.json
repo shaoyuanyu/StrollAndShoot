@@ -149,6 +149,15 @@
       "value": "Searching for Bluetooth cameras…"
     },
     {
+      "name": "camera_ble_connecting",
+      "value": "Connecting to the Bluetooth camera…"
+    },
+    {
+      "name": "camera_ble_disconnect",
+      "value": "Disconnect Bluetooth"
+    },
+
+    {
       "name": "camera_ble_services",
       "value": "Connected, %1$d GATT service lines"
     },

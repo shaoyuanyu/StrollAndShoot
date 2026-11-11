@@ -743,6 +743,9 @@ export struct MainScreen {
             },
             onConnectBle: (deviceId: string) => {
               this.svc.connectBle(deviceId);
+            },
+            onDisconnectBle: () => {
+              this.svc.disconnectBle();
             }
           })
         }

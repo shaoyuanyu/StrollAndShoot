@@ -149,6 +149,15 @@
       "value": "正在搜索蓝牙相机..."
     },
     {
+      "name": "camera_ble_connecting",
+      "value": "正在连接蓝牙相机..."
+    },
+    {
+      "name": "camera_ble_disconnect",
+      "value": "断开蓝牙"
+    },
+
+    {
       "name": "camera_ble_services",
       "value": "已连接，枚举到 %1$d 行 GATT 服务"
     },
