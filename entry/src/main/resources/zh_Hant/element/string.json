@@ -457,6 +457,14 @@
       "value": "開啟後到「相機」頁點右上角的「搜尋相機」，會連上一台虛擬 PTP 相機並掃描 38 張合成照片"
     },
     {
+      "name": "settings_disable_glass",
+      "value": "關閉磨砂玻璃"
+    },
+    {
+      "name": "settings_disable_glass_desc",
+      "value": "模擬器 GPU 不支援磨砂著色器時開啟：材質改用純色、模糊歸零，避免截圖出現亂花的多邊形"
+    },
+    {
       "name": "settings_log_count",
       "value": "%1$s"
     },
@@ -765,6 +773,26 @@
       "value": "走走拍拍"
     },
     {
+      "name": "viewer_saved_to_album",
+      "value": "已儲存到系統相簿"
+    },
+    {
+      "name": "viewer_already_saved",
+      "value": "已在系統相簿中"
+    },
+    {
+      "name": "viewer_save_cancelled",
+      "value": "已取消儲存"
+    },
+    {
+      "name": "viewer_save_failed",
+      "value": "儲存失敗，請重試"
+    },
+    {
+      "name": "viewer_save_scanning",
+      "value": "掃描完成後才能儲存"
+    },
+    {
       "name": "download_title",
       "value": "下載"
     },
@@ -883,6 +911,102 @@
     {
       "name": "usb_camera_notice_text",
       "value": "「%1$s」已連接，點此開啟應用程式匯入照片"
+    },
+    {
+      "name": "viewer_details_title",
+      "value": "詳細資料"
+    },
+    {
+      "name": "viewer_detail_filename",
+      "value": "檔案名稱"
+    },
+    {
+      "name": "viewer_detail_capture",
+      "value": "拍攝時間"
+    },
+    {
+      "name": "viewer_detail_resolution",
+      "value": "尺寸"
+    },
+    {
+      "name": "viewer_detail_size",
+      "value": "檔案大小"
+    },
+    {
+      "name": "viewer_detail_format",
+      "value": "格式"
+    },
+    {
+      "name": "viewer_detail_camera",
+      "value": "相機"
+    },
+    {
+      "name": "viewer_detail_location",
+      "value": "位置"
+    },
+    {
+      "name": "viewer_detail_no_location",
+      "value": "未記錄位置"
+    },
+    {
+      "name": "viewer_detail_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "viewer_action_download",
+      "value": "下載"
+    },
+    {
+      "name": "viewer_action_saved",
+      "value": "已儲存"
+    },
+    {
+      "name": "viewer_action_favorite",
+      "value": "收藏"
+    },
+    {
+      "name": "viewer_action_favorited",
+      "value": "已收藏"
+    },
+    {
+      "name": "viewer_action_share",
+      "value": "分享"
+    },
+    {
+      "name": "viewer_favorite_added",
+      "value": "已加入收藏"
+    },
+    {
+      "name": "viewer_favorite_removed",
+      "value": "已取消收藏"
+    },
+    {
+      "name": "viewer_share_preparing",
+      "value": "正在準備分享…"
+    },
+    {
+      "name": "viewer_share_no_image",
+      "value": "原圖還在載入，請稍後再試"
+    },
+    {
+      "name": "viewer_share_failed",
+      "value": "分享失敗，請重試"
+    },
+    {
+      "name": "viewer_detail_open_track",
+      "value": "查看當天軌跡"
+    },
+    {
+      "name": "viewer_share_original",
+      "value": "原圖"
+    },
+    {
+      "name": "viewer_share_original_failed",
+      "value": "原圖取得失敗，請重試"
+    },
+    {
+      "name": "viewer_share_scanning",
+      "value": "掃描完成後才能取得原圖"
     }
   ]
 }

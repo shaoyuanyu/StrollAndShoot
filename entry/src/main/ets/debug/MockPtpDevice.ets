@@ -19,10 +19,17 @@ const THUMB_H: number = 120;
 const FULL_W: number = 1200;
 const FULL_H: number = 800;
 const DAY_COUNT: number = 5;
-const PALETTE: number[][] = [
-  [0x42, 0x85, 0xF4], [0xEA, 0x43, 0x35], [0xFB, 0xBC, 0x05],
-  [0x34, 0xA8, 0x53], [0x9C, 0x27, 0xB0], [0xFF, 0x70, 0x43],
-  [0x00, 0xAC, 0xC1], [0x79, 0x55, 0x48]
+/**
+ * 多色块测试图的色板。
+ *
+ * 以前每张图是一条同色系水平渐变：截图里几乎是一块纯色，看不出 Contain / Cover
+ * 的裁切差异、也看不出缩放锚点与方向。现在原图与缩略图都是 4×3 色块网格：
+ * 白框标出图片边界、中心十字标出几何中心、左上角固定深色块作为不对称参照。
+ */
+const MOCK_GRID: number[][] = [
+  [0xE5, 0x39, 0x35], [0xFB, 0x8C, 0x00], [0xFD, 0xD8, 0x35], [0x43, 0xA0, 0x47],
+  [0x00, 0xAC, 0xC1], [0x1E, 0x88, 0xE5], [0x8E, 0x24, 0xAA], [0xEC, 0x40, 0x7A],
+  [0xFF, 0x70, 0x43], [0x7C, 0xB3, 0x42], [0x1E, 0x40, 0xD8], [0x79, 0x55, 0x48]
 ];
 
 /** 假相机里的一棵树节点（目录或文件）。 */
@@ -51,29 +58,79 @@ function ptpDate(daysAgo: number, idx: number): string {
     `T${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
 }
 
-async function makeJpeg(w: number, h: number, rgb: number[]): Promise<Uint8Array> {
+async function makeJpeg(w: number, h: number, paletteIndex: number): Promise<Uint8Array> {
   const t0 = Date.now();
   const tFill0 = Date.now();
   const rowLen = w * 4;
-  // 只算一行（水平渐变），再逐行 memcpy 复制。
-  //
-  // 以前是按 w×h 逐像素写 RGBA：1200×800 就是 96 万次 JS 循环、每次 4 次写入，
-  // 实测在模拟器上一次生成阻塞 UI 线程 130–175ms（fill 就占 127–167ms）。而
-  // 打开一张照片会连续生成「当前 + 邻近预加载」好几张，界面上就是一顿一顿的
-  // 「开图/传输时卡」。渐变改成水平方向后视觉几乎一样，填充成本降到毫秒级。
-  const row = new Uint8Array(rowLen);
-  for (let x = 0; x < w; x++) {
-    const shade = 0.55 + 0.45 * (x / w);
-    const i = x * 4;
-    row[i] = Math.round(rgb[0] * shade);
-    row[i + 1] = Math.round(rgb[1] * shade);
-    row[i + 2] = Math.round(rgb[2] * shade);
-    row[i + 3] = 255;
-  }
   const buf = new ArrayBuffer(rowLen * h);
   const u8 = new Uint8Array(buf);
-  for (let y = 0; y < h; y++) {
-    u8.set(row, y * rowLen);
+  const cols = 4;
+  const rows = 3;
+  const blockW = Math.max(1, Math.ceil(w / cols));
+  const bandH = Math.max(1, Math.ceil(h / rows));
+  const frame = Math.max(2, Math.round(Math.min(w, h) * 0.012));
+  const cx = Math.floor(w / 2);
+  // 行缓冲仍然只算一遍再 memcpy：每个「色带行」内部横向只由 4 个色块组成，
+  // 与旧的水平渐变同一量级，不会把生成成本推回 100ms+（AGENTS.md 记过这个坑）。
+  for (let band = 0; band < rows; band++) {
+    const row = new Uint8Array(rowLen);
+    for (let x = 0; x < w; x++) {
+      const col = Math.min(cols - 1, Math.floor(x / blockW));
+      const color = (band === 0 && col === 0)
+        ? [0x1B, 0x2A, 0x4A]
+        : MOCK_GRID[(paletteIndex + band * cols + col) % MOCK_GRID.length];
+      const i = x * 4;
+      row[i] = color[0];
+      row[i + 1] = color[1];
+      row[i + 2] = color[2];
+      row[i + 3] = 255;
+    }
+    // 中心竖线：缩放、双击的锚点是否落在几何中心，截图一眼就能看出来
+    for (let x = cx - 1; x <= cx + 1; x++) {
+      if (x >= 0 && x < w) {
+        const i = x * 4;
+        row[i] = 255;
+        row[i + 1] = 255;
+        row[i + 2] = 255;
+      }
+    }
+    // 左右白框：缩略图的 Cover 裁切会先裁掉框，原图的 Contain 应该完整露出
+    for (let x = 0; x < frame && x < w; x++) {
+      const li = x * 4;
+      row[li] = 255;
+      row[li + 1] = 255;
+      row[li + 2] = 255;
+      const ri = (w - 1 - x) * 4;
+      row[ri] = 255;
+      row[ri + 1] = 255;
+      row[ri + 2] = 255;
+    }
+    const y0 = band * bandH;
+    const y1 = Math.min(h, y0 + bandH);
+    for (let y = y0; y < y1; y++) {
+      u8.set(row, y * rowLen);
+    }
+  }
+  // 上下白框 + 中心横线：整行白色，直接复制
+  const whiteRow = new Uint8Array(rowLen);
+  for (let x = 0; x < w; x++) {
+    const i = x * 4;
+    whiteRow[i] = 255;
+    whiteRow[i + 1] = 255;
+    whiteRow[i + 2] = 255;
+    whiteRow[i + 3] = 255;
+  }
+  for (let y = 0; y < frame && y < h; y++) {
+    u8.set(whiteRow, y * rowLen);
+  }
+  for (let y = Math.max(0, h - frame); y < h; y++) {
+    u8.set(whiteRow, y * rowLen);
+  }
+  const cy = Math.floor(h / 2);
+  for (let y = cy - 1; y <= cy + 1; y++) {
+    if (y >= 0 && y < h) {
+      u8.set(whiteRow, y * rowLen);
+    }
   }
   const tFill = Date.now() - tFill0;
   const initOpts: image.InitializationOptions = {
@@ -212,7 +269,7 @@ export class MockPtpDevice {
     if (cached) return cached;
     const o = MockPtpDevice.find(handle);
     if (!o) return null;
-    const bytes = await makeJpeg(THUMB_W, THUMB_H, PALETTE[o.paletteIndex]);
+    const bytes = await makeJpeg(THUMB_W, THUMB_H, o.paletteIndex);
     MockPtpDevice.thumbCache.set(handle, bytes);
     return bytes;
   }
@@ -223,7 +280,7 @@ export class MockPtpDevice {
     if (cached) return cached;
     const o = MockPtpDevice.find(handle);
     if (!o) return null;
-    const bytes = await makeJpeg(FULL_W, FULL_H, PALETTE[o.paletteIndex]);
+    const bytes = await makeJpeg(FULL_W, FULL_H, o.paletteIndex);
     MockPtpDevice.fullCache.set(handle, bytes);
     return bytes;
   }
@@ -283,7 +340,7 @@ export class MockPtpDevice {
         f.width = FULL_W;
         f.height = FULL_H;
         f.size = 2400000 + handle * 37;
-        f.paletteIndex = (day * 3 + i) % PALETTE.length;
+        f.paletteIndex = (day * 3 + i) % MOCK_GRID.length;
         tree.push(f);
         handle++;
       }

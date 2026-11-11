@@ -457,6 +457,14 @@
       "value": "Turn this on, then tap “Find Camera” on the Camera tab. A virtual PTP camera will connect and scan 38 synthetic photos."
     },
     {
+      "name": "settings_disable_glass",
+      "value": "Disable frosted glass"
+    },
+    {
+      "name": "settings_disable_glass_desc",
+      "value": "Turn on when the emulator GPU cannot render frosted glass: use solid colors and no blur to avoid glitchy polygons in screenshots"
+    },
+    {
       "name": "settings_log_count",
       "value": "%1$s"
     },
@@ -765,6 +773,26 @@
       "value": "Stroll & Shoot"
     },
     {
+      "name": "viewer_saved_to_album",
+      "value": "Saved to the system album"
+    },
+    {
+      "name": "viewer_already_saved",
+      "value": "Already in the system album"
+    },
+    {
+      "name": "viewer_save_cancelled",
+      "value": "Save cancelled"
+    },
+    {
+      "name": "viewer_save_failed",
+      "value": "Save failed, try again"
+    },
+    {
+      "name": "viewer_save_scanning",
+      "value": "Wait for the scan to finish"
+    },
+    {
       "name": "download_title",
       "value": "Download"
     },
@@ -883,6 +911,102 @@
     {
       "name": "usb_camera_notice_text",
       "value": "'%1$s' is connected. Tap to open the app and import photos."
+    },
+    {
+      "name": "viewer_details_title",
+      "value": "Details"
+    },
+    {
+      "name": "viewer_detail_filename",
+      "value": "File name"
+    },
+    {
+      "name": "viewer_detail_capture",
+      "value": "Captured"
+    },
+    {
+      "name": "viewer_detail_resolution",
+      "value": "Dimensions"
+    },
+    {
+      "name": "viewer_detail_size",
+      "value": "File size"
+    },
+    {
+      "name": "viewer_detail_format",
+      "value": "Format"
+    },
+    {
+      "name": "viewer_detail_camera",
+      "value": "Camera"
+    },
+    {
+      "name": "viewer_detail_location",
+      "value": "Location"
+    },
+    {
+      "name": "viewer_detail_no_location",
+      "value": "No location recorded"
+    },
+    {
+      "name": "viewer_detail_unknown",
+      "value": "Unknown"
+    },
+    {
+      "name": "viewer_action_download",
+      "value": "Download"
+    },
+    {
+      "name": "viewer_action_saved",
+      "value": "Saved"
+    },
+    {
+      "name": "viewer_action_favorite",
+      "value": "Favorite"
+    },
+    {
+      "name": "viewer_action_favorited",
+      "value": "Favorited"
+    },
+    {
+      "name": "viewer_action_share",
+      "value": "Share"
+    },
+    {
+      "name": "viewer_favorite_added",
+      "value": "Added to favorites"
+    },
+    {
+      "name": "viewer_favorite_removed",
+      "value": "Removed from favorites"
+    },
+    {
+      "name": "viewer_share_preparing",
+      "value": "Preparing to share…"
+    },
+    {
+      "name": "viewer_share_no_image",
+      "value": "The full image is still loading. Try again shortly."
+    },
+    {
+      "name": "viewer_share_failed",
+      "value": "Share failed. Try again."
+    },
+    {
+      "name": "viewer_detail_open_track",
+      "value": "View day's track"
+    },
+    {
+      "name": "viewer_share_original",
+      "value": "Original"
+    },
+    {
+      "name": "viewer_share_original_failed",
+      "value": "Could not fetch the original. Try again."
+    },
+    {
+      "name": "viewer_share_scanning",
+      "value": "Wait for scanning to finish before sharing the original."
     }
   ]
 }

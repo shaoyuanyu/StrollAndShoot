@@ -20,6 +20,7 @@ import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/Tit
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
 import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens';
+import { GlassEffect } from '../utils/GlassEffect';
 
 @Builder
 export function MainScreenBuilder() {
@@ -171,18 +172,23 @@ export struct MainScreen {
       cancel: () => {
         this.usbDialogShowing = false;
       },
+      // 与「发现新相机」的缓存对话框保持一致：primary 在左、secondary 在右，
+      // 右侧放高亮的主动作。之前主动作在左且把「稍后」放在右，位置和主次都反了。
       primaryButton: {
+        value: $r('app.string.usb_camera_found_later'),
+        action: () => {
+          this.usbDialogShowing = false;
+        }
+      },
+      secondaryButton: {
         value: $r('app.string.usb_camera_found_scan'),
         fontColor: $r('app.color.primary'),
         action: () => {
           this.usbDialogShowing = false;
-          this.svc.scanForCamera(false, true);
-        }
-      },
-      secondaryButton: {
-        value: $r('app.string.usb_camera_found_later'),
-        action: () => {
-          this.usbDialogShowing = false;
+          // 弹窗里的「开始扫描」应与相机页的「快速扫描」同口径：
+          // 有缓存走快速扫描，首次/无缓存由 scanForCamera 自动退化为全量。
+          // 之前固定传 false，即使有缓存也会重新走一遍全量扫描。
+          this.svc.scanForCamera(true, true);
         }
       }
     });
@@ -375,7 +381,7 @@ export struct MainScreen {
             left: this.handedness.leftHanded ? 12 : undefined,
             right: this.handedness.leftHanded ? undefined : 12
           })
-          .systemMaterial(this.floatMaterial)
+          .systemMaterial(GlassEffect.material(this.floatMaterial))
           .animation({ duration: 220, curve: Curve.EaseOut })
         } else if (this.gallerySelectMode) {
           Column() {
@@ -392,7 +398,7 @@ export struct MainScreen {
             top: this.screenHeightVp() - this.navIndicatorVp() - ControlHeight.Bar,
             left: (this.screenWidthVp() - 96) / 2
           })
-          .systemMaterial(this.floatMaterial)
+          .systemMaterial(GlassEffect.material(this.floatMaterial))
         }
       }
     }
@@ -417,10 +423,10 @@ export struct MainScreen {
       .width(ControlHeight.Pill)
       .height(ControlHeight.Pill)
       .backgroundColor(Color.Transparent)
-      .systemMaterial(new uiMaterial.ImmersiveMaterial({
+      .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
         interactive: true
-      }))
+      })))
       .onClick(() => { this.exitSelectMode(); })
 
       Text(this.selectTitleText())
@@ -440,10 +446,10 @@ export struct MainScreen {
       .padding({ left: 16, right: 16 })
       .backgroundColor(Color.Transparent)
       .borderRadius(pillRadius(ControlHeight.Pill))
-      .systemMaterial(new uiMaterial.ImmersiveMaterial({
+      .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
         interactive: true
-      }))
+      })))
       .onClick(() => { this.selectAllVersion++; })
     }
     .width('100%')
@@ -481,10 +487,10 @@ export struct MainScreen {
             .margin({ right: 8 })
             .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
               .fontColor([$r('app.color.text_primary')]))
-            .systemMaterial(new uiMaterial.ImmersiveMaterial({
+            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true
-            }))
+            })))
             .onSelect((index: number) => { this.applyFilterIndex(index); })
         }
         Button() {
@@ -496,10 +502,10 @@ export struct MainScreen {
         .padding({ left: 16, right: 16 })
         .backgroundColor(Color.Transparent)
         .borderRadius(pillRadius(ControlHeight.Pill))
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
+        .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
           style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
           interactive: true
-        }))
+        })))
         .onClick(() => { this.toggleSelectVersion++; })
       }
 
@@ -516,10 +522,10 @@ export struct MainScreen {
             .fontColor($r('app.color.text_on_primary'))
             .borderRadius(pillRadius(ControlHeight.Pill))
             .opacity(0.6)
-            .systemMaterial(new uiMaterial.ImmersiveMaterial({
+            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true
-            }))
+            })))
         } else {
           Button(this.svc.connected ? $r('app.string.camera_main_quick_scan') : $r('app.string.camera_main_find'))
             .height(ControlHeight.Pill)
@@ -528,10 +534,10 @@ export struct MainScreen {
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_on_primary'))
             .borderRadius(pillRadius(ControlHeight.Pill))
-            .systemMaterial(new uiMaterial.ImmersiveMaterial({
+            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true
-            }))
+            })))
             .onClick(() => { this.svc.scanForCamera(true); })
         }
       }
@@ -646,6 +652,10 @@ export struct MainScreen {
               pushParam['requestGalleryScroll'] = (targetHandle: number): void => {
                 this.requestGalleryScroll(targetHandle);
               };
+              // 预览器里「保存到相册」成功后刷新已下载集合，画廊绿点立即生效
+              pushParam['onDownloadSaved'] = (): void => {
+                this.syncDownloadedKeys();
+              };
               this.pageInfos.pushPath({ name: 'PhotoViewerScreen', param: pushParam });
             },
             onDownloadSelected: async (handles: number[]) => {
@@ -743,11 +753,12 @@ export struct MainScreen {
         // 同一个公式定位，两者才能严丝合缝地叠在同一位置。
         barBottomMargin: this.navIndicatorVp(),
         maskColor: Color.Transparent,
-        // 官方沉浸材质：接管胶囊的背景、模糊与折射（模拟器与真机均生效）
-        systemMaterial: new uiMaterial.ImmersiveMaterial({
+        // 官方沉浸材质：接管胶囊的背景、模糊与折射（模拟器与真机均生效）。
+        // 调试开关打开时换成空材质，避免模拟器 GPU 画不出磨砂着色器时整屏乱花。
+        systemMaterial: GlassEffect.material(new uiMaterial.ImmersiveMaterial({
           style: uiMaterial.ImmersiveStyle.REGULAR,
           interactive: true
-        })
+        }))
       })
 
       .animationDuration(220)
@@ -772,12 +783,14 @@ export struct MainScreen {
       .clip(false)
       // 内容区的渐进磨砂：模糊强度从顶部到底部连续衰减到 0，
       // 没有硬边（backdropBlur 做不到这一点，会在标题栏下边缘留一条线）
-      .linearGradientBlur(96, {
+      .linearGradientBlur(GlassEffect.blurRadius(96), {
         // fractionStops 的每一档是 [模糊程度, 模糊位置]，位置必须严格递增；
         // 之前最后一档停在 0.18，0.18→1 没有定义，模拟器上会画出三角碎片。
+        // 调试开关打开时半径归零（模拟器 GPU 画不出磨砂效果时的纯色兜底）。
         fractionStops: [[1, 0], [0.9, 0.06], [0, 0.18], [0, 1]],
         direction: GradientDirection.Bottom
       })
+
     }
     .title({ builder: this.TitleBar, height: titleBarTotalVp() }, {
       // STACK：内容区延伸到标题栏下方，标题栏材质才有可折射的底层

@@ -6,6 +6,7 @@ import { GalleryZoom } from '../utils/GalleryZoom';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import { formatDateParts } from '../utils/DateTimeText';
+import { FavoritesStore } from '../model/FavoritesStore';
 
 /** 扫描浮卡占用的高度（vp）：列表用 contentStartOffset 让开这么多。 */
 const SCAN_CARD_INSET = 64;
@@ -61,12 +62,22 @@ class FlatItem {
 export struct GalleryPage {
   @Param downloadProgress: DownloadProgress | null = null;
   @Param downloadedKeys: string[] = [];
+  /**
+   * 已下载集合每变化一次就 +1，只用于把版本编进行 key。
+   *
+   * `Repeat` 命中相同 key 不会重跑 `each`（AGENTS.md 的刷新坑），单元格又是普通
+   * `@Builder`，只改 `downloadedKeys` 时已下载绿点不会刷新。保存/下载完成后用
+   * key 变化强制重建可视单元格；只在集合变化时发生，不在滚动热路径上。
+   */
+  @Local downloadedDotRevision: number = 0;
   @Param galleryColumnCount: number = -1;
   @Param displayMode: string = 'file_first';
   /** 当前格式筛选，'' 表示全部。控件在标题栏，这里只负责过滤。 */
   @Param scroller: Scroller = new Scroller();
   @Param filterValue: string = '';
   @Local svc: CameraService = CameraService.getInstance();
+  /** 收藏是本地持久化状态；读 keys 让页面订阅变化，收藏后回到画廊角标立即出现。 */
+  @Local favStore: FavoritesStore = FavoritesStore.getInstance();
   @Local selectMode: boolean = false;
   @Local selectedHandles: Set<number> = new Set();
   /**
@@ -125,6 +136,13 @@ export struct GalleryPage {
     // 设置里改了默认列数：作废捏合结果，回到新的默认列数。
     this.pinchScale = 1.0;
     this.appliedColumns = 0;
+  }
+
+  /** 已下载集合变化（保存/批量下载完成）：重建行，让绿点立即出现。 */
+  @Monitor('downloadedKeys')
+  onDownloadedKeysChanged(): void {
+    this._flatItemsCache = null;
+    this.downloadedDotRevision++;
   }
 
   @Monitor('toggleSelectVersion')
@@ -289,6 +307,10 @@ export struct GalleryPage {
       this._downloadedSetRef = this.downloadedKeys;
     }
     return this._downloadedSet;
+  }
+
+  private isFavorite(photo: PhotoEntry): boolean {
+    return this.favStore.isFavorite(this.svc.makeDownloadKey(photo.filename, photo.size));
   }
 
   private isDownloaded(photo: PhotoEntry): boolean {
@@ -694,6 +716,19 @@ export struct GalleryPage {
             .position({ top: 5, right: 5 })
             .hitTestBehavior(HitTestMode.None)
         }
+        // 已收藏：左下角小书签，不参与点击/多选
+        if (this.isFavorite(cellRi.item!.displayPhoto)) {
+          Stack() {
+            SymbolGlyph($r('sys.symbol.bookmark_fill'))
+              .fontSize(IconSize.Small)
+              .fontColor([$r('app.color.text_on_dark')])
+          }
+          .width(20).height(20)
+          .borderRadius(pillRadius(20))
+          .backgroundColor($r('app.color.scrim'))
+          .position({ bottom: 5, left: 5 })
+          .hitTestBehavior(HitTestMode.None)
+        }
       }
       .layoutWeight(1)
       .aspectRatio(1)
@@ -925,7 +960,10 @@ export struct GalleryPage {
                 const first = item.rowPhotos[0];
                 // key 必须保持稳定：把行完成状态编进 key 会让 virtualScroll 的
                 // 复用项失效，滚动后整行渲染成空白。缩略图刷新交给 ThumbImage。
-                return first !== null ? `r_${first.displayPhoto.handle}` : `r_pad`;
+                // 只有「已下载集合」的版本会编进 key（低频，用于绿点即时刷新）。
+                return first !== null
+                  ? `r_${first.displayPhoto.handle}_${this.downloadedDotRevision}`
+                  : `r_pad`;
               })
               .virtualScroll()
           }

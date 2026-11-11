@@ -20,7 +20,12 @@ import { image } from '@kit.ImageKit';
 import { WindowUtils } from '../utils/WindowUtils';
 import type { RectInfoInPx } from '../utils/ComponentAttrUtils';
 
-/** 预览器标题栏高度（vp）：36vp 返回钮 + 上下 12/8 内边距，见 PhotoViewer.TitleBar。 */
+/**
+ * 预览器标题栏高度（vp）。
+ *
+ * 这是**布局尺寸的唯一来源**：`PhotoViewer.TitleBar` 的 Row 固定 `.height(VIEWER_TITLE_BAR_HEIGHT)`，
+ * 这里据此算图片显示区域。两边一旦不一致，一镜到底的落点就会和真实照片错开几 vp。
+ */
 export const VIEWER_TITLE_BAR_HEIGHT: number = 56;
 
 /** 屏幕矩形（vp，窗口坐标）。 */
@@ -49,7 +54,7 @@ export class PhotoMorphState {
   @Trace top: number = 0;
   @Trace width: number = 0;
   @Trace height: number = 0;
-  /** 黑色背板不透明度（0 = 透出下层画廊，1 = 纯黑）。 */
+  /** 页面背板不透明度（0 = 透出下层画廊，1 = 完全不透明）。 */
   @Trace backdrop: number = 0;
   /** 共享照片层是否在场。 */
   @Trace visible: boolean = false;
@@ -79,11 +84,17 @@ export class MorphGeometry {
     return Math.max(0, h - top - bottom - VIEWER_TITLE_BAR_HEIGHT);
   }
 
-  /** 照片在预览器里的实际显示矩形（`ImageFit.Contain`，居中）。 */
-  static containRect(aspect: number): MorphRect {
+  /**
+   * 照片在预览器里的实际显示矩形（`ImageFit.Contain`，居中）。
+   *
+   * @param bottomChrome 预览器底部被操作栏/缩略图条占用的高度（vp）。
+   *   传 0 表示整块图片区域参与居中（旧行为）；预览器会传入实际占用的
+   *   高度，让照片在「可见区域」里居中，而不是被底部控件盖住一截。
+   */
+  static containRect(aspect: number, bottomChrome: number = 0): MorphRect {
     const width = WindowUtils.windowWidthPx > 0 ? px2vp(WindowUtils.windowWidthPx) : 0;
     const areaTop = MorphGeometry.imageAreaTop();
-    const areaHeight = MorphGeometry.imageAreaHeight();
+    const areaHeight = Math.max(0, MorphGeometry.imageAreaHeight() - Math.max(0, bottomChrome));
     if (width <= 0 || areaHeight <= 0 || !(aspect > 0)) {
       return new MorphRect(0, areaTop, width, areaHeight);
     }
@@ -114,7 +125,8 @@ export class MorphGeometry {
 }
 
 /**
- * 黑色背板。单独抽成叶子组件：转场期间它的不透明度逐帧变化，
+ * 页面背板。背景色跟随深浅色（浅色 = 页面底色，深色 = 纯黑），
+ * 转场期间它的不透明度逐帧变化；单独抽成叶子组件，
  * 若把 opacity 写在页面 build() 里会让整页跟着重建。
  */
 @ComponentV2
@@ -125,7 +137,7 @@ export struct MorphBackdrop {
     Column()
       .width('100%')
       .height('100%')
-      .backgroundColor(Color.Black)
+      .backgroundColor($r('app.color.viewer_backdrop'))
       .opacity(this.alpha)
       .hitTestBehavior(HitTestMode.None)
   }

@@ -10,6 +10,12 @@ export class SettingsStore {
   @Trace displayMode: string = 'file_first';
   /** 调试包专用：让「搜索相机」连上一台虚拟相机（见 debug/MockPtpDevice）。 */
   @Trace mockCameraEnabled: boolean = false;
+  /**
+   * 调试包专用：关闭磨砂玻璃（沉浸光感）材质与模糊。
+   * 模拟器 GPU 不支持磨砂着色器，材质叠加时会出现乱画的多边形；
+   * 打开后所有材质换成空材质、模糊半径归零，便于截图排查布局。
+   */
+  @Trace debugDisableGlass: boolean = false;
 
   private static instance_: SettingsStore;
 

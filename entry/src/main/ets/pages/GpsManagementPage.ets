@@ -9,6 +9,7 @@ import { L10n } from '../utils/L10n';
 import { formatDayKey } from '../utils/DateTimeText';
 import { ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
+import { GlassEffect } from '../utils/GlassEffect';
 
 @Builder
 export function GpsManagementPageBuilder() {
@@ -394,7 +395,7 @@ export struct GpsManagementPage {
     .height(ControlHeight.Bar)
     .padding({ left: 16, right: 10 })
     .borderRadius(pillRadius(ControlHeight.Bar))
-    .systemMaterial(this.floatMaterial)
+    .systemMaterial(GlassEffect.material(this.floatMaterial))
   }
 
   /**
@@ -431,7 +432,7 @@ export struct GpsManagementPage {
           .width(40).height(40)
           .backgroundColor(Color.Transparent)
           .borderRadius(pillRadius(40))
-          .systemMaterial(this.titleMaterial)
+          .systemMaterial(GlassEffect.material(this.titleMaterial))
           .onClick(() => { this.pageInfos.pop(); })
 
           Column({ space: 1 }) {
@@ -458,7 +459,7 @@ export struct GpsManagementPage {
               .padding({ left: 16, right: 16 })
               .backgroundColor(Color.Transparent)
               .borderRadius(pillRadius(36))
-              .systemMaterial(this.titleMaterial)
+              .systemMaterial(GlassEffect.material(this.titleMaterial))
               .onClick(() => { this.onHeaderAction(); })
           }
         }

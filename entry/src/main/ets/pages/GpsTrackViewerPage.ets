@@ -16,6 +16,7 @@ import { MapCapability } from '../utils/MapCapability';
 import { L10n } from '../utils/L10n';
 import { formatDayKey } from '../utils/DateTimeText';
 import type { GpsRecord } from '../model/PhotoEntry';
+import { GlassEffect } from '../utils/GlassEffect';
 
 @Builder
 export function GpsTrackViewerPageBuilder() {
@@ -385,7 +386,7 @@ export struct GpsTrackViewerPage {
       dragBar: true,
       maskColor: Color.Transparent,
       enableOutsideInteractive: true,
-      systemMaterial: this.sheetMaterial,
+      systemMaterial: GlassEffect.material(this.sheetMaterial),
       onHeightDidChange: (height: number) => {
         // 系统回调给的是 px（模拟器上 380vp 的档位实测返回 1330），
         // 这里必须换算成 vp，否则地图 padding 和示意图的 bottomInset 会大 3 倍多。
@@ -1114,7 +1115,7 @@ export struct GpsTrackViewerPage {
         }
         .width(40).height(40)
         .backgroundColor(Color.Transparent)
-        .systemMaterial(this.titleMaterial)
+        .systemMaterial(GlassEffect.material(this.titleMaterial))
         .onClick(() => { this.pageInfos.pop(); })
 
         // 标题也做成标题栏里的玻璃控件，直接吃 ImmersiveMaterial，
@@ -1130,7 +1131,7 @@ export struct GpsTrackViewerPage {
         .padding({ left: 16, right: 16 })
         .backgroundColor(Color.Transparent)
         .borderRadius(pillRadius(40))
-        .systemMaterial(this.titleMaterial)
+        .systemMaterial(GlassEffect.material(this.titleMaterial))
 
         Blank()
 
@@ -1141,7 +1142,7 @@ export struct GpsTrackViewerPage {
         }
         .width(40).height(40)
         .backgroundColor(Color.Transparent)
-        .systemMaterial(this.titleMaterial)
+        .systemMaterial(GlassEffect.material(this.titleMaterial))
         .bindMenu([
           {
             value: $r('app.string.gps_delete_day_menu'),
@@ -1363,7 +1364,7 @@ export struct GpsTrackViewerPage {
                     .padding({ left: 12, right: 12 })
                     .fontColor($r('app.color.text_primary'))
                     .backgroundColor($r('app.color.glass_bg'))
-                    .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+                    .backgroundBlurStyle(GlassEffect.blurStyle(BlurStyle.COMPONENT_THIN))
                     .borderRadius(pillRadius(30))
                     .onClick(() => { this.retryMap(); })
                 }

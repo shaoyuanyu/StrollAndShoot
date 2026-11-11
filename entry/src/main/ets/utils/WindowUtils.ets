@@ -6,9 +6,8 @@ import { resourceManager } from '@kit.LocalizationKit';
  * Window-level facts and helpers shared across pages.
  *
  * System bar colours are driven explicitly from the app theme: the platform
- * default is only applied once at first launch, so leaving the bars untouched
- * after the viewer pinned them would keep stale colours (e.g. a white status
- * bar in dark mode).
+ * default is applied only once at first launch, so screens that change them
+ * restore the theme colours when they disappear.
  */
 export class WindowUtils {
   public static window: window.Window;
@@ -38,8 +37,8 @@ export class WindowUtils {
   public static applyThemeSystemBars(dark: boolean): void {
     const w = WindowUtils.window;
     if (!w) return;
-    // 窗口是全屏布局（内容延伸到状态栏下方），状态栏透明，
-    // 状态栏区域的背板由页面的 HDS 标题栏材质提供
+    // 窗口是全屏布局（内容延伸到状态栏下方），系统栏透明，
+    // 状态栏/导航条区域直接透出页面背板。
     const bg = '#00000000';
     const fg = dark ? '#FFFFFF' : '#000000';
     w.setWindowSystemBarProperties({
@@ -47,20 +46,6 @@ export class WindowUtils {
       statusBarContentColor: fg,
       navigationBarColor: bg,
       navigationBarContentColor: fg
-    }).catch((_e: Error) => { /* best effort */ });
-  }
-
-  /**
-   * Paint the system bars for the photo viewer, which is always dark.
-   */
-  public static applyViewerSystemBars(): void {
-    const w = WindowUtils.window;
-    if (!w) return;
-    w.setWindowSystemBarProperties({
-      statusBarColor: '#FF000000',
-      statusBarContentColor: '#FFFFFF',
-      navigationBarColor: '#FF000000',
-      navigationBarContentColor: '#FFFFFF'
     }).catch((_e: Error) => { /* best effort */ });
   }
 }

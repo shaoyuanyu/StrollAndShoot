@@ -106,6 +106,19 @@
   - 关掉内容区 `linearGradientBlur` → 仍复现；去掉底部操作栏材质 → 仍复现；`barHeight` 设 0 或 56 → 都复现；
   - `hilog` 里持续出现 `E C01406/render_service/OHOS::GE: GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false` —— **模拟器 GPU 不支持磨砂玻璃（沉浸光感）着色器**，多选态同时叠了标题栏材质按钮 + 底部操作栏材质 + 页签材质并持续重绘，渲染器退化成乱画的几何。
   - 功能不受影响（标题计数、拖拽框选、全选、下载栏都正常）。**真机需确认材质渲染**；模拟器上不要再拿多选态截图做视觉验收。
+  - **调试缓解（2026-11-09）**：设置页「调试 → 关闭磨砂玻璃」会通过 `utils/GlassEffect.ets` 把所有 `systemMaterial` 换成 `uiMaterial.Material.empty`、`backgroundBlurStyle` 换成 `BlurStyle.NONE`、`linearGradientBlur` 半径归零。打开后材质叠加造成的乱花会减少，布局与交互截图基本可用。
+  - **进一步 A/B（2026-11-09，画廊顶部大块彩色三角形）**：以下改动**每一项都单独验证过，伪影仍复现**，形状随重绘变化：
+    1. 应用级 `ohos.arkui.UIMaterial.state` 设为 `disable`（`hilog` 里 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false` 归零）；
+    2. 全部 `systemMaterial` 换 `Material.empty` + `backgroundBlurStyle(NONE)`；
+    3. 完全移除 `linearGradientBlur`；
+    4. 去掉 `List.clip(false)`、`cachedCount(6, true)`、`virtualScroll()`；
+    5. 关闭扫描浮卡（`ScanCard`）；
+    6. 缩略图 `Image` 换成纯色 `Column`。
+    - 应用内 `Window.snapshot()`（`--ps shot`）同样能截到，排除「系统截屏/悬浮窗」假象。
+    - 冷启动、未扫描时画廊空态**完全干净**；一旦列表里有照片行就出现。触发点是「有内容的列表层」的栅格化/合成，不是页面壳子、标题栏或某个单个组件。
+    - 结论：这是模拟器渲染管线（virtio-gpu / GLES + 图层合成）的缺陷，应用侧没有可稳定规避的属性组合；**模拟器截图只能用于布局/状态/交互，材质与整页视觉以真机为准**。
+    - 官方依据：UI Design Kit《模拟器支持情况》明确模拟器不支持 HDS 沉浸视效（含沉浸光感材质）；图形模块文档列出「模拟器与真机的差异」；模拟器 FAQ 对图形异常建议清数据重启、更新驱动/模拟器。
+    - 处理建议：真机验收；模拟器持续花屏时重启或清数据重启模拟器、更新 DevEco Studio/模拟器镜像；仍复现就附日志 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false` 与复现步骤向华为反馈。
 - `devecocli check lint` 在本机报告 `Files checked: 0`（工具链问题），本轮以编译 0 error 为准。
 
 
