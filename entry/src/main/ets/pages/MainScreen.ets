@@ -2,6 +2,7 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 
+import { CameraLinkMode } from '../model/CameraLinkMode';
 import { CameraService } from '../services/CameraService';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { HandednessService } from '../services/HandednessService';
@@ -97,6 +98,7 @@ export struct MainScreen {
     HandednessService.getInstance().start();
     // 冷启动就把已配对的相机接上：相机休眠时 BLE 仍连得上，握手里的
     // stage1 重发负责唤醒，用户不用手动点「搜索相机」。
+    this.svc.initLinkMode();
     setTimeout(() => { this.svc.autoConnectBle(); }, 800);
     // 由通知冷启动时，UsbAttachWatcher 可能在 MainScreen 创建前就递增了版本；
     // @Monitor 不会为初始值触发，这里补一次。
@@ -530,7 +532,9 @@ export struct MainScreen {
               interactive: true
             })))
         } else {
-          Button(this.svc.connected ? $r('app.string.camera_main_quick_scan') : $r('app.string.camera_main_find'))
+          Button(this.svc.connected && this.svc.linkMode === CameraLinkMode.USB
+            ? $r('app.string.camera_main_quick_scan')
+            : $r('app.string.camera_main_find'))
             .height(ControlHeight.Pill)
             .padding({ left: 18, right: 18 })
             .fontSize(FontSize.Body)
@@ -541,7 +545,7 @@ export struct MainScreen {
               style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
               interactive: true
             })))
-            .onClick(() => { this.svc.scanForCamera(true); })
+            .onClick(() => { this.svc.searchByMode(); })
         }
       }
     }
@@ -752,6 +756,9 @@ export struct MainScreen {
             },
             onConnectWireless: () => {
               this.svc.connectWirelessNow();
+            },
+            onSelectMode: (mode: number) => {
+              this.svc.setLinkMode(mode);
             }
           })
         }

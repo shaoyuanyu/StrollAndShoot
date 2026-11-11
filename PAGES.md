@@ -99,6 +99,18 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `visualTab === 1` 分支，不是 `currentTab`）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
 - 内容区是 24vp 圆角白卡、内边距 16vp：**连接卡**、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。
+#### 连接卡：四选一胶囊 + 模式专属内容（1.43.0）
+
+相机页顶部是 `CapsuleSegmentButtonV2` 四选一：**USB / 蓝牙 / WIFI AP / WIFI STA**，默认「蓝牙」，选择落盘（`CameraLinkModeStore`）。
+
+为什么从"App 自动决定"改成"用户选"：自动切换在真机上先后被证伪 —— BLE 与 Wi-Fi 互斥（Wi-Fi 期间相机不发蓝牙）、`0x9435(0)` 回 OK 但无效、STA 模式关会话三分钟后相机仍挂在热点上。既然做不到"无缝"，就别假装无缝：把模式摊开让用户选，所见即所得。
+
+- 每种模式只显示自己的内容：USB 模式没有蓝牙/无线块；BLE 模式没有 IP 输入与「搜索附近的相机」；只有 STA 模式才出现 IP 输入与 mDNS 扫描入口。
+- 无线块标题随模式变（`wirelessBlockTitle()`），BLE 模式下不出现「Wi-Fi」字样。
+- 每模式一段引导（`guideText()` 读 `camera_guide_usb/_ble/_ap/_sta`），步骤对齐 SnapBridge 官方帮助的相机菜单路径。
+- 标题栏那颗按钮统一叫「搜索相机」（USB 且已连上时是「快速扫描」），一律走 `svc.searchByMode()`，按钮位置不随模式变化。
+- AP 模式额外给「查看照片」主色按钮 + 分步进度；STA 模式保留 IP 输入与 mDNS 列表。
+
 #### 连接卡：两种模式，一张卡（1.41.0）
 
 功能上只有两种连接方式，UI 必须按这两种讲：

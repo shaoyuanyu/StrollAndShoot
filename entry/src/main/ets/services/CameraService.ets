@@ -22,6 +22,8 @@ import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
 import { BleIdentityStore } from './BleIdentityStore';
 import { WifiLinkStore } from './WifiLinkStore';
 import { WifiApJoiner, type ApJoinOutcome } from './WifiApJoiner';
+import { CameraLinkMode, DEFAULT_LINK_MODE, isWifiMode } from '../model/CameraLinkMode';
+import { CameraLinkModeStore } from '../model/CameraLinkModeStore';
 import { collectLocalNetworks, networkHint } from './LocalNetworks';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
@@ -239,6 +241,13 @@ export class CameraService {
   private readonly bleProbeDelays: number[] = [5000, 20000, 30000];
   /** 退出无线后密集重扫 BLE 的计时器。 */
   private bleRecoveryTimer: number = -1;
+  /**
+   * 当前链路模式（相机页四选一，落盘，默认蓝牙）。
+   *
+   * 1.43.0 起 App 不再自己猜「该走哪条无线链路」：模式由用户明确选择，
+   * 每种模式有自己的入口、引导与状态，所见即所得。
+   */
+  @Trace linkMode: number = DEFAULT_LINK_MODE;
   /** Wi-Fi AP 模式下「加入相机热点」的执行者。 */
   private apJoiner: WifiApJoiner | null = null;
   /** 正在把相机切到 Wi-Fi AP 并连上（UI 用它显示分步进度）。 */
@@ -1796,9 +1805,9 @@ export class CameraService {
       // 立刻写会被拒收甚至被踢链。
       this.startBleKeepalive(2500);
       if (canHandover) {
-        // 已经把相机推到 Wi-Fi 模式：接着找它。
-        this.autoLinkWifi('ble-paired').catch((err: Error) => {
-          this.log.add(`自动无线启动失败: ${err.message}`);
+        // 已经把相机推到 Wi-Fi 模式：按当前模式接着收口。
+        this.afterHandover().catch((err: Error) => {
+          this.log.add(`交接收口失败: ${err.message}`);
         });
       }
       return true;
@@ -1913,6 +1922,66 @@ export class CameraService {
     this.bleSerial = '';
   }
 
+  /** 启动时把落盘的模式读回来。 */
+  initLinkMode(): void {
+    this.linkMode = CameraLinkModeStore.getInstance().mode;
+  }
+
+  /** 用户切换模式。切模式不做自动连接，等用户点「搜索相机」。 */
+  setLinkMode(mode: number): void {
+    if (mode === this.linkMode) return;
+    const label = ['USB', '蓝牙', 'Wi-Fi AP', 'Wi-Fi STA'][mode] ?? `${mode}`;
+    this.log.add(`链路模式切到 ${label}`);
+    this.linkMode = mode;
+    CameraLinkModeStore.getInstance().set(mode);
+  }
+
+  /**
+   * 「搜索相机」的统一入口：按当前模式分派。
+   *
+   * 四种模式共用同一个按钮位置，用户不需要记「哪个按钮属于哪个模式」；
+   * 模式本身在页面顶部的胶囊里选。
+   */
+  async searchByMode(): Promise<void> {
+    this.log.add(`按模式搜索：${this.linkMode}`);
+    switch (this.linkMode) {
+      case CameraLinkMode.USB:
+        await this.scanForCamera(false, true);
+        break;
+      case CameraLinkMode.BLE:
+        if (!await this.autoConnectBle()) {
+          await this.scanBleCameras();
+        }
+        break;
+      case CameraLinkMode.AP:
+      case CameraLinkMode.STA:
+        await this.searchWireless();
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** 无线两模式的搜索：已配对就直接走全流程，未配对先扫出来让用户点。 */
+  private async searchWireless(): Promise<void> {
+    if (this.connected && this.wireless) return;
+    const store = BleIdentityStore.getInstance();
+    if (store.hasIdentity() && store.deviceId.length > 0) {
+      if (this.linkMode === CameraLinkMode.AP) {
+        await this.connectWirelessNow();
+      } else {
+        // STA：先连 BLE 待机，再唤醒相机无线并发现
+        if (!await this.connectBle(store.deviceId, store.cameraName, false)) {
+          await this.scanBleCameras();
+          return;
+        }
+        await this.autoLinkWifi('search-sta');
+      }
+      return;
+    }
+    await this.scanBleCameras();
+  }
+
   private getApJoiner(): WifiApJoiner {
     if (this.apJoiner === null) {
       this.apJoiner = new WifiApJoiner((msg: string) => this.log.add(msg));
@@ -1937,11 +2006,12 @@ export class CameraService {
     if (this.apJoining || this.wifiAutoConnecting) return false;
     if (!this.handoverAllowed()) {
       this.log.add('交接冷却中：相机刚被推过 Wi-Fi，稍后再试');
+      this.wirelessStage = '相机刚切换过无线，请稍等一会再试';
       return false;
     }
     this.apJoining = true;
     try {
-      // 1. BLE 待机握手（会顺带读并解出 0x2004）
+      // BLE 待机握手（AP 模式要靠它拿 0x2004 凭据）
       if (!this.bleConnected) {
         const store = BleIdentityStore.getInstance();
         if (!store.hasIdentity() || store.deviceId.length === 0) {
@@ -1954,72 +2024,106 @@ export class CameraService {
           return false;
         }
       }
-      const creds = this.bleLink === null ? null : this.bleLink.getCredentials();
-      if (creds === null) {
-        this.wirelessStage = '没拿到相机热点凭据（相机可能没认这次配对）';
-        this.log.add('自动无线: 0x2004 凭据为空，放弃');
-        return false;
-      }
-
-      // 2. 把相机推到 Wi-Fi AP
+      // 把相机推到 Wi-Fi（AP 模式 = 起热点；STA 模式 = 入网）
       this.wirelessStage = '正在唤醒相机无线';
       try {
-        await this.bleLink?.wakeCameraWifi();
+        if (this.bleLink !== null) {
+          await this.bleLink.wakeCameraWifi();
+        }
         this.lastHandoverAt = Date.now();
+        if (this.bleLink !== null) {
+          this.bleLink.stopKeepalive();
+        }
       } catch (err) {
         this.wirelessStage = '唤醒相机无线失败';
         this.log.add(`0x2005 写入失败: ${(err as Error).message}`);
         return false;
       }
-      if (this.bleLink !== null) {
-        this.bleLink.stopKeepalive();
-      }
-
-      // 3. 加入相机热点
-      this.wirelessStage = '正在连接相机热点';
-      const joiner = this.getApJoiner();
-      const outcome: ApJoinOutcome = await joiner.join(creds.ssid, creds.password, creds.security);
-      if (!outcome.ok) {
-        this.wirelessStage = outcome.reason;
-        this.log.add(`自动无线: 加入相机热点失败 —— ${outcome.reason}`);
-        return false;
-      }
-
-      // 4. 连 PTP：候选地址逐个试，再网段扫描兜底
-      this.wirelessStage = '正在连接照相机';
-      for (const host of joiner.candidateHosts()) {
-        this.log.add(`自动无线: 试 ${host}:15740`);
-        if (await this.connectWifi(host, 15740, true)) {
-          await this.finishAutoLink();
-          return this.connected;
-        }
-      }
-      this.log.add('自动无线: 候选地址都不通，改用网段扫描');
-      this.wirelessStage = '正在搜索照相机';
-      await this.scanWifiCameras(5000);
-      const camera = this.pickWifiCamera();
-      if (camera === null) {
-        this.wirelessStage = this.wifiHint !== '' ? this.wifiHint : '没有找到照相机';
-        return false;
-      }
-      if (await this.connectWifi(camera.host, camera.port, true)) {
-        await this.finishAutoLink();
-        return this.connected;
-      }
-      this.wirelessStage = '连上相机热点，但连不上照相机';
-      return false;
+      return await this.afterHandover();
     } finally {
       this.apJoining = false;
       if (this.connected) this.wirelessStage = '';
     }
   }
 
+  /** 交接完成（相机已被推到 Wi-Fi）：按模式接着收口。 */
+  private async afterHandover(): Promise<boolean> {
+    if (this.linkMode === CameraLinkMode.AP) {
+      return await this.joinApAndConnect();
+    }
+    return await this.autoLinkWifi('ble-paired');
+  }
+
   /**
-   * 探针：Wi-Fi 会话期间，相机到底还发不发 BLE 广播？
+   * AP 模式收口：加入相机热点 → 连 PTP → 扫照片。
    *
-   * Z50II 实测结论：**不发**（三轮 5s / 20s / 30s 全部空），两个射频不能
-   * 共存。这个探针保留下来当回归诊断 —— 换机身/换固件时先看它，能直接
-   * 判断「BLE 秒退」这条路是否重新可用。
+   * 凭据来自 BLE 握手时读到的 `0x2004`（已解密），所以这一步不需要用户
+   * 输入任何东西。地址先试网关（两种字节序），再用网段扫描兜底。
+   */
+  private async joinApAndConnect(): Promise<boolean> {
+    const creds = this.bleLink === null ? null : this.bleLink.getCredentials();
+    if (creds === null) {
+      this.wirelessStage = '没拿到相机热点凭据（相机可能没认这次配对）';
+      this.log.add('AP: 0x2004 凭据为空，放弃');
+      return false;
+    }
+    this.wirelessStage = '正在连接相机热点';
+    const joiner = this.getApJoiner();
+    const outcome: ApJoinOutcome = await joiner.join(creds.ssid, creds.password, creds.security);
+    if (!outcome.ok) {
+      this.wirelessStage = outcome.reason;
+      this.log.add(`AP: 加入相机热点失败 —— ${outcome.reason}`);
+      return false;
+    }
+    this.wirelessStage = '正在连接照相机';
+    for (const host of joiner.candidateHosts()) {
+      this.log.add(`AP: 试 ${host}:15740`);
+      if (await this.connectWifi(host, 15740, true)) {
+        await this.finishAutoLink();
+        return this.connected;
+      }
+    }
+    this.log.add('AP: 候选地址都不通，改用网段扫描');
+    this.wirelessStage = '正在搜索照相机';
+    await this.scanWifiCameras(5000);
+    const camera = this.pickWifiCamera();
+    if (camera === null) {
+      this.wirelessStage = this.wifiHint !== '' ? this.wifiHint : '没有找到照相机';
+      return false;
+    }
+    if (await this.connectWifi(camera.host, camera.port, true)) {
+      await this.finishAutoLink();
+      return this.connected;
+    }
+    this.wirelessStage = '连上相机热点，但连不上照相机';
+    return false;
+  }
+
+  /** 交接冷却是否已过（BLE/Wi-Fi 互斥，不能连着推）。 */
+  private handoverAllowed(): boolean {
+    return Date.now() - this.lastHandoverAt > this.handoverCooldownMs;
+  }
+
+  /**
+   * Wi-Fi 会话起来了：BLE 侧进入「静默」。
+   *
+   * 相机 BLE 与 Wi-Fi 互斥（Z50II 实测），Wi-Fi 一开 BLE 就没了。此时保活
+   * 写必然失败、自动重连只会把相机从 Wi-Fi 拽回来再推回去。所以停保活、
+   * 关自动重连，把这个窗口完整让给 Wi-Fi。
+   */
+  private suspendBleForWifi(): void {
+    if (this.bleLink === null) return;
+    this.bleLink.stopKeepalive();
+    this.bleLink.disableAutoReconnect();
+    this.bleReconnecting = false;
+    this.log.add('BLE 已让位给 Wi-Fi（相机两个无线模式互斥，期间不再重连/保活）');
+  }
+
+  /**
+   * 探针：Wi-Fi 会话期间相机是否还在发 BLE 广播？
+   *
+   * Z50II 实测：**不发**（5s/20s/30s 三轮全空），两个射频不能共存。
+   * 保留作回归诊断：换机身/固件后先看它，判断「BLE 秒退」这条路是否可用。
    */
   private startBleVisibilityProbe(): void {
     this.stopBleVisibilityProbe();
@@ -2063,11 +2167,7 @@ export class CameraService {
    * 退出无线：**离开相机热点**，让相机自己回落到蓝牙。
    *
    * 这是选 AP 模式的核心理由：AP 下手机是唯一客户端，手机一撤，相机看到
-   * 零客户端，按它自己的待机计时回落到蓝牙（实测约 40 秒）。STA 模式下
-   * 相机挂在路由器/热点上，撤不掉、也不回，只能人工。
-   *
-   * `0x2005=0x80` 在这里用不上：相机进 Wi-Fi 后 BLE 就没了（探针实测），
-   * 没有反向信道。
+   * 零客户端，按自己的待机计时回落（实测约 40 秒）。STA 撤不掉也回不来。
    */
   async exitWirelessToBle(): Promise<void> {
     this.wifiAutoReconnectArmed = false;
@@ -2075,7 +2175,6 @@ export class CameraService {
     this.stopBleVisibilityProbe();
     const store = BleIdentityStore.getInstance();
 
-    // 万一 BLE 还在（不该发生），直接「关相机无线」最快。
     if (this.bleConnected && this.bleLink !== null) {
       await this.bleLink.closeCameraWifi();
       this.bleHint = '';
@@ -2125,26 +2224,6 @@ export class CameraService {
       });
     };
     this.bleRecoveryTimer = setTimeout(tick, 2000);
-  }
-
-  /** 交接冷却是否已过（BLE/Wi-Fi 互斥，不能连着推）。 */
-  private handoverAllowed(): boolean {
-    return Date.now() - this.lastHandoverAt > this.handoverCooldownMs;
-  }
-
-  /**
-   * Wi-Fi 会话起来了：BLE 侧进入「静默」。
-   *
-   * 相机 BLE 与 Wi-Fi 互斥（Z50II 实测），Wi-Fi 一开 BLE 就没了。此时保活
-   * 写必然失败、自动重连只会把相机从 Wi-Fi 拽回来再推回去。所以停保活、
-   * 关自动重连，把这个窗口完整让给 Wi-Fi。
-   */
-  private suspendBleForWifi(): void {
-    if (this.bleLink === null) return;
-    this.bleLink.stopKeepalive();
-    this.bleLink.disableAutoReconnect();
-    this.bleReconnecting = false;
-    this.log.add('BLE 已让位给 Wi-Fi（相机两个无线模式互斥，期间不再重连/保活）');
   }
 
   /** 取消排队中的无线自动重连。 */

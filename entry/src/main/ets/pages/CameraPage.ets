@@ -2,6 +2,8 @@ import { CameraService } from '../services/CameraService';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
+import { CameraLinkMode } from '../model/CameraLinkMode';
+import { CapsuleSegmentButtonV2, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 
 /**
@@ -11,6 +13,13 @@ import type { BleCameraDevice } from '../services/BleScanner';
  * 这个主操作放在标题栏里（见 MainScreen.NormalTitleRow），本页只负责状态与设备信息。
  * 卡片统一 24vp 圆角、无描边，与官方设置页的白卡形态对齐。
  */
+const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
+  { text: 'USB' },
+  { text: '蓝牙' },
+  { text: 'WIFI AP' },
+  { text: 'WIFI STA' }
+]);
+
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
@@ -26,6 +35,8 @@ export struct CameraPage {
   @Event onDisconnectBle: () => void = () => {};
   /** 用户主动把相机切到 Wi-Fi（BLE 与 Wi-Fi 互斥，交接有代价，所以由用户点）。 */
   @Event onConnectWireless: () => void = () => {};
+  /** 切换链路模式（USB / 蓝牙 / WIFI AP / WIFI STA）。 */
+  @Event onSelectMode: (mode: number) => void = (_m: number) => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -212,6 +223,21 @@ export struct CameraPage {
     return $r('app.color.text_tertiary');
   }
 
+  /** 无线块的标题：按当前模式改，BLE 模式下不该出现「Wi-Fi」。 */
+  private wirelessBlockTitle(): Resource {
+    if (this.svc.linkMode === CameraLinkMode.AP) return $r('app.string.camera_mode_ap');
+    if (this.svc.linkMode === CameraLinkMode.STA) return $r('app.string.camera_mode_sta');
+    return $r('app.string.camera_mode_ble');
+  }
+
+  /** 当前模式的引导文案（参考 SnapBridge 官方帮助的相机侧步骤）。 */
+  private guideText(): Resource {
+    if (this.svc.linkMode === CameraLinkMode.USB) return $r('app.string.camera_guide_usb');
+    if (this.svc.linkMode === CameraLinkMode.BLE) return $r('app.string.camera_guide_ble');
+    if (this.svc.linkMode === CameraLinkMode.AP) return $r('app.string.camera_guide_ap');
+    return $r('app.string.camera_guide_sta');
+  }
+
   /**
    * 无线模式的前提说明。
    *
@@ -239,7 +265,7 @@ export struct CameraPage {
           .fontColor($r('app.color.status_error'))
           .width('100%')
       }
-      Text($r('app.string.camera_conn_guide'))
+      Text(this.guideText())
         .fontSize(FontSize.Micro)
         .lineHeight(16)
         .fontColor($r('app.color.text_tertiary'))
@@ -309,6 +335,14 @@ export struct CameraPage {
   @Builder
   ConnectionCard() {
     Column({ space: 14 }) {
+      // 四选一：让用户明确指定链路，App 不再自己猜该走哪条无线。
+      CapsuleSegmentButtonV2({
+        items: MODE_ITEMS,
+        selectedIndex: this.svc.linkMode,
+        $selectedIndex: (index: number) => { this.onSelectMode(index); }
+      })
+        .width('100%')
+
       // 统一状态头：PTP 会话的真实状态 + 相机名 + 扫描进度
       Column({ space: 6 }) {
         Row({ space: 10 }) {
@@ -380,6 +414,7 @@ export struct CameraPage {
       }
       .width('100%')
 
+      if (this.svc.linkMode === CameraLinkMode.USB) {
       // 模式一：USB
       Column({ space: 6 }) {
         this.ModeHeader(
@@ -395,18 +430,24 @@ export struct CameraPage {
           .lineHeight(18)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
+        Text($r('app.string.camera_guide_usb'))
+          .fontSize(FontSize.Micro)
+          .lineHeight(16)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
       }
       .width('100%')
       .padding(12)
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.filter_chip_bg'))
       .borderRadius(Radius.Inner)
+      }
 
-      // 模式二：无线（蓝牙 + Wi-Fi STA）
+      // 无线块：蓝牙是所有无线模式的前置；Wi-Fi 部分按 AP / STA 分。
       Column({ space: 10 }) {
         this.ModeHeader(
-          $r('app.string.camera_conn_wireless'),
-          $r('app.string.camera_conn_wireless_sub'),
+          this.wirelessBlockTitle(),
+          '',
           this.wifiConnected(),
           this.wirelessStatusText(),
           this.wirelessStatusColor())
@@ -464,7 +505,8 @@ export struct CameraPage {
           }
           .width('100%')
           .padding({ top: 4, bottom: 4 })
-        } else if (this.blePaired() && !this.wifiConnected() && !this.svc.wifiAutoConnecting) {
+        } else if (this.svc.linkMode === CameraLinkMode.AP && this.blePaired()
+          && !this.wifiConnected() && !this.svc.wifiAutoConnecting) {
           Button($r('app.string.camera_conn_open_wifi'))
             .width('100%')
             .height(44)
@@ -499,44 +541,48 @@ export struct CameraPage {
           }
           .width('100%')
         } else {
-          Row({ space: 8 }) {
-            TextInput({
-              placeholder: $r('app.string.camera_wifi_host_placeholder'),
-              text: this.wifiInput
-            })
-              .height(40)
-              .layoutWeight(1)
-              .fontSize(FontSize.Body)
-              .borderRadius(Radius.Chip)
-              .backgroundColor($r('app.color.bg_surface'))
-              .onChange((value: string) => { this.wifiInput = value; })
-              .onSubmit(() => {
-                if (this.wifiInput.trim() !== '' && !this.svc.scanning) {
-                  this.onConnectWifi(this.wifiInput.trim());
-                }
+          if (this.svc.linkMode === CameraLinkMode.STA) {
+            Row({ space: 8 }) {
+              TextInput({
+                placeholder: $r('app.string.camera_wifi_host_placeholder'),
+                text: this.wifiInput
               })
-            Button($r('app.string.camera_wifi_connect'))
-              .height(40)
-              .fontSize(FontSize.Body)
-              .borderRadius(pillRadius(40))
-              .backgroundColor($r('app.color.primary'))
-              .fontColor($r('app.color.text_on_primary'))
-              .enabled(!this.svc.scanning && this.wifiInput.trim() !== '')
-              .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
+                .height(40)
+                .layoutWeight(1)
+                .fontSize(FontSize.Body)
+                .borderRadius(Radius.Chip)
+                .backgroundColor($r('app.color.bg_surface'))
+                .onChange((value: string) => { this.wifiInput = value; })
+                .onSubmit(() => {
+                  if (this.wifiInput.trim() !== '' && !this.svc.scanning) {
+                    this.onConnectWifi(this.wifiInput.trim());
+                  }
+                })
+              Button($r('app.string.camera_wifi_connect'))
+                .height(40)
+                .fontSize(FontSize.Body)
+                .borderRadius(pillRadius(40))
+                .backgroundColor($r('app.color.primary'))
+                .fontColor($r('app.color.text_on_primary'))
+                .enabled(!this.svc.scanning && this.wifiInput.trim() !== '')
+                .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
+            }
+            .width('100%')
           }
-          .width('100%')
 
           Row({ space: 16 }) {
-            Text(this.svc.wifiScanning
-              ? $r('app.string.camera_wifi_scanning')
-              : $r('app.string.camera_wifi_scan_nearby'))
-              .fontSize(FontSize.Caption)
-              .fontColor($r('app.color.primary'))
-              .onClick(() => {
-                if (!this.svc.wifiScanning) {
-                  this.onScanWifi();
-                }
-              })
+            if (this.svc.linkMode === CameraLinkMode.STA) {
+              Text(this.svc.wifiScanning
+                ? $r('app.string.camera_wifi_scanning')
+                : $r('app.string.camera_wifi_scan_nearby'))
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.primary'))
+                .onClick(() => {
+                  if (!this.svc.wifiScanning) {
+                    this.onScanWifi();
+                  }
+                })
+            }
             if (!this.svc.bleConnected) {
               Text(this.svc.bleScanning
                 ? $r('app.string.camera_ble_scanning')
