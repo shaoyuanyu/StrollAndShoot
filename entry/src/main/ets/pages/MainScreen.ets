@@ -741,8 +741,8 @@ export struct MainScreen {
             onScanBle: () => {
               this.svc.scanBleCameras();
             },
-            onConnectBle: (deviceId: string) => {
-              this.svc.connectBle(deviceId);
+            onConnectBle: (deviceId: string, deviceName: string) => {
+              this.svc.connectBle(deviceId, deviceName);
             },
             onDisconnectBle: () => {
               this.svc.disconnectBle();

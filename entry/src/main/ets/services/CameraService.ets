@@ -1583,7 +1583,7 @@ export class CameraService {
   }
 
   /** 连接一台 BLE 相机并列出 GATT 服务（验证 BLE 通道用）。 */
-  async connectBle(deviceId: string): Promise<boolean> {
+  async connectBle(deviceId: string, deviceName: string = ''): Promise<boolean> {
     if (this.bleConnecting) {
       this.log.add('BLE 正在连接中，忽略重复点击');
       return false;
@@ -1616,8 +1616,9 @@ export class CameraService {
         this.log.add(`GATT ${line}`);
       }
       this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
-      // 服务枚举完直接走四步配对（相机需停在「开始配对」页）。
-      const serial = await this.bleLink.pair();
+      // 服务枚举完直接走两段式配对（相机需停在「开始配对」页）。
+      // 广播名要传给配对层：经典蓝牙绑定时靠它匹配相机。
+      const serial = await this.bleLink.pair(deviceName);
       if (serial === null) {
         this.bleSerial = '';
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');

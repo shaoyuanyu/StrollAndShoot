@@ -21,7 +21,8 @@ export struct CameraPage {
   @Event onCompletePairing: () => void = () => {};
   @Event onScanWifi: () => void = () => {};
   @Event onScanBle: () => void = () => {};
-  @Event onConnectBle: (deviceId: string) => void = (_id: string) => {};
+  @Event onConnectBle: (deviceId: string, deviceName: string) => void =
+    (_id: string, _name: string) => {};
   @Event onDisconnectBle: () => void = () => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
@@ -450,7 +451,7 @@ export struct CameraPage {
             .padding({ top: 10, bottom: 10 })
             .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
             .enabled(!this.svc.bleConnecting && !this.svc.bleConnected)
-            .onClick(() => { this.onConnectBle(cam.deviceId); })
+            .onClick(() => { this.onConnectBle(cam.deviceId, cam.name); })
           }, (cam: BleCameraDevice) => cam.deviceId)
         }
         .width('100%')
