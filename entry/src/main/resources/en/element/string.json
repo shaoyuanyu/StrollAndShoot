@@ -117,6 +117,46 @@
       "value": "Wireless"
     },
     {
+      "name": "camera_conn_title",
+      "value": "Connection"
+    },
+    {
+      "name": "camera_conn_usb",
+      "value": "USB"
+    },
+    {
+      "name": "camera_conn_usb_hint",
+      "value": "Connect the camera with a USB cable and choose PTP transfer mode."
+    },
+    {
+      "name": "camera_conn_wireless",
+      "value": "Wireless"
+    },
+    {
+      "name": "camera_conn_wireless_sub",
+      "value": "Bluetooth + Wi-Fi"
+    },
+    {
+      "name": "camera_conn_ble",
+      "value": "Bluetooth"
+    },
+    {
+      "name": "camera_conn_connected",
+      "value": "Connected"
+    },
+    {
+      "name": "camera_conn_disconnected",
+      "value": "Not connected"
+    },
+    {
+      "name": "camera_ble_unnamed",
+      "value": "Unnamed camera"
+    },
+    {
+      "name": "camera_conn_steps",
+      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode), pick a profile and wait for the \"connection wizard\" screen."
+    },
+    {
       "name": "camera_wifi_hint",
       "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode), pick the profile, and stop on the connection guide screen (showing Z50_2_xxxx). The IP/subnet screen is not ready yet."
     },

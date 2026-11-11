@@ -117,6 +117,46 @@
       "value": "無線連線"
     },
     {
+      "name": "camera_conn_title",
+      "value": "連線"
+    },
+    {
+      "name": "camera_conn_usb",
+      "value": "USB 連線"
+    },
+    {
+      "name": "camera_conn_usb_hint",
+      "value": "用 USB 傳輸線連接相機，並選擇 PTP 傳輸模式。"
+    },
+    {
+      "name": "camera_conn_wireless",
+      "value": "無線連線"
+    },
+    {
+      "name": "camera_conn_wireless_sub",
+      "value": "藍牙 + Wi-Fi"
+    },
+    {
+      "name": "camera_conn_ble",
+      "value": "藍牙"
+    },
+    {
+      "name": "camera_conn_connected",
+      "value": "已連線"
+    },
+    {
+      "name": "camera_conn_disconnected",
+      "value": "未連線"
+    },
+    {
+      "name": "camera_ble_unnamed",
+      "value": "未命名相機"
+    },
+    {
+      "name": "camera_conn_steps",
+      "value": "相機操作：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線(STA Mode)，選好 profile，直到出現「連線精靈」頁。"
+    },
+    {
       "name": "camera_wifi_hint",
       "value": "相機操作：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線(STA Mode)，選好 profile，直到出現「連線精靈」頁面（顯示 Z50_2_xxxx）。顯示 IP/遮罩的頁面還不能連。"
     },

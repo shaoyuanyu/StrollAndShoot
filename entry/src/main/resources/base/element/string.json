@@ -117,6 +117,46 @@
       "value": "无线连接"
     },
     {
+      "name": "camera_conn_title",
+      "value": "连接"
+    },
+    {
+      "name": "camera_conn_usb",
+      "value": "USB 连接"
+    },
+    {
+      "name": "camera_conn_usb_hint",
+      "value": "用 USB 数据线连接相机，并选择 PTP 传输模式。"
+    },
+    {
+      "name": "camera_conn_wireless",
+      "value": "无线连接"
+    },
+    {
+      "name": "camera_conn_wireless_sub",
+      "value": "蓝牙 + Wi-Fi"
+    },
+    {
+      "name": "camera_conn_ble",
+      "value": "蓝牙"
+    },
+    {
+      "name": "camera_conn_connected",
+      "value": "已连接"
+    },
+    {
+      "name": "camera_conn_disconnected",
+      "value": "未连接"
+    },
+    {
+      "name": "camera_ble_unnamed",
+      "value": "未命名相机"
+    },
+    {
+      "name": "camera_conn_steps",
+      "value": "相机操作：网络菜单 → 连接至智能设备 → Wi-Fi 连接(STA Mode)，选好 profile，直到出现「连接向导」页。"
+    },
+    {
       "name": "camera_wifi_hint",
       "value": "相机操作：网络菜单 → 连接至智能设备 → Wi-Fi 连接(STA Mode)，选好 profile，直到出现「连接向导」页面（显示 Z50_2_xxxx）。显示 IP/掩码的页面还不能连。"
     },
