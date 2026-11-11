@@ -1311,6 +1311,14 @@
     {
       "name": "camera_guide_ble_note",
       "value": "Bluetooth never carries photos. Switch to Wi-Fi AP to import them."
+    },
+    {
+      "name": "camera_hero_serial",
+      "value": "Serial %1$s"
+    },
+    {
+      "name": "camera_guide_title",
+      "value": "Steps"
     }
   ]
 }

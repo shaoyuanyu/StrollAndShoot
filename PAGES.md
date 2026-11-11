@@ -99,69 +99,85 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `visualTab === 1` 分支，不是 `currentTab`）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
 - 内容区是 24vp 圆角白卡、内边距 16vp：**连接卡**、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。
-#### 版面：链路选择在上，状态卡只讲当前链路（1.43.1）
+#### 版面：页首立牌 + 一张连接卡 + 一组步骤（1.44.1）
 
-1. **四选一胶囊**（`CapsuleSegmentButtonV2`）：USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA，默认「蓝牙」，选择落盘（`CameraLinkModeStore`）。它**裸放在滚动内容顶部**，不塞进卡片——它是页面级开关，不是卡片里的字段。
-2. **状态卡**：状态头（点 + 一句话 + 张数）+ 模式专属控件 + 三步引导，三块之间用 hairline 分隔。
-3. 已连接时追加设备信息卡与操作卡。
+页面从上到下只有三块，每块只说一件事：
 
-为什么从「App 自动决定」改成「用户选」：自动切换在真机上先后被证伪 —— BLE 与 Wi-Fi 互斥（Wi-Fi 期间相机不发蓝牙）、`0x9435(0)` 回 OK 但无效、STA 模式关会话三分钟后相机仍挂在热点上。既然做不到「无缝」，就别假装无缝：把模式摊开让用户选，所见即所得。
+1. **通栏立牌**（`StandeeHero`）：相机商品图 + 倒影 + 右下角 `Ver. / 序列号`。
+   它铺满整屏宽度（不吃页面 16vp 边距），底部 20% 渐隐到页面底色。
+2. **连接卡**：第一行是四选一胶囊（链路选择就是这个卡的标题），下面依次是
+   状态头、当前模式的专属控件。
+3. **连接步骤**：卡外的分组小标题 + 三步引导（`camera_guide_title`）。
 
-##### 页首立牌：当前（或上次）连接的相机（1.44.0）
+再加已连接时的设备信息卡与操作卡。
 
-`StandeeHero()` 是滚动内容的最上面一块：当前连接的相机商品图 + 型号名。没认出
-机型时整块不渲染，页面照常工作。
+为什么把「说明」挪出卡外：一张卡里同时堆控件和五行灰字说明书，视觉上分不出
+「现在能做什么」和「接下来怎么做」；拆成「小标题 + 内容」也和设置页的
+「外观 / 画廊 / 定位记录」同一套。
 
-- **素材**：尼康中国官网 Z 系列产品页的产品图，裁掉留白后转成带透明通道的
-  WebP，落在 `resources/base/media/camera_<key>.webp`，10 个型号合计约 460 KB
-  （同尺寸 PNG 约 2.8 MB）。只做尼康 Z 系列；图片由尼康所有，仅用于在个人应用内
-  标明「连的是哪台机器」。
-- **型号匹配**在 `utils/CameraStandee.ets`：先去掉空格 / 下划线 / 连字符，再按
-  「长串在前」比对。**两套口径都要认** —— PTP `DeviceInfo.model` 是尼康内部名
-  （实测 Z 50II 返回 `Z50_2`），USB iProduct 与界面文案是营销名（`Z 50II`）。
-  `Z5IIC` 必须排在 `Z5II` 前、`Z6III` 必须在 `Z6II` 前；`Z fc` 显式排除（没有
-  透明底素材，不能让它落到 `Z f`）。
-- **什么时候认**：`CameraService.@Monitor('cameraName', 'bleCameraName')`。PTP 的
-  `cameraName` 优先，没有就退回 BLE 广播名——BLE 名字是 `<型号>_<序号>`
-  （`Z50_2_8079350`），归一化后同样命中 `z502`，所以只有蓝牙在连、还没走过
-  PTP 时也能立刻把立牌摆出来。
-- **记住机型**：`CameraModelStore`（PersistenceV2 `camera_model`）只存 key。
-  断开时 `cameraName` / `bleCameraName` 都会被清空，但**刻意不清
-  `cameraModel`**——否则每次断开页面都塌一块，连接的瞬间又弹回来。
-- **为什么不违和**：
-  - **不套卡片**。商品图直接立在页面底色上，和标题栏渐隐、底部悬浮页签同属
-    「浮在底色上」的一层；再包一张卡就成了「卡片堆卡片」。
-  - **深色下一层很淡的光池**：`hero_glow`（12% 白）+ 径向渐变、半径 172vp。
-    黑机身压在黑底上会糊成一片，光池负责把轮廓托出来。
-  - **浅色模式下 `hero_glow` 是全透明**：白池在浅灰底上会画出一个看得见边缘的
-    光圈（试过，#B8FFFFFF 时一眼就能看到圆弧），反而违和；浅色靠图片自带的
-    投影就够。
-  - **型号名只用 15fp 次级色**：页首已经有 28fp 的「相机」大标题，立牌下面再来
-    一个大字会打架。它的职责只是「这是哪台」。
-  - 断开时**只有图片**降到 70%，型号名保持原样：文字变暗就读不出来了，而它正是
-    「记住的是哪台」。
-- 各机型统一按**高度 178vp** 对齐（`ImageFit.Contain` + 宽度 100%），按自身
-  宽高比缩放；Z 9 这类高机身自然比 Z 50II 窄，这是对的，不要拉伸。
-- 切换机型时用 `Image.opacity` 的 260ms 过渡，不做位移动画。
-- 单元测试 `entry/src/test/CameraStandee.test.ets` 覆盖两套口径、顺序敏感与
-  排除项。
+#### 立牌：把产品图放在「台面」上（1.44.1）
 
-##### 胶囊必须自定义配色
+官方 SnapBridge 的相机页是一个通栏的产品区：型号名、机身、倒影、序列号。我们
+照这个思路做，但型号名按用户要求挪到了**标题栏**（`MainScreen.tabTitle()` 在
+相机页且有认出机型时返回型号 `Z 50II`，否则回「相机」）。
 
-官方胶囊分段按钮**在内容区拿不到沉浸光感**（《组件适配沉浸光感》：SegmentButtonV2 的 `backgroundSystemMaterial` 只在 Navigation/NavDestination 标题栏或底部 TabBar 生效）。用默认样式会得到「灰底轨道 + 系统蓝选中块」，比卡片里所有控件都重，还会跟标题栏的主操作抢注意力。只保留官方组件的结构与动效，配色统一到 App 已有的一套：
+- **通栏 + 背板**：`hero_bg`（深色 `#16171A`、浅色 `#FFFFFF`）从顶部铺满，最后
+  20% 渐隐到 `bg_page`。上下不画硬边，于是这块和下面的卡片是同一页，而不是
+  「贴在页首的一张图」。
+- **倒影**：同一张图 `.scale({ x: 1, y: -1 })` 塞进一个只有 `REFLECTION_HEIGHT`
+  高的裁剪盒（`alignContent: Top`），盒里露出的正好是原图下半截的镜像；再盖一层
+  从透明到 `hero_bg` 的渐变让它淡出。两个细节：
+  - 图片要 `.translate({ y: -12 })` 往上挪一点：原图底部自带投影，不挪的话镜像
+    后会在倒影顶端糊成一条灰带；
+  - 渐变的第二档取 `0.34` 而不是直接线性到底（`[透明,0] → [透明,0.34] →
+    [hero_bg,1]`）。纯线性时平均不透明度只剩一半，倒影会淡到看不见。
+- **`Ver. / 序列号`**：右下角 10fp 三级色。版本号去掉尼康的 `V` 前缀再拼
+  `Ver. `；序列号取 BLE 广播名尾段（`Z50_2_8079350` → `8079350`，和相机菜单、
+  官方 App 一致），PTP 的 32 位序列号去前导零后同值。两个值都来自
+  `CameraModelStore`，没连过 PTP 也能显示。
+- **断开态**：只有图片与倒影降到 0.72 / 0.18，元数据保持原样——文字变暗就读不
+  出来，而那正是「记住的是哪台」。
+- 立牌统一按**高度 172vp** 对齐（`ImageFit.Contain` + 宽度 100%），各机型按自身
+  宽高比缩放。
 
-| 参数 | 取值 |
-|---|---|
-| `buttonBackgroundColor` | `filter_chip_bg`（与卡片内嵌块同色） |
-| `itemSelectedBackgroundColor` | `primary_soft` |
-| `itemSelectedFontColor` / `itemFontColor` | `primary` / `text_secondary` |
-| `itemFontSize` / `itemSelectedFontSize` | `FontSize.Caption`（14fp 时四段英文会挤） |
-| `itemFontWeight` / `itemSelectedFontWeight` | `Regular` / `Medium` |
-| `itemMinHeight` | 40vp（点按热区） |
+##### 素材要按「机身」居中，不是按画布
 
-`ColorMetrics.resourceColor(...)` 与 `LengthMetrics` 会报 `Function may throw exceptions` 告警，与 `WindowShot` 同类，可接受。模式名不再硬编码，`MODE_ITEMS` 的 `text` 直接取 `camera_mode_*` 资源，和块标题同源。
+产品图是 3/4 角度拍的，**投影在右下**，所以按「整张图的不透明区域」裁出来的
+画布，机身会明显偏左（实测偏 54–62px，肉眼一眼就能看出来）。生成 `camera_*.webp`
+时必须：
 
-##### 状态头只此一处
+1. 用 `alpha > 240` 的**实心区域**求机身包围盒，拿它的中心当画布中心；
+2. 左右各保留机身外最多 90px 的投影，否则画布会被投影撑宽、机身显得更小；
+3. 画布超出原图时整体平移，别把机身切掉。
+
+素材来源是尼康中国官网 Z 系列产品页，裁掉留白后转成带透明通道的 WebP（10 个
+型号合计约 460 KB，同尺寸 PNG 2.8 MB）。图片由尼康所有，仅用于在个人应用内
+标明「连的是哪台机器」。
+
+#### 胶囊：卡片第一行，凹槽 + 主色（1.44.1）
+
+官方胶囊分段按钮**在内容区拿不到沉浸光感**（《组件适配沉浸光感》：
+SegmentButtonV2 的 `backgroundSystemMaterial` 只在 Navigation/NavDestination
+标题栏或底部 TabBar 生效）。用默认外观会得到「浅灰轨道 + 系统蓝」，跟卡片里
+其他控件不是一套材质。
+
+现在把它放进**连接卡的第一行**——它就是「这张卡在讲哪条链路」的标题，摆到卡外
+会变成一根孤立的控件条，和下面没有关系。配色按「凹槽 + 凸起」：
+
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| `buttonBackgroundColor` | `bg_page` | 比卡片暗一档＝凹槽 |
+| `itemSelectedBackgroundColor` | `primary` | 实底主色＝凸起 |
+| `itemSelectedFontColor` / `itemFontColor` | `text_on_primary` / `text_secondary` | 选中反白，分界明确 |
+| `itemFontSize` / `itemSelectedFontSize` | `FontSize.Caption` | 14fp 时四段英文会挤 |
+| `itemFontWeight` / `itemSelectedFontWeight` | `Regular` / `Medium` | |
+| `itemMinHeight` | 40vp | 点按热区 |
+
+之前是「12% 白轨道 + `primary_soft` 选中块」，四个选项连成一片灰、看不出界限，
+用户反馈「过于扁平、很丑」——就是这个原因。`ColorMetrics.resourceColor(...)` 会报
+`Function may throw exceptions` 告警，与 `WindowShot` 同类，可接受。
+
+#### 状态头只此一处
 
 `headline()` 按模式各给一句完整的话，全页只有这一处讲「连没连上」：
 
@@ -175,7 +191,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 圆点颜色与文案同源（`headlineColor()` 按模式分支）：AP/STA 下蓝牙在连、无线还没起来时状态头写「未连接」，点就不能是蓝的。
 - 未连接的点用 `text_tertiary` 灰色，不用琥珀色 `status_disconnected`——两种状态并排时橙色会读成告警。
 
-##### 每个模式渲染什么
+#### 每个模式渲染什么
 
 | 模式 | 卡内专属控件 | 不出现 |
 |---|---|---|
@@ -187,7 +203,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 主操作仍是标题栏那颗胶囊，一律走 `svc.searchByMode()`，位置与文案不随模式变化（USB 且已连上时显示「快速扫描」）。卡内不再放同名按钮，避免一屏两处主色。
 - 「蓝牙」前置行（`BlePrereqRow`）只给 AP / STA 用；BLE 模式的状态头本身就是蓝牙状态，不再重复一行「蓝牙 已配对」。
 
-##### 引导是三步编号
+#### 引导是三步编号
 
 `modeDesc()` 一句话 + `StepRow(0..2)` 三条编号步骤 + 可选 `guideNote()`。相机菜单路径对齐 SnapBridge 官方帮助。
 
@@ -195,7 +211,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 步骤里写的按钮名要与界面一致（「搜索相机」「查看照片」「搜索附近的相机」），不要写「上面那个按钮」。
 - 只有 USB 没有 note。BLE 的 note 是「蓝牙链路不传照片」这一条必须讲清的事实；AP 的 note 讲退出后自动回蓝牙；STA 的 note 讲 App 无法让相机退回蓝牙。
 
-##### 错误与网络快照按模式隔离
+#### 错误与网络快照按模式隔离
 
 - `CameraService.setLinkMode()` 切换模式时清空 `lastScanError` / `bleHint` / `wifiHint` / `networkSummary` / `wirelessStage`：这些都属于上一模式。以前切到 USB 还挂着「蓝牙连接相机失败」、AP 模式还显示手机当前 Wi-Fi。
 - `lastScanError` 只在状态卡顶部显示一次；`wifiHint` / `networkSummary` 只在 STA 分支渲染。
@@ -204,7 +220,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 进 STA 模式（含冷启动恢复 STA）先调 `refreshNetworkSnapshot()` 摸一遍本机网络，「本机网络」一行立刻可见，不用等用户点搜索。
 - 扫描失败仍由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast。
 
-##### 层级与圆角
+#### 层级与圆角
 
 - 卡内**不再套一层实底块**。设置页是「页面底 → 卡片」两级，相机页以前多一层 `filter_chip_bg` 灰块，深色下发闷；现在是「卡片 → hairline 分隔」。
 - 卡片 24vp、内边距 16vp；行高 56vp；状态头 16fp Medium、正文 15fp、步骤与说明 12fp、note 10fp。

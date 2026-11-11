@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 
 import { CameraLinkMode } from '../model/CameraLinkMode';
+import { cameraStandeeLabel } from '../utils/CameraStandee';
 import { CameraService } from '../services/CameraService';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { HandednessService } from '../services/HandednessService';
@@ -241,9 +242,18 @@ export struct MainScreen {
     });
   }
 
+  /**
+   * 大标题。相机页认出机型后直接显示型号（`Z 50II`）——页首那块立牌已经
+   * 占了「产品图」，标题再写「相机」是重复信息；这也正是官方 SnapBridge
+   * 的做法（把型号当页首主标题）。
+   */
   private tabTitle(): ResourceStr {
     if (this.visualTab === 0) return $r('app.string.tab_gallery');
-    if (this.visualTab === 1) return $r('app.string.tab_camera');
+    if (this.visualTab === 1) {
+      const label = cameraStandeeLabel(this.svc.cameraModel);
+      if (label !== '') return label;
+      return $r('app.string.tab_camera');
+    }
     return $r('app.string.tab_settings');
   }
 

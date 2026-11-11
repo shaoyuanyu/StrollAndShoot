@@ -548,13 +548,21 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 说出来。以前每次开机都会红着一行「蓝牙连接相机失败」并弹一次 toast，相机不在
 手边时尤其像故障。
 
-*相机立牌用的机型 key*
+*相机立牌用的机型 key 与机身信息*
 
 `CameraService.cameraModel` 只存一个 key（`z50ii` 这类，见
-`utils/CameraStandee.ets`），由 `@Monitor('cameraName')` 在拿到 PTP DeviceInfo
-后识别并落盘到 `CameraModelStore`（PersistenceV2，key `camera_model`）。
-断开时 `cameraName` 被清空，但这里不清 `cameraModel`：立牌要留着。
-`initCameraModel()` 在启动时把上次的 key 读回来。
+`utils/CameraStandee.ets`），由 `@Monitor('cameraName', 'bleCameraName')` 识别
+并落盘到 `CameraModelStore`（PersistenceV2，key `camera_model`）。断开时这两个
+字段都会被清空，但这里不清 `cameraModel`：立牌要留着。
+`initCameraModel()` 在启动时把上次的 key 读回来；从没连过 PTP 也能认——BLE 首配
+时 `BleIdentityStore` 已经存了广播名（`Z50_2_8079350`）与序列号。
+
+`camera_model` 里还存 `version` / `serial`，供立牌右下角那行小字用：
+
+- `serial` 优先取广播名尾段（`cameraSerialFromBleName()`），它和相机菜单、
+  官方 SnapBridge 一致；`BleIdentityStore.serial` 是另一个数（本机实测
+  `1246090` vs `8079350`），不要混用。PTP 的 32 位序列号去前导零后同值。
+- `version` 去掉尼康的 `V` 前缀，展示时统一加 `Ver. `。
 
 *切换链路模式要清场*
 

@@ -98,3 +98,16 @@ export function cameraStandeeLabel(key: string): string {
     default: return '';
   }
 }
+
+/**
+ * 从 BLE 广播名里取序列号尾段：`Z50_2_8079350` → `8079350`。
+ *
+ * 这个数与相机菜单、官方 SnapBridge 显示的「序列号」一致；而 BLE stage4 给出的
+ * 是另一串（本机实测 `1246090`），不要混用。
+ */
+export function cameraSerialFromBleName(name: string): string {
+  const parts = name.split('_');
+  if (parts.length < 2) return '';
+  const tail = parts[parts.length - 1].trim();
+  return /^[0-9]+$/.test(tail) ? tail.replace(/^0+/, '') : '';
+}

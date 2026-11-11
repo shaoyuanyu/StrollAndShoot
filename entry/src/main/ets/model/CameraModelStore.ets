@@ -14,6 +14,10 @@ export class CameraModelStore {
 
   /** 立牌 key；`''` 表示还没认出过任何机型。 */
   @Trace key: string = '';
+  /** 固件版本（已去掉尼康的 `V` 前缀，展示时再加 `Ver. `）。 */
+  @Trace version: string = '';
+  /** 机身序列号（BLE 名尾段或 PTP 序列号去掉前导零）。 */
+  @Trace serial: string = '';
 
   private static instance_: CameraModelStore;
 
@@ -30,5 +34,12 @@ export class CameraModelStore {
 
   set(key: string): void {
     this.key = key;
+  }
+
+  /** 立牌底部那行小字（Ver. / 序列号）。空串表示这一项不知道，UI 不渲染。 */
+  setFacts(version: string, serial: string): void {
+    if (version !== '') this.version = version;
+    // PTP 的序列号是 32 位、前面补零；去掉前导零才是相机菜单里那串
+    if (serial !== '') this.serial = serial.replace(/^0+/, '');
   }
 }

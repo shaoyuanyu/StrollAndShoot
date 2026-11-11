@@ -1311,6 +1311,14 @@
     {
       "name": "camera_guide_ble_note",
       "value": "蓝牙链路不传照片，要取照片请切到「Wi-Fi AP」。"
+    },
+    {
+      "name": "camera_hero_serial",
+      "value": "序列号 %1$s"
+    },
+    {
+      "name": "camera_guide_title",
+      "value": "连接步骤"
     }
   ]
 }

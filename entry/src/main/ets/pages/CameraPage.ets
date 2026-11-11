@@ -5,9 +5,12 @@ import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
-import { cameraStandeeLabel, cameraStandeeMedia } from '../utils/CameraStandee';
+import { cameraStandeeMedia } from '../utils/CameraStandee';
+import { CameraModelStore } from '../model/CameraModelStore';
 /** 立牌统一高度（vp）：各机型宽高比不同，按高度对齐、宽度随比例。 */
-const STANDEE_HEIGHT = 178;
+const STANDEE_HEIGHT = 172;
+/** 倒影高度：取机身下半截，再盖一层渐变淡出。 */
+const REFLECTION_HEIGHT = 76;
 
 /**
  * 相机页。
@@ -238,11 +241,13 @@ export struct CameraPage {
       itemSelectedFontSize: LengthMetrics.fp(FontSize.Caption),
       itemFontWeight: FontWeight.Regular,
       itemSelectedFontWeight: FontWeight.Medium,
+      // 轨道用页面底色（比卡片暗一档）＝「凹槽」，选中项用主色实底＝「凸起」，
+      // 四个选项因此有明确的分界；之前是 12% 白＋淡蓝选中，整体发平、边界糊。
       itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
-      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.primary')),
-      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.primary_soft')),
+      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
+      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.primary')),
       itemMinHeight: LengthMetrics.vp(40),
-      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.filter_chip_bg'))
+      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page'))
     })
       .width('100%')
   }
@@ -288,6 +293,11 @@ export struct CameraPage {
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 当前模式在卡里有没有专属控件（只有 USB 没有，它全靠标题栏那颗按钮）。 */
+  private hasModeControls(): boolean {
+    return this.svc.linkMode !== CameraLinkMode.USB;
   }
 
   /** 蓝牙前置行：AP / STA 模式都要先有蓝牙。 */
@@ -532,6 +542,12 @@ export struct CameraPage {
   @Builder
   ConnectionCard() {
     Column({ space: 14 }) {
+      // 链路选择是这张卡的第一行：它是「这张卡在讲哪条链路」的标题，
+      // 摆到卡外会变成一根孤立的控件条。
+      this.ModePicker()
+
+      Divider().color($r('app.color.divider'))
+
       Row({ space: 10 }) {
         Row()
           .width(8).height(8).borderRadius(pillRadius(8))
@@ -614,11 +630,11 @@ export struct CameraPage {
           .width('100%')
       }
 
-      Divider().color($r('app.color.divider'))
+      if (this.hasModeControls()) {
+        Divider().color($r('app.color.divider'))
+      }
 
       this.ModeControls()
-
-      this.GuideBlock()
     }
     .width('100%')
     .padding(16)
@@ -723,63 +739,140 @@ export struct CameraPage {
   /**
    * 页首立牌：当前（或上次）连接的相机商品图。
    *
-   * 「不违和」靠三件事：
-   * 1. **不套卡片**。商品图直接立在页面底色上，与标题栏的渐隐、底部悬浮页签
-   *    同属「浮在底色上」的一层，避免页面变成「卡片堆卡片」；
-   * 2. **深色下一层很淡的光池**（`hero_glow` + 径向渐变）。机身是黑的，没有光池
-   *    就糊进黑底；浅色模式这个 token 是**全透明**——白池在浅灰底上会画出一个
-   *    看得见边缘的光圈，反而违和，浅色靠图片自带的投影就够；
-   * 3. **型号名只用 15fp 次级色**。页首已经有 28fp 的「相机」大标题，立牌下面
-   *    再来一个大字会打架；这里的型号只负责「这是哪台」，不负责强调。
+   * 这块特意做成**整屏通栏**（不吃页面 16vp 边距），和官方 SnapBridge 一样，
+   * 相机是「站在一块台面上」而不是「浮在空中一张图」：
    *
-   * 断开时**只有图片**降到 70%（`CameraModelStore` 记着上次的机型），型号名
-   * 保持原样：文字变暗就读不出来，而它正是「记住的是哪台」。
+   * 1. 背板 `hero_bg` 从顶部铺满，最后 18% 渐隐到页面底色——上下都没有硬边，
+   *    于是这块和下面的卡片是同一页，而不是贴在页首的一张图片；
+   * 2. 机身下方一层**倒影**（同一张图上下翻转 + 渐变淡出），把物体「压」在
+   *    台面上，这是商品图最有效的落地手段；
+   * 3. 右下角 `Ver. 1.04 / 序列号 8079350` 是真实机身信息，和下面设备信息卡
+   *    同一套口径，尺寸压到 10fp——它只用于「确认是哪台」，不抢视线。
+   *
+   * 型号名不在这里：它挪到了标题栏（`MainScreen.tabTitle()`），页首只留产品。
+   * 断开时**只有图片**降到 72%，元数据保持原样（文字变暗就读不出来）。
    */
   @Builder
   StandeeHero() {
     if (this.svc.cameraModel !== '') {
-      Column({ space: 8 }) {
-        Image(cameraStandeeMedia(this.svc.cameraModel))
-          .width('100%')
-          .height(STANDEE_HEIGHT)
-          .objectFit(ImageFit.Contain)
-          .interpolation(ImageInterpolation.High)
-          .draggable(false)
-          // 只有图片变暗：型号名是文字，变暗会读不出来，而它正是「记住的是哪台」
-          .opacity(this.svc.connected ? 1 : 0.7)
-          .animation({ duration: 260, curve: Curve.EaseOut })
-        Text(cameraStandeeLabel(this.svc.cameraModel))
-          .fontSize(FontSize.Body)
-          .fontWeight(FontWeight.Medium)
-          .letterSpacing(0.6)
-          .fontColor($r('app.color.text_secondary'))
+      Column() {
+        Column() {
+          Image(cameraStandeeMedia(this.svc.cameraModel))
+            .width('100%')
+            .height(STANDEE_HEIGHT)
+            .objectFit(ImageFit.Contain)
+            .interpolation(ImageInterpolation.High)
+            .draggable(false)
+            .opacity(this.svc.connected ? 1 : 0.72)
+            .animation({ duration: 260, curve: Curve.EaseOut })
+          this.StandeeReflection()
+        }
+        .width('100%')
+        .padding({ top: 10 })
+
+        Row({ space: 12 }) {
+          Blank()
+          if (this.heroVersion() !== '') {
+            Text(this.heroVersion())
+              .fontSize(FontSize.Micro)
+              .fontColor($r('app.color.text_tertiary'))
+          }
+          if (this.heroSerial() !== '') {
+            Text($r('app.string.camera_hero_serial', this.heroSerial()))
+              .fontSize(FontSize.Micro)
+              .fontColor($r('app.color.text_tertiary'))
+          }
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
       }
       .width('100%')
-      .justifyContent(FlexAlign.Center)
-      .radialGradient({
-        center: ['50%', '46%'],
-        radius: 172,
-        colors: [[$r('app.color.hero_glow'), 0], ['#00000000', 1]]
+      .linearGradient({
+        angle: 180,
+        colors: [
+          [$r('app.color.hero_bg'), 0],
+          [$r('app.color.hero_bg'), 0.8],
+          [$r('app.color.bg_page'), 1]
+        ]
       })
     }
+  }
+
+  /**
+   * 立牌倒影：同一张图上下翻转，塞进一个只有半高的裁剪盒里。
+   *
+   * 裁剪盒与图片同宽、`alignContent: Top`，所以盒子露出的正好是被翻转后的
+   * 「上半截」＝原图的下半截，接在原图脚下就是镜像。上面再盖一层从透明到
+   * `hero_bg` 的渐变，让它往下淡出——比调透明度更像地面反光。
+   */
+  @Builder
+  StandeeReflection() {
+    Stack({ alignContent: Alignment.Top }) {
+      Image(cameraStandeeMedia(this.svc.cameraModel))
+        .width('100%')
+        .height(STANDEE_HEIGHT)
+        .objectFit(ImageFit.Contain)
+        .interpolation(ImageInterpolation.High)
+        .draggable(false)
+        .scale({ x: 1, y: -1 })
+        // 往上挪一点：原图底部那块是自带投影，镜像后会在倒影顶端糊成一条灰带
+        .translate({ y: -12 })
+        .opacity(this.svc.connected ? 0.26 : 0.18)
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [['#00000000', 0], ['#00000000', 0.34], [$r('app.color.hero_bg'), 1]]
+        })
+    }
+    .width('100%')
+    .height(REFLECTION_HEIGHT)
+    .clip(true)
+  }
+
+  /** 立牌右下角：`Ver. 1.04`；版本号未知时不渲染。 */
+  private heroVersion(): string {
+    const v = CameraModelStore.getInstance().version;
+    return v === '' ? '' : `Ver. ${v}`;
+  }
+
+  /** 立牌右下角：机身序列号；未知时不渲染。 */
+  private heroSerial(): string {
+    return CameraModelStore.getInstance().serial;
   }
 
   build() {
     Scroll(this.scroller) {
       Column({ space: 16 }) {
+        // 立牌通栏：它自己负责底部渐隐到页面底色，所以这里不给左右边距
         this.StandeeHero()
-        this.ModePicker()
-        this.ConnectionCard()
-        if (this.svc.pairingRequired) {
-          this.PairingCard()
+        Column({ space: 16 }) {
+          this.ConnectionCard()
+          // 引导独立成一组：卡里只放「现在能做什么」，做法放在卡外用分组小标题，
+          // 免得一张卡里同时堆控件和说明书（和设置页的「小标题 + 卡片」同一套）。
+          Column({ space: 10 }) {
+            Text($r('app.string.camera_guide_title'))
+              .fontSize(FontSize.Section)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+            this.GuideBlock()
+          }
+          .width('100%')
+          .padding({ left: 4, right: 4, top: 4 })
+          if (this.svc.pairingRequired) {
+            this.PairingCard()
+          }
+          if (this.svc.connected) {
+            this.DeviceCard()
+            this.ActionsCard()
+          }
         }
-        if (this.svc.connected) {
-          this.DeviceCard()
-          this.ActionsCard()
-        }
+        .width('100%')
+        .padding({ left: 16, right: 16 })
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 96 })
+      .padding({ bottom: 96 })
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
