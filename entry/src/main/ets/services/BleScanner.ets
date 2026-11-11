@@ -587,8 +587,8 @@ export class BleCameraLink {
     const pairing = new NikonPairing(blowfish, this.onLog);
     // 先开 0x2008 通知并读一次电池把相机叫醒（半睡时 GATT 不回 stage2）。
     try {
-      await this.enableNotification(NIKON_CHAR_CONTROL);
-      this.onLog('配对: 0x2008 notify 已开启');
+      await this.enableIndication(NIKON_CHAR_CONTROL);
+      this.onLog('配对: 0x2008 indicate 已开启');
     } catch (err) {
       this.onLog(`配对: 0x2008 notify 失败: ${(err as Error).message}`);
     }
