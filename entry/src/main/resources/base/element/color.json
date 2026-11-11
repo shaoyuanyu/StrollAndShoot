@@ -130,39 +130,63 @@
     },
     {
       "name": "viewer_glass_button",
-      "value": "#26FFFFFF"
+      "value": "#1A000000"
     },
     {
       "name": "viewer_chrome",
-      "value": "#59000000"
+      "value": "#B3FFFFFF"
     },
     {
       "name": "viewer_chrome_motion",
-      "value": "#8C000000"
+      "value": "#D9FFFFFF"
     },
     {
       "name": "viewer_placeholder_bg",
-      "value": "#222222"
+      "value": "#E8EAED"
     },
     {
       "name": "viewer_placeholder_thumb",
-      "value": "#333333"
+      "value": "#E3E6EA"
     },
     {
       "name": "viewer_placeholder_image",
-      "value": "#444444"
+      "value": "#D5D9DE"
     },
     {
       "name": "viewer_text_secondary",
-      "value": "#AAAAAA"
+      "value": "#666666"
     },
     {
       "name": "viewer_text_tertiary",
-      "value": "#888888"
+      "value": "#999999"
     },
     {
       "name": "viewer_accent",
       "value": "#4C91FF"
+    },
+    {
+      "name": "viewer_scrim_top",
+      "value": "#A6F1F3F5"
+    },
+    {
+      "name": "viewer_scrim_clear",
+      "value": "#00F1F3F5"
+    },
+    {
+      "name": "viewer_material_tint",
+      "value": "#66FFFFFF"
+    },
+    {
+      "name": "viewer_backdrop",
+      "value": "#F1F3F5"
+    },
+    {
+      "name": "viewer_chrome_text",
+      "value": "#E6000000"
+    },
+    {
+      "name": "viewer_chrome_text_secondary",
+      "value": "#B3000000"
     }
   ]
 }

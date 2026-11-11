@@ -10,6 +10,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { L10n } from '../utils/L10n';
 import { ControlHeight, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
+import { GlassEffect } from '../utils/GlassEffect';
 
 /** 深色模式下拉的取值顺序，与 DARK_OPTIONS 一一对应。 */
 const DARK_VALUES: number[] = [
@@ -509,6 +510,29 @@ export struct SettingsPage {
 
             Divider().color($r('app.color.divider'))
 
+            // 模拟器的 GPU 不支持磨砂玻璃着色器，材质叠加时会画出乱花的多边形；
+            // 打开后所有 systemMaterial / blur 换成纯色，截图可用于布局与交互验收。
+            Row({ space: 12 }) {
+              Column({ space: 3 }) {
+                Text($r('app.string.settings_disable_glass'))
+                  .fontSize(FontSize.CardTitle)
+                  .fontColor($r('app.color.text_primary'))
+                  .alignSelf(ItemAlign.Start)
+                Text($r('app.string.settings_disable_glass_desc'))
+                  .fontSize(FontSize.Caption)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .alignSelf(ItemAlign.Start)
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              Toggle({ type: ToggleType.Switch, isOn: this.settings.debugDisableGlass })
+                .onChange((isOn: boolean) => { this.settings.debugDisableGlass = isOn; })
+            }
+            .width('100%')
+
+            Divider().color($r('app.color.divider'))
+
             Row({ space: 8 }) {
               Text(logCountText(this.logText))
                 .fontSize(FontSize.Caption)
@@ -601,10 +625,10 @@ struct SettingSelectRow {
         .backgroundColor(Color.Transparent)
         .arrowModifier(new SymbolGlyphModifier($r('sys.symbol.chevron_down'))
           .fontColor([$r('app.color.text_secondary')]))
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
+        .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
           style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
           interactive: true
-        }))
+        })))
         .onSelect((index: number) => { this.onSelect(index); })
     }
     .width('100%')

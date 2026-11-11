@@ -8,6 +8,7 @@ import type { GpsRecord } from '../model/PhotoEntry';
 import { MapCapability } from '../utils/MapCapability';
 import { L10n } from '../utils/L10n';
 import { FontSize, IconSize, Radius } from '../utils/UiTokens';
+import { GlassEffect } from '../utils/GlassEffect';
 
 /** 预览图上的折线最多保留多少个点；缩略图只有 190vp 高，再多也看不出来。 */
 const PREVIEW_MAX_POINTS = 1200;
@@ -28,6 +29,8 @@ const EMPTY_BOUNDS: GpsTrackBounds = { minLat: 0, maxLat: 0, minLon: 0, maxLon: 
 @ComponentV2
 export struct GpsTrackMap {
   @Param track: GpsDayTrack | null = null;
+  /** 详情面板里的单点地图不需要「1 条记录」统计条，隐藏它。 */
+  @Param showStats: boolean = true;
   @Event onOpen: () => void = () => {};
 
   @Local mapReady: boolean = false;
@@ -254,15 +257,19 @@ export struct GpsTrackMap {
     if (points.length === 0) return;
 
     try {
-      await controller.addPolyline({
-        points: points,
-        color: this.trackColor(),
-        width: this.getUIContext().vp2px(4),
-        jointType: mapCommon.JointType.ROUND,
-        startCap: mapCommon.CapStyle.ROUND,
-        endCap: mapCommon.CapStyle.ROUND,
-        zIndex: 2
-      });
+      // 单点轨迹（照片位置）没有折线可画，但标记必须照常加；否则 addPolyline
+      // 对 1 个点抛错会把后面的 marker 一起跳过。
+      if (points.length >= 2) {
+        await controller.addPolyline({
+          points: points,
+          color: this.trackColor(),
+          width: this.getUIContext().vp2px(4),
+          jointType: mapCommon.JointType.ROUND,
+          startCap: mapCommon.CapStyle.ROUND,
+          endCap: mapCommon.CapStyle.ROUND,
+          zIndex: 2
+        });
+      }
       await controller.addMarker({
         position: points[0],
         icon: $r('app.media.gps_start'),
@@ -344,7 +351,7 @@ export struct GpsTrackMap {
         .hitTestBehavior(HitTestMode.None)
       }
 
-      if (this.track !== null && this.track.count > 0) {
+      if (this.showStats && this.track !== null && this.track.count > 0) {
         Stack({ alignContent: Alignment.TopStart }) {
           Row({ space: 5 }) {
             SymbolGlyph($r('sys.symbol.location_north_up_right_fill'))
@@ -356,7 +363,7 @@ export struct GpsTrackMap {
           }
           .padding({ left: 9, right: 10, top: 5, bottom: 5 })
           .backgroundColor($r('app.color.glass_bg'))
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(GlassEffect.blurStyle(BlurStyle.COMPONENT_THIN))
           .borderRadius(Radius.Chip)
           .margin({ left: 10, top: 10 })
         }
@@ -375,7 +382,7 @@ export struct GpsTrackMap {
           }
           .padding({ left: 8, right: 10, top: 5, bottom: 5 })
           .backgroundColor($r('app.color.glass_bg'))
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THIN)
+          .backgroundBlurStyle(GlassEffect.blurStyle(BlurStyle.COMPONENT_THIN))
           .borderRadius(Radius.Chip)
           .margin({ right: 10, bottom: 10 })
           .onClick(() => { this.onOpen(); })

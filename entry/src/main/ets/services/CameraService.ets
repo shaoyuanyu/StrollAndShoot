@@ -2177,6 +2177,28 @@ export class CameraService {
     return 0;
   }
 
+  /**
+   * 取一张照片的**原始压缩字节**（相机返回的 JPEG，不重新编码）。
+   *
+   * 预览器「分享原图」用：优先命中 compressedCache（查看原图时已经取过）；
+   * 未命中时复用串行 USB 取图，结果也放进缓存。扫描中直接返回 null，
+   * 避免和扫描队列抢同一条 USB 管道。
+   */
+  async getOriginalBytes(handle: number,
+    priority: PtpPriority = PtpPriority.FOREGROUND): Promise<Uint8Array | null> {
+    if (this.scanning) return null;
+    if (this.compressedCache.has(handle)) {
+      return this.compressedCache.get(handle)!;
+    }
+    if (this.preloadingSet.has(handle)) {
+      await this.waitForPreload(handle, 5000);
+      if (this.compressedCache.has(handle)) {
+        return this.compressedCache.get(handle)!;
+      }
+    }
+    return this.fetchFullPhotoForeground(handle, Date.now(), false, priority);
+  }
+
   async loadFullPhoto(handle: number,
     priority: PtpPriority = PtpPriority.FOREGROUND,
     onPreview?: (pm: image.PixelMap, w: number, h: number) => void): Promise<DecodedPhotoResult | null> {

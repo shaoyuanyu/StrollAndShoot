@@ -1,22 +1,32 @@
 import { image } from '@kit.ImageKit';
-import { curves } from '@kit.ArkUI';
+import { curves, uiMaterial } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { displaySync } from '@kit.ArkGraphics2D';
+import { AbilityConstant, common, Configuration, EnvironmentCallback } from '@kit.AbilityKit';
+import { systemShare } from '@kit.ShareKit';
+import { uniformTypeDescriptor as utd } from '@kit.ArkData';
+import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { CameraService } from '../services/CameraService';
+import { GpsRecorder } from '../services/GpsRecorder';
+import { GpsTrack, type GpsDayTrack } from '../utils/GpsTrack';
+import { GpsTrackMap } from '../components/GpsTrackMap';
+import { FavoritesStore } from '../model/FavoritesStore';
 import { PtpPriority } from './PtpHost';
-import type { PhotoEntry } from '../model/PhotoEntry';
+import type { DownloadProgress, GpsRecord, PhotoEntry } from '../model/PhotoEntry';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import {
   MorphGeometry,
   MorphRect,
   MorphBackdrop,
   PhotoMorphLayer,
-  PhotoMorphState
+  PhotoMorphState,
+  VIEWER_TITLE_BAR_HEIGHT
 } from '../CustomTransition/PhotoMorph';
 import { RectInfoInPx } from '../utils/ComponentAttrUtils';
 import { WindowUtils } from '../utils/WindowUtils';
-import { FontSize, IconSize, Radius } from '../utils/UiTokens';
+import { ControlHeight, FontSize, IconSize, Radius } from '../utils/UiTokens';
 import { formatCaptureTime } from '../utils/DateTimeText';
+import { GlassEffect } from '../utils/GlassEffect';
 
 const TAG = 'PhotoViewer';
 const DOMAIN = 0x0001;
@@ -138,6 +148,14 @@ const POP_SCROLL_SETTLE_FRAMES = 1;
 const CHROME_IN_DELAY_MS = 220;
 const CHROME_IN_MS = 200;
 const CHROME_OUT_MS = 140;
+/** 手动显示/隐藏标题栏与缩略图条的淡入淡出时长。 */
+const CHROME_FADE_MS = 180;
+/** 底部操作栏高度（vp）。与 Tabs 悬浮页签的默认高度一致。 */
+const ACTION_BAR_HEIGHT = ControlHeight.Bar;
+/** 操作栏浮层总高：多留 8vp 给悬浮胶囊的阴影，避免被 Tabs 边界裁掉。 */
+const ACTION_BAR_OVERLAY_HEIGHT = ACTION_BAR_HEIGHT + 8;
+/** 上滑打开详情面板的最小竖直位移（vp）。 */
+const DETAILS_SWIPE_UP_VP = 40;
 
 /**
  * 单张照片的可渲染状态。
@@ -544,7 +562,6 @@ struct MainImageView {
   @Event onGestureStart: () => void = () => {};
   @Event onGestureEnd: () => void = () => {};
   @Event onPinchState: (active: boolean) => void = () => {};
-  @Event onOverlayToggle: () => void = () => {};
   /** 手势结束时的变换快照，转给页面做返回转场起点。 */
   @Event onTransform: (scale: number, offX: number, offY: number) => void = () => {};
 
@@ -595,7 +612,6 @@ struct MainImageView {
           .width('100%').height('100%')
           .justifyContent(FlexAlign.Center)
           .backgroundColor($r('app.color.viewer_placeholder_bg'))
-          .onClick(() => { this.onOverlayToggle(); })
         }
       }
 
@@ -635,7 +651,6 @@ struct MainImageView {
       }
     }
     .width('100%').height('100%')
-    .onClick(() => { this.onOverlayToggle(); })
   }
 }
 
@@ -682,11 +697,6 @@ function formatFileSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-function formatResolution(w?: number, h?: number): string {
-  if (w && h && w > 0 && h > 0) return `${w}×${h}`;
-  return '';
-}
-
 // ---- ThumbCellView (separate @ComponentV2 for proper Repeat+virtualScroll recycling) ----
 @ComponentV2
 struct ThumbCellView {
@@ -695,6 +705,8 @@ struct ThumbCellView {
   @Param s: number = 1.0;
   @Param ox: number = 0;
   @Param borderWeight: number = 0;
+  /** 是否是缩略图条的中心项：其余项压暗，把注意力留给当前这张。 */
+  @Param emphasized: boolean = false;
   @Event onCellClick: () => void = () => {};
 
   build() {
@@ -720,6 +732,8 @@ struct ThumbCellView {
     .justifyContent(FlexAlign.Center)
     .offset({ x: this.ox })
     .scale({ x: this.s, y: this.s })
+    // 非中心项压暗（占位项本来就透明，不受影响）
+    .opacity(this.emphasized ? 1 : 0.68)
     .animation({ duration: 150, curve: Curve.Linear })
     .onClick(() => {
       if (this.realIdx >= 0) { this.onCellClick(); }
@@ -775,6 +789,19 @@ export struct PhotoViewerScreen {
   private transitionActive: boolean = true;
   /** 标题栏 / 缩略图条不透明度：照片到位后才淡入。 */
   @Local chromeAlpha: number = 0;
+  /**
+   * 用户手动显示/隐藏控件的不透明度（0~1）。
+   * 必须用数字而不是布尔：`animateTo` 不会对布尔值做插值，直接用布尔会让
+   * 控件「啪」地消失。`_overlayVisible` 只负责逻辑状态。
+   */
+  @Local overlayAlpha: number = 1;
+  /**
+   * 控件是否还挂在渲染树上。
+   * 淡出结束后才置 false：用 `Visibility.Hidden` 而不是 `opacity(0)` 收尾，
+   * 因为隐藏节点会连同**子节点**一起退出命中测试——只把父容器设成
+   * `hitTestBehavior(None)` 并不会阻止子按钮继续响应，隐藏后仍会误触。
+   */
+  @Local chromeVisible: boolean = true;
   private chromeTimerId: number = -1;
   /** 当前照片的缩放快照（手势结束时更新），用于「放大状态下返回」的起点矩形。 */
   private curZoomScale: number = 1;
@@ -810,6 +837,51 @@ export struct PhotoViewerScreen {
   @Local _thumbItemW: number = 60;
   @Local _inertiaAnim: boolean = false;
   @Local _overlayVisible: boolean = true;
+  /**
+   * 保存到系统相册：正在保存的照片 handle（-1 表示空闲）。
+   * 只影响保存按钮自己的图标，不参与整页状态。
+   */
+  @Local savingHandle: number = -1;
+  /**
+   * 当前相机已保存到系统相册的照片键。
+   * 用数组而不是普通 Set：需要参与 V2 追踪，保存成功后按钮才会从下载图标换成对勾。
+   */
+  @Local savedKeys: string[] = [];
+  /** 本地收藏（PersistenceV2，键与下载记录同源）。 */
+  @Local favStore: FavoritesStore = FavoritesStore.getInstance();
+  /** 详情面板是否显示。上滑照片或点标题栏右侧的 info 钮打开。 */
+  @Local detailsOpen: boolean = false;
+  /** 当前照片匹配到的 GPS 点与单点轨迹（详情面板里的地图）。 */
+  @Local photoGps: GpsRecord | null = null;
+  @Local photoTrack: GpsDayTrack | null = null;
+  /** 正在把当前原图编码成分享文件。 */
+  @Local shareBusy: boolean = false;
+  /** 上滑手势采样：按下点与当前最大上移量（相对照片区域）。 */
+  private swipeDownX: number = 0;
+  private swipeDownY: number = 0;
+  private swipeUpDy: number = 0;
+  private swipeActive: boolean = false;
+  /** 这一笔触摸里出现过多指（捏合）：抬手时不要再当成单击/上滑。 */
+  private multiTouchSeen: boolean = false;
+  /** MainScreen 传入：保存成功后同步画廊的已下载绿点。 */
+  private notifyDownloadSaved: (() => void) | undefined = undefined;
+  /** 显隐动画序号：淡出回调晚到时不误把刚唤出的控件收掉。 */
+  private overlayFadeSeq: number = 0;
+  /** 页面销毁守卫：保存是异步的，回调晚到时不再碰 UI。 */
+  private destroyed: boolean = false;
+  /**
+   * 当前是否为深色模式。只用于 `backgroundBlurStyle` 的 colorMode 与系统栏图标：
+   * 颜色资源本身由资源限定词自动切换，不需要在 build() 里逐项判断。
+   *
+   * **必须是 `@Local`**：用户可能停留在预览器里切换系统深/浅色。系统环境回调
+   * 更新它后，页面需要重建一次，缩略图条的 `backgroundBlurStyle` 与颜色资源才会
+   * 按新主题重新取值；写成普通字段时缩略图条会停在旧主题（其他组件的资源会由
+   * 资源系统自动刷新，唯独这里的 `chromeBg()` + blur colorMode 不会）。
+   */
+  @Local isDark: boolean = false;
+  /** 系统环境变化监听；预览器常驻期间可能跨一次深/浅色切换，退出时必须注销。 */
+  private appCtx: common.ApplicationContext | null = null;
+  private envCallbackId: number = -1;
 
   @Local _realTotal: number = 0;
   @Local _displayCount: number = 9;
@@ -890,11 +962,41 @@ export struct PhotoViewerScreen {
     // 预览器自己有一套「当前优先、前后各 3 张」的加载队列；后台的邻近预加载
     // 若同时跑，会在串行的 USB 管道上插队，把正在看的这张拖慢。
     this.svc.suspendNeighborPreload();
-    // The viewer is always dark: force light status/navigation bar icons.
-    WindowUtils.applyViewerSystemBars();
+    // 深浅色跟随应用主题：系统栏内容色与页面背板保持一致（浅色深字、深色白字）。
+    const hostCtx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.isDark = WindowUtils.isDarkMode(hostCtx);
+    WindowUtils.applyThemeSystemBars(this.isDark);
+    // 预览器可能停留很久，期间系统深/浅色会变化。`chromeBg()` 返回的 ResourceColor
+    // 与 `backgroundBlurStyle` 的 colorMode 不会自动跟随，必须由状态变化触发重建。
+    // 注意：官方文档说明，即使应用显式设置了深浅色，系统主题变化仍会触发这个回调，
+    // 所以这里用应用当前的有效配置（WindowUtils.isDarkMode）而不是 config.colorMode。
+    const envCb: EnvironmentCallback = {
+      onMemoryLevel: (_level: AbilityConstant.MemoryLevel): void => {
+      },
+      onConfigurationUpdated: (_config: Configuration): void => {
+        if (this.destroyed) {
+          return;
+        }
+        const dark = WindowUtils.isDarkMode(hostCtx);
+        if (dark === this.isDark) {
+          return;
+        }
+        this.isDark = dark;
+        WindowUtils.applyThemeSystemBars(dark);
+      }
+    };
+    try {
+      if (hostCtx) {
+        this.appCtx = hostCtx.getApplicationContext();
+        this.envCallbackId = this.appCtx.on('environment', envCb);
+      }
+    } catch (_e) {
+      // 拿不到 ApplicationContext 时至少保留 aboutToAppear 的初值
+    }
   }
 
   aboutToDisappear(): void {
+    this.destroyed = true;
     this.cancelStableTimer();
     this.cancelChromeTimer();
     this.stopRectAnimation();
@@ -909,6 +1011,14 @@ export struct PhotoViewerScreen {
     // 打开照片才不会又从零开始下载）。
     this.loadingPaused = true;
     this.svc.resumeNeighborPreload();
+    // 注销系统环境监听，避免预览器退出后仍持有页面与上下文。
+    if (this.appCtx !== null && this.envCallbackId >= 0) {
+      this.appCtx.off('environment', this.envCallbackId).catch((_e: Error) => {
+        // best effort
+      });
+      this.appCtx = null;
+      this.envCallbackId = -1;
+    }
     // Restore system bars to match the app theme.
     WindowUtils.applyThemeSystemBars(
       WindowUtils.isDarkMode(this.getUIContext().getHostContext()));
@@ -957,8 +1067,18 @@ export struct PhotoViewerScreen {
     this.mainIdx = initialIndex;
     this.thumbIdx = initialIndex;
     this.updateScales(initialIndex);
-    // Start loading full-res for initial photo after a short delay
-    setTimeout(() => { this.scheduleFullResLoad(); }, 200);
+    // 先挂上「加载中」状态：转场期间整页被共享照片层盖住，转圈不可见；
+    // 落地那一刻照片一揭开就能立刻看到，而不是等防抖 + 显示延迟再出现。
+    // 真正的下载由 finishTransitionGate() 在转场结束时立即发起。
+    const initialHandle = this.currentHandle();
+    if (initialHandle >= 0 && !this.fullResMap.has(initialHandle)) {
+      this.pendingFullResHandle = initialHandle;
+      this.markDeferredLoading(initialHandle);
+      // 用户要求：一镜到底转场期间就开始取原图，不再等共享层落地。
+      // 共享层始终显示缩略图，全尺寸解码完成只会更新底下被 photoAlpha 盖住的内容层；
+      // 转场可能因此多一些 CPU/IO，但照片落位时往往已经就绪。
+      this.loadFullRes(initialHandle, true);
+    }
   }
 
   /** 取（或懒建）某张照片的渲染状态。 */
@@ -1095,6 +1215,110 @@ export struct PhotoViewerScreen {
       this.setChromeMotion(this._isDragging || this._inertiaAnim);
       this.svc.getLog().add(
         `PERF viewer pinch: swiperScrolls=${this.pinchScrollEvents}`);
+    }
+  }
+
+  // ========== 控件显隐（点击照片切换） ==========
+
+  /**
+   * 显示/隐藏标题栏与缩略图条。只由单击照片触发，**不做自动隐藏**。
+   *
+   * 隐藏 = 先淡出 180ms，再置 `Visibility.Hidden`。节点**始终保留布局位置**，
+   * 所以照片区域尺寸不变、图片不会跳；隐藏后连同子按钮一起退出命中测试。
+   */
+  private setOverlayVisible(visible: boolean): void {
+    if (this.destroyed || this._overlayVisible === visible) {
+      return;
+    }
+    this._overlayVisible = visible;
+    const seq = ++this.overlayFadeSeq;
+    if (visible) {
+      // 先挂上节点（此时透明度还是 0），下一帧再淡入
+      this.chromeVisible = true;
+      this.getUIContext().animateTo({ duration: CHROME_FADE_MS, curve: Curve.EaseOut }, () => {
+        this.overlayAlpha = 1;
+      });
+    } else {
+      this.getUIContext().animateTo({
+        duration: CHROME_FADE_MS,
+        curve: Curve.EaseOut,
+        onFinish: () => {
+          // 淡出期间又被唤出时不收节点，否则会闪一下
+          if (seq === this.overlayFadeSeq && !this._overlayVisible && !this.destroyed) {
+            this.chromeVisible = false;
+          }
+        }
+      }, () => {
+        this.overlayAlpha = 0;
+      });
+    }
+  }
+
+  private toggleOverlay(): void {
+    this.setOverlayVisible(!this._overlayVisible);
+  }
+
+  /**
+   * 照片区域的被动触摸采样：上滑打开详情面板。
+   *
+   * 用 `onTouch` 而不是再加一个 PanGesture：照片/缩略图/Swiper 已经有自己的
+   * 手势链，多一个方向相同的手势会和它们抢识别；`onTouch` 只是旁观，不消费事件。
+   */
+  private onViewerTouch(event: TouchEvent): void {
+    const t = event.touches.length > 0
+      ? event.touches[0]
+      : (event.changedTouches.length > 0 ? event.changedTouches[0] : null);
+    if (event.type === TouchType.Down) {
+      if (t === null) { return; }
+      if (event.touches.length > 1) {
+        // 第二根手指按下：这是捏合，不是单击/上滑
+        this.multiTouchSeen = true;
+        this.swipeActive = false;
+        return;
+      }
+      this.swipeDownX = t.x;
+      this.swipeDownY = t.y;
+      this.swipeUpDy = 0;
+      this.swipeActive = true;
+      this.multiTouchSeen = false;
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      if (event.touches.length > 1) {
+        this.multiTouchSeen = true;
+        this.swipeActive = false;
+        return;
+      }
+      if (!this.swipeActive || t === null) { return; }
+      this.swipeUpDy = Math.min(this.swipeUpDy, t.y - this.swipeDownY);
+      return;
+    }
+    if (event.type === TouchType.Cancel) {
+      // 手势被系统取消（来电、三指、与捏合冲突）时只复位，不能当成单击，
+      // 否则一次被取消的触摸也会把标题栏/缩略图条收起来。
+      this.swipeActive = false;
+      return;
+    }
+    if (event.type === TouchType.Up) {
+      if (this.multiTouchSeen) {
+        // 捏合结束的那次抬手不能触发控件显隐/详情
+        this.multiTouchSeen = false;
+        this.swipeActive = false;
+        return;
+      }
+      const dx = t !== null ? t.x - this.swipeDownX : 0;
+      const dy = t !== null ? t.y - this.swipeDownY : 0;
+      if (this.swipeActive) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) {
+          // 单击照片：显示 / 隐藏标题栏与缩略图条
+          this.toggleOverlay();
+        } else if (!this.isZoomed && this.swipeUpDy <= -DETAILS_SWIPE_UP_VP &&
+                   Math.abs(dx) < DETAILS_SWIPE_UP_VP * 1.5) {
+          // 上滑打开详情面板
+          this.openDetails();
+        }
+      }
+      this.swipeActive = false;
     }
   }
 
@@ -1324,17 +1548,13 @@ export struct PhotoViewerScreen {
     });
   }
 
-  private async loadFullRes(handle: number): Promise<void> {
+  /**
+   * @param immediate 首次进入预览器时用 true：跳过 300ms 的转圈显示延迟。
+   *   普通翻页仍走防抖，避免快速滑动时转圈一闪一闪。
+   */
+  private async loadFullRes(handle: number, immediate: boolean = false): Promise<void> {
     // Scanning guard: no full-res loading until scan completes
     if (this.svc.scanning) return;
-    // 转场进行中：先记下来，等共享层落地后再下载（见 transitionActive 注释）
-    if (this.transitionActive) {
-      this.pendingFullResHandle = handle;
-      this.clearDeferredLoading(handle);
-      this.markDeferredLoading(handle);
-      return;
-    }
-
     // 已经加载过 / 就是当前正在加载的那张
     if (this.fullResMap.has(handle)) return;
     if (this.loadingHandle === handle) return;
@@ -1351,13 +1571,16 @@ export struct PhotoViewerScreen {
     this.clearDeferredLoading(handle);
     this.loadingHandle = handle;
     const startState = this.stateFor(handle);
-    const keepSpinner = startState.spinnerOn;
+    const keepSpinner = startState.spinnerOn || immediate;
     startState.loading = true;
     if (this.spinnerTimerId >= 0) {
       clearTimeout(this.spinnerTimerId);
       this.spinnerTimerId = -1;
     }
-    if (!keepSpinner) {
+    if (keepSpinner) {
+      // 首次进入：照片一揭开就转圈，不再等 300ms
+      startState.spinnerOn = true;
+    } else {
       startState.spinnerOn = false;
       this.spinnerTimerId = setTimeout(() => {
         this.spinnerTimerId = -1;
@@ -1664,58 +1887,609 @@ export struct PhotoViewerScreen {
     return formatCaptureDate(p) || p.filename;
   }
 
-  private getSubTitle(): string {
+
+
+  // ========== 保存到系统相册 ==========
+
+  /** 某张照片是否已经保存到系统相册（键与画廊绿点同源）。 */
+  private isSaved(photo: PhotoEntry): boolean {
+    const key = this.svc.makeDownloadKey(photo.filename, photo.size);
+    for (const k of this.savedKeys) {
+      if (k === key) { return true; }
+    }
+    return false;
+  }
+
+  private currentPhotoSaved(): boolean {
     const p = this.currentPhoto();
-    if (!p) return '';
-    const parts: string[] = [];
-    if (p.filename) parts.push(p.filename);
-    if (p.size > 0) parts.push(formatFileSize(p.size));
-    const res = formatResolution(p.imagePixWidth, p.imagePixHeight);
-    if (res) parts.push(res);
-    return parts.join('  ·  ');
+    return p !== null && this.isSaved(p);
+  }
+
+  private toast(message: ResourceStr): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message, duration: 2600 });
+    } catch (_e) {
+      // 页面正在退出时 toast 不可用，不影响保存本身
+    }
+  }
+
+  /**
+   * 把当前照片下载并保存到系统相册。
+   *
+   * 复用画廊的下载管线（USB 读取 → 写沙箱 → 按拍摄时间写入 GPS → 系统相册确认框 →
+   * 下载记录），所以保存后回到画廊会立刻显示已下载绿点。
+   */
+  private async saveCurrentPhoto(): Promise<void> {
+    if (this.savingHandle >= 0) { return; }
+    const photo = this.currentPhoto();
+    if (photo === null) { return; }
+    if (this.svc.scanning) {
+      this.toast($r('app.string.viewer_save_scanning'));
+      return;
+    }
+    if (this.isSaved(photo)) {
+      this.toast($r('app.string.viewer_already_saved'));
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (!ctx) {
+      this.toast($r('app.string.viewer_save_failed'));
+      return;
+    }
+
+    this.savingHandle = photo.handle;
+    // 预览器自己的邻近预加载和这次下载抢同一条 USB 管道：先清空队列并暂停，
+    // 保存结束后再恢复（否则用户会看到保存按钮转很久）。
+    this.cancelStableTimer();
+    this.preloadQueue = [];
+    this.pausePreloading();
+    this.svc.getLog().add(`[PhotoViewer] 保存到相册: ${photo.filename} (${photo.size} B)`);
+    try {
+      await this.svc.downloadPhotos([photo.handle],
+        (_progress: DownloadProgress) => { /* 顶栏用按钮转圈表达进度，不需要逐张回调 */ },
+        ctx);
+      if (this.destroyed) { return; }
+      // 以「下载记录里真的有这条」为准：用户在系统相册确认框点取消时，
+      // downloadPhotos 也会以 complete 结束，但记录不会写入。
+      this.savedKeys = this.svc.getDownloadedKeys();
+      if (this.isSaved(photo)) {
+        this.toast($r('app.string.viewer_saved_to_album'));
+        if (this.notifyDownloadSaved !== undefined) {
+          try { this.notifyDownloadSaved(); } catch (_e) { /* ignore */ }
+        }
+      } else {
+        this.toast($r('app.string.viewer_save_cancelled'));
+      }
+    } catch (err) {
+      this.svc.getLog().add(`[PhotoViewer] 保存失败: ${JSON.stringify(err)}`);
+      if (!this.destroyed) {
+        this.toast($r('app.string.viewer_save_failed'));
+      }
+    } finally {
+      if (!this.destroyed) {
+        this.savingHandle = -1;
+        this.scheduleResumePreloading();
+      }
+    }
+  }
+
+  /**
+   * 顶部标题栏。
+   *
+   * 挂在 NavDestination 的 `.title()` 里（见 build），这是通用组件唯一能拿到
+   * 系统沉浸光感材质的两个区域之一（另一个是横向 Tabs 的底部 TabBar）。
+   * 标题栏本身不铺材质：只给两颗圆形按钮设置 `systemMaterial`，把材质面积
+   * 控制在局部；整条背板用压色渐变保证文字在亮照片上也能读。
+   *
+   * 这里只放「拍摄时间 + 序号」：文件名 / 大小 / 分辨率等放上滑详情面板，
+   * 否则一行副标题放不下，只能被省略号吃掉。
+   */
+  // ========== 收藏 / 分享 ==========
+
+  private currentPhotoFavorite(): boolean {
+    const p = this.currentPhoto();
+    if (p === null) { return false; }
+    return this.favStore.isFavorite(this.svc.makeDownloadKey(p.filename, p.size));
+  }
+
+  private toggleFavorite(): void {
+    const p = this.currentPhoto();
+    if (p === null) { return; }
+    const key = this.svc.makeDownloadKey(p.filename, p.size);
+    const nowFavorite = this.favStore.toggle(key);
+    this.toast(nowFavorite
+      ? $r('app.string.viewer_favorite_added')
+      : $r('app.string.viewer_favorite_removed'));
+    this.svc.getLog().add(`[PhotoViewer] 收藏${nowFavorite ? '' : '取消'}: ${p.filename}`);
+  }
+
+  /** 上一次分享临时文件的路径：下次分享前删掉，避免 cache 目录越积越多。 */
+  private lastSharePath: string = '';
+
+  /**
+   * 分享：单击直接分享**原图**；长按分享按钮直接分享**压缩图**。
+   * 两者都不弹选择框。原图取相机原始压缩字节，不重新编码；
+   * 压缩图把当前已解码 PixelMap 重编码为高质量 JPEG。
+   */
+  private shareCurrentPhoto(): void {
+    this.doShareCurrent(true);
+  }
+
+
+  private async doShareCurrent(original: boolean): Promise<void> {
+    if (this.shareBusy) { return; }
+    const p = this.currentPhoto();
+    if (p === null) { return; }
+    if (original && this.svc.scanning) {
+      this.toast($r('app.string.viewer_share_scanning'));
+      return;
+    }
+    const st = this.renderStates.get(p.handle);
+    const pm = st !== undefined ? st.fullPm : null;
+    if (!original && pm === null) {
+      this.toast($r('app.string.viewer_share_no_image'));
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    if (!ctx) { return; }
+
+    this.shareBusy = true;
+    this.toast($r('app.string.viewer_share_preparing'));
+    const pausePreload = original;
+    if (pausePreload) {
+      // 取原图要走 USB：和保存一样先让预览器自己的预加载队列让路
+      this.cancelStableTimer();
+      this.preloadQueue = [];
+      this.pausePreloading();
+    }
+    try {
+      let buf: ArrayBuffer;
+      let ext = 'jpg';
+      let kind = '压缩图';
+      if (original) {
+        const bytes = await this.svc.getOriginalBytes(p.handle, PtpPriority.FOREGROUND);
+        if (bytes === null) {
+          this.toast($r('app.string.viewer_share_original_failed'));
+          return;
+        }
+        buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        const dot = p.filename.lastIndexOf('.');
+        if (dot >= 0 && dot < p.filename.length - 1) {
+          ext = p.filename.substring(dot + 1).toLowerCase();
+        }
+        kind = `原图 ${(bytes.length / 1048576).toFixed(1)}MB`;
+      } else {
+        const packer = image.createImagePacker();
+        buf = await packer.packToData(pm!, { format: 'image/jpeg', quality: 92 });
+      }
+
+      if (this.lastSharePath !== '') {
+        try { await fileIo.unlink(this.lastSharePath); } catch (_e) { /* best effort */ }
+      }
+      const path = `${ctx.cacheDir}/share_${p.handle}_${Date.now()}.${ext}`;
+      const f = await fileIo.open(path,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+      await fileIo.write(f.fd, buf);
+      await fileIo.close(f);
+      this.lastSharePath = path;
+
+      const shareData: systemShare.SharedData = new systemShare.SharedData({
+        utd: utd.UniformDataType.IMAGE,
+        uri: fileUri.getUriFromPath(path),
+        title: p.filename
+      });
+      const controller = new systemShare.ShareController(shareData);
+      await controller.show(ctx, {
+        previewMode: systemShare.SharePreviewMode.DEFAULT,
+        selectionMode: systemShare.SelectionMode.SINGLE
+      });
+      this.svc.getLog().add(`[PhotoViewer] 分享(${kind}): ${p.filename}`);
+    } catch (err) {
+      this.svc.getLog().add(`[PhotoViewer] 分享失败: ${JSON.stringify(err)}`);
+      if (!this.destroyed) {
+        this.toast($r('app.string.viewer_share_failed'));
+      }
+    } finally {
+      if (!this.destroyed) {
+        this.shareBusy = false;
+        if (pausePreload) {
+          this.scheduleResumePreloading();
+        }
+      }
+    }
   }
 
   @Builder
   TitleBar() {
-    Row() {
-      // Back button
-      Button({ type: ButtonType.Circle }) {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(IconSize.Nav)
-          .fontColor([$r('app.color.text_on_dark')])
-      }
-      .width(36).height(36)
-      .backgroundColor($r('app.color.viewer_glass_button'))
-      .onClick(() => { this.handleBack(); })
+    Stack({ alignContent: Alignment.Bottom }) {
+      // 顶部压色：浅色为页面底色、深色为黑 65% → 透明。不用材质是为了避免
+      // 整条大面积材质，也避免和下面照片区域「一层玻璃压一层玻璃」。
+      Column()
+        .width('100%')
+        .height('100%')
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [$r('app.color.viewer_scrim_top'), 0.0],
+            [$r('app.color.viewer_scrim_clear'), 1.0]
+          ]
+        })
 
-      // Title block
-      Column() {
-        Text(this.getMainTitle())
-          .fontSize(FontSize.CardTitle).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_on_dark'))
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        Text(this.getSubTitle())
-          .fontSize(FontSize.Caption).fontColor($r('app.color.viewer_text_on_dark_70'))
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .margin({ top: 1 })
-      }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
-      .margin({ left: 10 })
+      Row() {
+        // 返回：40vp 圆形玻璃钮，与主界面标题栏的玻璃胶囊同一尺寸
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.chevron_left'))
+            .fontSize(IconSize.Nav)
+            .fontColor([$r('app.color.viewer_chrome_text')])
+        }
+        .width(ControlHeight.Pill)
+        .height(ControlHeight.Pill)
+        // 兜底底色：调试开关关掉材质时仍是一个圆形玻璃钮，而不是一个孤零零的图标
+        .backgroundColor($r('app.color.viewer_glass_button'))
+        .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+          interactive: true,
+          // 材质底色跟随主题：浅色给白底、深色给黑底，避免胶囊与页面背板撞色
+          materialColor: $r('app.color.viewer_material_tint')
+        })))
+        .onClick(() => { this.handleBack(); })
 
-      // Current index indicator
-      Text(`${this.mainIdx + 1}/${this._realTotal}`)
-        .fontSize(FontSize.Caption).fontColor($r('app.color.viewer_text_on_dark_70'))
-        .margin({ right: 4 })
+        // 拍摄时间 + 序号。文件名、大小、分辨率都移到详情面板。
+        Column({ space: 1 }) {
+          Text(this.getMainTitle())
+            .fontSize(FontSize.CardTitle)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.viewer_chrome_text'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+          Text(`${this.mainIdx + 1} / ${this._realTotal}`)
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.viewer_chrome_text_secondary'))
+            .maxLines(1)
+            .width('100%')
+        }
+        .alignItems(HorizontalAlign.Start)
+        .justifyContent(FlexAlign.Center)
+        .layoutWeight(1)
+        .margin({ left: 12 })
+
+        // 详情：也提供按钮入口，上滑手势不是所有用户都会发现
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.info_circle'))
+            .fontSize(IconSize.Nav)
+            .fontColor([$r('app.color.viewer_chrome_text')])
+        }
+        .width(ControlHeight.Pill)
+        .height(ControlHeight.Pill)
+        .backgroundColor($r('app.color.viewer_glass_button'))
+        .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+          interactive: true,
+          // 材质底色跟随主题：浅色给白底、深色给黑底，避免胶囊与页面背板撞色
+          materialColor: $r('app.color.viewer_material_tint')
+        })))
+        .onClick(() => { this.openDetails(); })
+      }
+      .width('100%')
+      .height(VIEWER_TITLE_BAR_HEIGHT)
+      // 与 MorphGeometry 的标题栏高度保持一致：图片显示区域必须和实际布局同源，
+      // 否则一镜到底的落点会比真实照片高几 vp（改高度要同步 PhotoMorph 常量）。
+      .padding({ left: 16, right: 16 })
     }
     .width('100%')
-    // The navigation content area already sits below the status bar,
-    // so do not add the status-bar inset again here.
-    .padding({ left: 12, right: 12, top: 12, bottom: 8 })
-    .backgroundColor(this.chromeBg())
-    .backgroundBlurStyle(this.chromeBlur(), { colorMode: ThemeColorMode.DARK })
-    .opacity(this.chromeAlpha)
+    .height('100%')
+    .opacity(this.chromeAlpha * this.overlayAlpha)
+    // 控件收起后连按钮一起退出命中测试（Visibility.Hidden 会作用于整棵子树）
+    .visibility(this.chromeVisible ? Visibility.Visible : Visibility.Hidden)
+  }
+
+  // ========== 底部操作栏（下载 / 收藏 / 分享） ==========
+
+  /**
+   * 底部操作栏。
+   *
+   * 用 Tabs 的底部悬浮页签来承载：这是通用按钮在内容区拿到系统沉浸光感材质的
+   * 唯一官方方式（`barFloatingStyle.systemMaterial`）。Tabs 只负责提供材质背板，
+   * 真实内容仍然由上面的照片区域承担，所以这里放一个空 TabContent。
+   */
+  @Builder
+  ActionBar() {
+    Row() {
+      // 下载 / 已保存
+      Column({ space: 2 }) {
+        Stack() {
+          if (this.savingHandle >= 0) {
+            LoadingProgress()
+              .width(IconSize.Large)
+              .height(IconSize.Large)
+              .color($r('app.color.viewer_chrome_text'))
+          } else {
+            SymbolGlyph(this.currentPhotoSaved()
+              ? $r('sys.symbol.checkmark_circle_fill')
+              : $r('sys.symbol.arrow_down_to_line'))
+              .fontSize(IconSize.Large)
+              .fontColor([this.currentPhotoSaved()
+                ? $r('app.color.status_connected')
+                : $r('app.color.viewer_chrome_text')])
+          }
+        }
+        .width(IconSize.Large).height(IconSize.Large)
+
+        Text(this.currentPhotoSaved()
+          ? $r('app.string.viewer_action_saved')
+          : $r('app.string.viewer_action_download'))
+          .fontSize(FontSize.Micro)
+          .fontColor($r('app.color.viewer_chrome_text_secondary'))
+          .maxLines(1)
+      }
+      .width('33.33%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => { this.saveCurrentPhoto(); })
+
+      // 收藏 / 已收藏
+      Column({ space: 2 }) {
+        SymbolGlyph(this.currentPhotoFavorite()
+          ? $r('sys.symbol.bookmark_fill')
+          : $r('sys.symbol.bookmark'))
+          .fontSize(IconSize.Large)
+          .fontColor([this.currentPhotoFavorite()
+            ? $r('app.color.viewer_accent')
+            : $r('app.color.viewer_chrome_text')])
+          .width(IconSize.Large).height(IconSize.Large)
+
+        Text(this.currentPhotoFavorite()
+          ? $r('app.string.viewer_action_favorited')
+          : $r('app.string.viewer_action_favorite'))
+          .fontSize(FontSize.Micro)
+          .fontColor($r('app.color.viewer_chrome_text_secondary'))
+          .maxLines(1)
+      }
+      .width('33.33%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => { this.toggleFavorite(); })
+
+      // 分享
+      Column({ space: 2 }) {
+        Stack() {
+          if (this.shareBusy) {
+            LoadingProgress()
+              .width(IconSize.Large)
+              .height(IconSize.Large)
+              .color($r('app.color.viewer_chrome_text'))
+          } else {
+            SymbolGlyph($r('sys.symbol.share'))
+              .fontSize(IconSize.Large)
+              .fontColor([$r('app.color.viewer_chrome_text')])
+          }
+        }
+        .width(IconSize.Large).height(IconSize.Large)
+
+        Text($r('app.string.viewer_action_share'))
+          .fontSize(FontSize.Micro)
+          .fontColor($r('app.color.viewer_chrome_text_secondary'))
+          .maxLines(1)
+      }
+      .width('33.33%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => { this.shareCurrentPhoto(); })
+      // 长按直接走「压缩图」，不弹任何选择框；单击是原图
+      .gesture(LongPressGesture({ repeat: false, duration: 500 })
+        .onAction(() => { this.doShareCurrent(false); }))
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  // ========== 上滑详情面板 ==========
+
+  private openDetails(): void {
+    const p = this.currentPhoto();
+    if (p === null) { return; }
+    const gps = p.captureDate ? GpsRecorder.getInstance().findClosest(p.captureDate) : null;
+    this.photoGps = gps;
+    if (gps !== null && p.captureDate && p.captureDate.length >= 8) {
+      const day = `${p.captureDate.substring(0, 4)}-${p.captureDate.substring(4, 6)}-${p.captureDate.substring(6, 8)}`;
+      // 用单点轨迹复用 GpsTrackMap 的地图/标记/降级能力
+      this.photoTrack = GpsTrack.buildDayTrack(day, [gps]);
+    } else {
+      this.photoTrack = null;
+    }
+    this.detailsOpen = true;
+  }
+
+  private detailFormatText(): string {
+    const p = this.currentPhoto();
+    if (p === null) { return ''; }
+    const ext = p.filename.substring(p.filename.lastIndexOf('.') + 1).toUpperCase();
+    return ext !== '' ? ext : '';
+  }
+
+  private detailResolutionText(): string {
+    const p = this.currentPhoto();
+    if (p === null) { return ''; }
+    const st = this.renderStates.get(p.handle);
+    const w = st !== undefined && st.photoW > 1 ? Math.round(st.photoW) : (p.imagePixWidth ?? 0);
+    const h = st !== undefined && st.photoH > 1 ? Math.round(st.photoH) : (p.imagePixHeight ?? 0);
+    if (w > 0 && h > 0) { return `${w} × ${h}`; }
+    return '';
+  }
+
+  private detailLocationText(): ResourceStr {
+    const gps = this.photoGps;
+    if (gps === null) { return $r('app.string.viewer_detail_no_location'); }
+    return `${gps.latitude.toFixed(5)}, ${gps.longitude.toFixed(5)}`;
+  }
+
+  /** 当前照片是否匹配到了 GPS 点（决定「位置」行是否可点进当天轨迹）。 */
+  private currentPhotoHasGps(): boolean {
+    return this.photoGps !== null;
+  }
+
+  /** 打开当前照片当天在「定位记录」里的轨迹页（地图定位的落点）。 */
+  private openPhotoDayTrack(): void {
+    const p = this.currentPhoto();
+    if (p === null || !p.captureDate || p.captureDate.length < 8) { return; }
+    if (!this.currentPhotoHasGps()) { return; }
+    const day = `${p.captureDate.substring(0, 4)}-${p.captureDate.substring(4, 6)}-${p.captureDate.substring(6, 8)}`;
+    this.detailsOpen = false;
+    const stack = this.pageInfos;
+    // 等半模态收起再 push，避免新页面和面板动画叠在一起
+    setTimeout(() => {
+      const param: Record<string, Object> = {};
+      param['day'] = day;
+      stack.pushPath({ name: 'GpsTrackViewerPage', param: param });
+    }, 250);
+  }
+
+  @Builder
+  DetailRow(label: ResourceStr, value: ResourceStr) {
+    Row({ space: 16 }) {
+      Text(label)
+        .fontSize(FontSize.Body)
+        .fontColor($r('app.color.text_secondary'))
+        .width(88)
+        .flexShrink(0)
+      Text(value)
+        .fontSize(FontSize.Body)
+        .fontColor($r('app.color.text_primary'))
+        .layoutWeight(1)
+        .maxLines(3)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .padding({ top: 12, bottom: 12 })
+  }
+
+  /**
+   * 详情面板参数。
+   *
+   * bindSheet 不跟随应用级材质开关，必须显式给 `systemMaterial`；调试关闭材质时
+   * 不能把材质设成 `Material.empty`（面板会变全透明），要换回不透明底色。
+   */
+  private detailsSheetOptions(): SheetOptions {
+    const opts: SheetOptions = {
+      height: SheetSize.MEDIUM,
+      detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+      preferType: SheetType.BOTTOM,
+      dragBar: true,
+      showClose: false
+    };
+    if (GlassEffect.isEnabled()) {
+      opts.systemMaterial = new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THICK
+      });
+    } else {
+      opts.backgroundColor = $r('app.color.bg_surface');
+    }
+    return opts;
+  }
+
+  @Builder
+  DetailsSheet() {
+    Column() {
+      Text($r('app.string.viewer_details_title'))
+        .fontSize(FontSize.PageTitle)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+        .margin({ bottom: 8 })
+
+      Scroll() {
+        Column() {
+          this.DetailRow($r('app.string.viewer_detail_filename'), this.getCurrentFilename())
+          Divider().color($r('app.color.divider'))
+          this.DetailRow($r('app.string.viewer_detail_capture'), this.getMainTitle())
+          Divider().color($r('app.color.divider'))
+          this.DetailRow($r('app.string.viewer_detail_resolution'), this.detailResolutionText())
+          Divider().color($r('app.color.divider'))
+          this.DetailRow($r('app.string.viewer_detail_size'), this.getCurrentSizeText())
+          Divider().color($r('app.color.divider'))
+          this.DetailRow($r('app.string.viewer_detail_format'), this.detailFormatText())
+          Divider().color($r('app.color.divider'))
+          this.DetailRow($r('app.string.viewer_detail_camera'), this.getCameraText())
+          Divider().color($r('app.color.divider'))
+          if (this.photoTrack !== null) {
+            Column({ space: 8 }) {
+              Row({ space: 16 }) {
+                Text($r('app.string.viewer_detail_location'))
+                  .fontSize(FontSize.Body)
+                  .fontColor($r('app.color.text_secondary'))
+                  .width(88)
+                  .flexShrink(0)
+                Text(this.detailLocationText())
+                  .fontSize(FontSize.Body)
+                  .fontColor($r('app.color.text_primary'))
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
+              .padding({ top: 12 })
+
+              Column() {
+                GpsTrackMap({
+                  track: this.photoTrack,
+                  showStats: false,
+                  onOpen: () => { this.openPhotoDayTrack(); }
+                })
+              }
+              .width('100%')
+              .height(160)
+              .borderRadius(Radius.Inner)
+              .clip(true)
+
+              Row({ space: 4 }) {
+                Text($r('app.string.viewer_detail_open_track'))
+                  .fontSize(FontSize.Caption)
+                  .fontColor($r('app.color.primary'))
+                SymbolGlyph($r('sys.symbol.chevron_right'))
+                  .fontSize(IconSize.Small)
+                  .fontColor([$r('app.color.primary')])
+              }
+              .width('100%')
+              .justifyContent(FlexAlign.End)
+              .padding({ bottom: 12 })
+              .onClick(() => { this.openPhotoDayTrack(); })
+            }
+            .width('100%')
+          } else {
+            this.DetailRow($r('app.string.viewer_detail_location'), this.detailLocationText())
+          }
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 24, right: 24, top: 8, bottom: 24 })
+    // 调试关闭材质时面板容器本身可能仍是半透明；给内容层补一块不透明底，
+    // 保证「文件名/位置」这些文字不会直接浮在照片上。开启材质时保持透明。
+    .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
+    // 兜底底色是铺满的，给顶部两角圆回来，跟系统半模态的圆角一致
+    .borderRadius(GlassEffect.isEnabled() ? 0 : { topLeft: Radius.Card, topRight: Radius.Card })
+  }
+
+  private getCurrentFilename(): string {
+    const p = this.currentPhoto();
+    return p !== null ? p.filename : '';
+  }
+
+  private getCurrentSizeText(): string {
+    const p = this.currentPhoto();
+    return p !== null && p.size > 0 ? formatFileSize(p.size) : '';
+  }
+
+  private getCameraText(): string {
+    return this.svc.cameraName !== '' ? this.svc.cameraName : this.svc.cameraIdentity;
   }
 
   // ========== 一镜到底转场 ==========
@@ -1810,7 +2584,20 @@ export struct PhotoViewerScreen {
       return;
     }
     this.transitionActive = false;
-    this.scheduleFullResLoad();
+    const handle = this.currentHandle();
+    if (handle < 0) {
+      return;
+    }
+    // 原图在转场期间就已经开始取（initFromParams）。
+    // 如果已经取到，这里直接交还位图；否则保留转圈状态，等下载/解码完成。
+    if (this.fullResMap.has(handle)) {
+      this.presentCached(handle);
+      this.preloadNeighbors();
+      return;
+    }
+    if (this.loadingHandle !== handle) {
+      this.loadFullRes(handle, true);
+    }
   }
 
   private currentMorphRect(): MorphRect {
@@ -1855,7 +2642,7 @@ export struct PhotoViewerScreen {
    * 放大/拖动过则按缩放快照换算，保证「放大后返回」也从当前画面收缩。
    */
   private currentDisplayRect(): MorphRect {
-    const base = MorphGeometry.containRect(this.currentAspect());
+    const base = MorphGeometry.containRect(this.currentAspect(), this.bottomChromeHeight());
     const s = this.curZoomScale;
     if (s <= 1.001) {
       return base;
@@ -1881,7 +2668,7 @@ export struct PhotoViewerScreen {
       return;
     }
     const ui = this.getUIContext();
-    const end: MorphRect = MorphGeometry.containRect(this.currentAspect());
+    const end: MorphRect = MorphGeometry.containRect(this.currentAspect(), this.bottomChromeHeight());
     this.startRectAnimation(this.currentMorphRect(), end, PUSH_MS, MORPH_CURVE, () => {
       // 与共享层同一帧换手：矩形比例已等于照片比例，Cover/Contain 完全重合
       this.morph.visible = false;
@@ -2071,10 +2858,17 @@ export struct PhotoViewerScreen {
    * 缩放卡顿的主要渲染成本，此时退化为稍深的半透明纯色，观感差别只在运动瞬间。
    */
   private chromeBg(): ResourceColor {
+    if (!GlassEffect.isEnabled()) {
+      // 关闭磨砂时用较深的纯色保证文字对比度（模拟器调试用）
+      return $r('app.color.viewer_chrome_motion');
+    }
     return this.chromeMotion ? $r('app.color.viewer_chrome_motion') : $r('app.color.viewer_chrome');
   }
 
   private chromeBlur(): BlurStyle {
+    if (!GlassEffect.isEnabled()) {
+      return BlurStyle.NONE;
+    }
     return this.chromeMotion ? BlurStyle.NONE : BlurStyle.COMPONENT_THICK;
   }
 
@@ -2111,7 +2905,6 @@ export struct PhotoViewerScreen {
         this.setChromeMotion(this._isDragging || this._inertiaAnim || this.pinchActive);
       },
       onPinchState: (active: boolean) => { this.setPinchActive(active); },
-      onOverlayToggle: () => { this._overlayVisible = !this._overlayVisible; },
       onTransform: (s: number, x: number, y: number) => {
         this.curZoomScale = s;
         this.curZoomX = x;
@@ -2128,6 +2921,7 @@ export struct PhotoViewerScreen {
       s: this.scaleArr[ri.item] ?? MIN_S,
       ox: this.offsetArr[ri.item] ?? 0,
       borderWeight: this.scaleArr[ri.item] >= MAX_S ? 1 : 0,
+      emphasized: this.scaleArr[ri.item] >= MAX_S,
       onCellClick: (): void => {
         if (!this.isPlaceholder(ri.item)) { this.onThumbClick(this.toReal(ri.item)); }
       }
@@ -2140,6 +2934,26 @@ export struct PhotoViewerScreen {
     return px > 0 ? px2vp(px) : 0;
   }
 
+  /** 缩略图条总高度（vp）：Swiper 高度 + 上下各 8vp 内边距。 */
+  private thumbStripHeight(): number {
+    return this._thumbItemW + 16;
+  }
+
+  /**
+   * 预览器底部控件占用的总高度（vp）。
+   *
+   * 从图片区域底边往上：缩略图条（item + 16）+ 8vp 间距 + 操作栏 56vp。
+   * `_thumbItemW` 是布局后才知道的，但它的值完全由窗口宽度、列数（最多 9）
+   * 与 2vp 的 ITEM_SPACE 决定，所以这里直接按公式算，保证图片区域、
+   * 一镜到底终点和实际布局三者同源。
+   */
+  private bottomChromeHeight(): number {
+    const count = this._displayCount > 0 ? this._displayCount : 9;
+    const widthVp = WindowUtils.windowWidthPx > 0 ? px2vp(WindowUtils.windowWidthPx) : 360;
+    const itemW = (widthVp - 32 - (count - 1) * ITEM_SPACE) / count;
+    return itemW + 16 + 8 + ControlHeight.Bar;
+  }
+
   /** 底部导航条高度（vp）。 */
   private bottomInsetVp(): number {
     const px = WindowUtils.navigationIndicatorHeightPx;
@@ -2149,16 +2963,15 @@ export struct PhotoViewerScreen {
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
-        // 转场背板：从画廊颜色压到纯黑（pop 时反向透出画廊）。
+        // 转场背板：从画廊颜色压到页面底色（深色为纯黑；pop 时反向透出画廊）。
         // 独立叶子组件，opacity 逐帧变化不会牵连本页 build()。
         MorphBackdrop({ alpha: this.morph.backdrop })
 
         // ===== Regular content (visible after the shared photo lands) =====
         Column() {
-          // ===== Custom Title Bar =====
-          if (this._overlayVisible) {
-            this.TitleBar()
-          }
+          // 标题栏已移到 NavDestination 的 .title()（见 build 尾部）：
+          // 只有标题栏 / 底部 TabBar 两个区域能拿到系统沉浸光感材质。
+          // 这里保留同高的顶部留白，图片区域与 PhotoMorph 的几何保持同一口径。
 
           // ===== Main + Thumb Swipers =====
           Stack() {
@@ -2180,6 +2993,9 @@ export struct PhotoViewerScreen {
               if (w > 0) { this._swiperWidth = w; }
             })
             .disableSwipe(this.isZoomed)
+            // 单击切控件 / 上滑开详情：挂在 Swiper 上，缩略图条与底部操作栏是它的兄弟节点，
+            // 点在它们上面的触摸不会冒泡到这里。
+            .onTouch((event: TouchEvent) => { this.onViewerTouch(event); })
             .onGestureSwipe((i: number, e: SwiperAnimationEvent) => { this.onMainGestureSwipe(i, e); })
             .onContentDidScroll((s: number, i: number, p: number) => { this.onMainContentDidScroll(s, i, p); })
             .onAnimationEnd((i: number) => { this.onMainAnimationEnd(i); })
@@ -2188,6 +3004,9 @@ export struct PhotoViewerScreen {
             .curve(Curve.Linear)
             .duration(SNAP_DURATION)
             .width('100%').height('100%')
+            // 底部让出缩略图条 + 操作栏：照片在剩余可见区域里居中，整体上移。
+            // 与 MorphGeometry.containRect(..., bottomChromeHeight()) 同一口径。
+            .padding({ bottom: this.bottomChromeHeight() })
             // 转场期间由共享照片层代表这张照片，落地后一次性交还
             .opacity(this.photoAlpha)
 
@@ -2227,22 +3046,64 @@ export struct PhotoViewerScreen {
               // the page, so the extra inset would be double-counted.
               .padding({ left: 16, right: 16, top: 8, bottom: 8 })
               .backgroundColor(this.chromeBg())
-              .backgroundBlurStyle(this.chromeBlur(), { colorMode: ThemeColorMode.DARK })
+              .backgroundBlurStyle(this.chromeBlur(), {
+                colorMode: this.isDark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT
+              })
               .opacity(this.chromeAlpha)
             }
             .width('100%').height('100%')
+            // 缩略图条常驻：不再跟随单击照片显隐，只跟随转场淡入
             .hitTestBehavior(HitTestMode.Transparent)
-            .visibility(this._overlayVisible ? Visibility.Visible : Visibility.Hidden)
-            .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
           }
           .width('100%').height('100%')
-          // 这里不能再铺纯黑：转场期间整页要透出下层画廊，
-          // 黑底由最底层的 MorphBackdrop 统一提供（它自己会渐入到纯黑）。
+          // 这里不能再铺不透明底色：转场期间整页要透出下层画廊，
+          // 页面背板由最底层的 MorphBackdrop 统一提供（它自己会渐入到页面底色）。
           .layoutWeight(1)
         }
         .width('100%').height('100%')
-        // 窗口是全屏布局，预览器自己要避让状态栏与导航条
-        .padding({ top: this.topInsetVp(), bottom: this.bottomInsetVp() })
+        // 窗口是全屏布局，预览器自己要避让状态栏、标题栏与导航条。
+        // 顶部 = 状态栏 + 标题栏，和 PhotoMorph.imageAreaTop() 同一口径。
+        .padding({
+          top: this.topInsetVp() + VIEWER_TITLE_BAR_HEIGHT,
+          bottom: this.bottomInsetVp()
+        })
+
+        // ===== 底部操作栏（浮层） =====
+        // 用一个高度只有操作栏的 Tabs 提供系统材质背板；TabContent 是空的，
+        // 照片区域仍然由上面的 Column 承担，手势不受影响。
+        Column() {
+          Tabs({ barPosition: BarPosition.End }) {
+            TabContent() {
+            }
+            .tabBar(this.ActionBar())
+          }
+          .width('100%')
+          .height(ACTION_BAR_OVERLAY_HEIGHT)
+          .scrollable(false)
+          // 调试关闭材质时给一层页面色底，否则操作栏图标没有承托
+          .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.viewer_chrome'))
+          // 官方悬浮页签：barOverlap + barPosition End + 横向 Tabs 三个条件同时满足，
+          // barFloatingStyle.systemMaterial 才会生效。
+          .barOverlap(true)
+          .barFloatingStyle({
+            barBottomMargin: 0,
+            maskColor: Color.Transparent,
+            systemMaterial: GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+              style: uiMaterial.ImmersiveStyle.REGULAR,
+              interactive: true,
+              materialColor: $r('app.color.viewer_material_tint')
+            }))
+          })
+        }
+        .width('100%').height('100%')
+        .justifyContent(FlexAlign.End)
+        // 操作栏在缩略图条上方：底部让出导航条 + 缩略图条高度 + 8vp 间距
+        .padding({ bottom: this.bottomInsetVp() + this.thumbStripHeight() + 8 })
+        // 与标题栏一起跟随单击淡出；缩略图条保持常驻
+        .opacity(this.chromeAlpha * this.overlayAlpha)
+        .visibility(this.chromeVisible ? Visibility.Visible : Visibility.Hidden)
+        // 自身不响应，只让操作栏里的按钮接收点击；其余区域的触摸照常落到照片上
+        .hitTestBehavior(HitTestMode.Transparent)
 
         // ===== 共享照片层（转场期间唯一可见的照片，最后绘制在最上层）=====
         if (this.morph.visible) {
@@ -2251,9 +3112,16 @@ export struct PhotoViewerScreen {
       }
       .width('100%').height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM])
+      // 上滑详情面板：半模态自带材质，和标题栏 / 底部操作栏同一套沉浸光感。
+      .bindSheet($$this.detailsOpen, this.DetailsSheet(), this.detailsSheetOptions())
     }
-    .hideTitleBar(true)
-    // 转场期间必须透明：下层画廊要靠它透出来；黑底由 MorphBackdrop 负责
+    .title({ builder: this.TitleBar, height: this.topInsetVp() + VIEWER_TITLE_BAR_HEIGHT }, {
+      barStyle: BarStyle.STACK,
+      // 背板不给材质（只给两颗按钮），避免整条大面积材质压住照片
+      systemMaterial: uiMaterial.Material.empty
+    })
+    .hideBackButton(true)
+    // 转场期间必须透明：下层画廊要靠它透出来；页面背板由 MorphBackdrop 负责
     .backgroundColor(Color.Transparent)
     .onReady((context: NavDestinationContext) => {
       this.pageInfos = context.pathStack;
@@ -2278,10 +3146,15 @@ export struct PhotoViewerScreen {
       // 目标格子不在可视区时，请画廊先把列表滚到那一行（官方图库也是先对齐网格）
       this.requestGalleryScroll = param['requestGalleryScroll'] as
         ((handle: number) => void) | undefined;
+      // 在预览器里保存照片后，请 MainScreen 刷新已下载集合（画廊绿点）
+      this.notifyDownloadSaved = param['onDownloadSaved'] as (() => void) | undefined;
       const posCacheStr = param['posCache'] as string | undefined;
       if (posCacheStr) {
         try { this.posCache = JSON.parse(posCacheStr) as Record<string, string>; } catch (_e) {}
       }
+
+      // 保存按钮的初始状态与画廊绿点同源
+      this.savedKeys = this.svc.getDownloadedKeys();
 
       // Initialize photo list and starting index
       this.initFromParams(handle, handles, startIndex);
@@ -2297,8 +3170,10 @@ export struct PhotoViewerScreen {
         this.photoAlpha = 0;
         this.chromeAlpha = 0;
       } else {
-        // 没有缩略图 / 没有位置：退化成「直接出现」，不做假动画
+        // 没有缩略图 / 没有位置：退化成「直接出现」，不做假动画。
+        // 背板必须一次性置为不透明，否则页面背景会透出下层画廊。
         this.morph.visible = false;
+        this.morph.backdrop = 1;
         this.photoAlpha = 1;
         this.chromeAlpha = 1;
       }

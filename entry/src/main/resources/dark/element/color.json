@@ -163,6 +163,30 @@
     {
       "name": "viewer_accent",
       "value": "#4C91FF"
+    },
+    {
+      "name": "viewer_scrim_top",
+      "value": "#A6000000"
+    },
+    {
+      "name": "viewer_scrim_clear",
+      "value": "#00000000"
+    },
+    {
+      "name": "viewer_material_tint",
+      "value": "#80000000"
+    },
+    {
+      "name": "viewer_backdrop",
+      "value": "#000000"
+    },
+    {
+      "name": "viewer_chrome_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "viewer_chrome_text_secondary",
+      "value": "#CCFFFFFF"
     }
   ]
 }

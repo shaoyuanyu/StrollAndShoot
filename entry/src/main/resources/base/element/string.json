@@ -453,6 +453,14 @@
       "value": "开启后到「相机」页点右上角的「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片"
     },
     {
+      "name": "settings_disable_glass",
+      "value": "关闭磨砂玻璃"
+    },
+    {
+      "name": "settings_disable_glass_desc",
+      "value": "模拟器 GPU 不支持磨砂着色器时打开：材质换成纯色、模糊归零，避免截图出现乱花的多边形"
+    },
+    {
       "name": "settings_log_count",
       "value": "%1$s"
     },
@@ -761,6 +769,26 @@
       "value": "走走拍拍"
     },
     {
+      "name": "viewer_saved_to_album",
+      "value": "已保存到系统相册"
+    },
+    {
+      "name": "viewer_already_saved",
+      "value": "已在系统相册中"
+    },
+    {
+      "name": "viewer_save_cancelled",
+      "value": "已取消保存"
+    },
+    {
+      "name": "viewer_save_failed",
+      "value": "保存失败，请重试"
+    },
+    {
+      "name": "viewer_save_scanning",
+      "value": "扫描完成后才能保存"
+    },
+    {
       "name": "download_title",
       "value": "下载"
     },
@@ -879,6 +907,102 @@
     {
       "name": "usb_camera_notice_text",
       "value": "「%1$s」已连接，点此打开应用导入照片"
+    },
+    {
+      "name": "viewer_details_title",
+      "value": "详细信息"
+    },
+    {
+      "name": "viewer_detail_filename",
+      "value": "文件名"
+    },
+    {
+      "name": "viewer_detail_capture",
+      "value": "拍摄时间"
+    },
+    {
+      "name": "viewer_detail_resolution",
+      "value": "尺寸"
+    },
+    {
+      "name": "viewer_detail_size",
+      "value": "文件大小"
+    },
+    {
+      "name": "viewer_detail_format",
+      "value": "格式"
+    },
+    {
+      "name": "viewer_detail_camera",
+      "value": "相机"
+    },
+    {
+      "name": "viewer_detail_location",
+      "value": "位置"
+    },
+    {
+      "name": "viewer_detail_no_location",
+      "value": "未记录位置"
+    },
+    {
+      "name": "viewer_detail_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "viewer_action_download",
+      "value": "下载"
+    },
+    {
+      "name": "viewer_action_saved",
+      "value": "已保存"
+    },
+    {
+      "name": "viewer_action_favorite",
+      "value": "收藏"
+    },
+    {
+      "name": "viewer_action_favorited",
+      "value": "已收藏"
+    },
+    {
+      "name": "viewer_action_share",
+      "value": "分享"
+    },
+    {
+      "name": "viewer_favorite_added",
+      "value": "已收藏"
+    },
+    {
+      "name": "viewer_favorite_removed",
+      "value": "已取消收藏"
+    },
+    {
+      "name": "viewer_share_preparing",
+      "value": "正在准备分享…"
+    },
+    {
+      "name": "viewer_share_no_image",
+      "value": "原图还在加载，请稍后再试"
+    },
+    {
+      "name": "viewer_share_failed",
+      "value": "分享失败，请重试"
+    },
+    {
+      "name": "viewer_detail_open_track",
+      "value": "查看当天轨迹"
+    },
+    {
+      "name": "viewer_share_original",
+      "value": "原图"
+    },
+    {
+      "name": "viewer_share_original_failed",
+      "value": "原图获取失败，请重试"
+    },
+    {
+      "name": "viewer_share_scanning",
+      "value": "扫描完成后才能获取原图"
     }
   ]
 }
