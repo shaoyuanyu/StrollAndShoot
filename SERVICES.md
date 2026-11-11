@@ -334,19 +334,99 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以�
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
 
-**BLE 第一阶段：扫描与 GATT 枚举（1.34.0）**
+**BLE：扫描、GATT 与两段式首配（1.38.x）**
 
-`services/BleScanner.ets` 只做「发现 + 连上 + 列服务」，配对算法还没接：
+`services/BleScanner.ets` 负责扫描、GATT 连接与配对；`services/NikonPairing.ets`
+是四步握手的编解码，`services/NikonBlowfish.ets` 是定键 CBC-MAC。
 
-- `BleScanner` 用 `ble.startBLEScan([], ...)` 空过滤扫描，收到结果后按**广播名**筛（`Z50_2_8079350`、`Z_f_8014411` 这类以 `Z` 开头、含下划线的名字）。不能只按服务 UUID 过滤：相机在等待配对时广播里不带 `0x0399`，按服务过滤会一个都扫不到（ZPill 实测）。
-- `BleCameraLink` 用 `ble.createGattClientDevice` 连接，`getServices()` 列出服务/特征，用来确认服务是 `de00` 族。
+*扫描*
+
+- `BleScanner` 用 `ble.startBLEScan([{}, ...])` 空过滤扫描（传空数组会被拒：
+  `401 Invalid parameter`），收到结果后按**广播名**筛（`Z50_2_8079350`、
+  `Z_f_8014411` 这类以 `Z` 开头、含下划线的名字）。不能只按服务 UUID 过滤：
+  相机在等待配对时广播里不带 `0x0399`，按服务过滤会一个都扫不到（ZPill 实测）。
+- 相机每轮广播都会换随机地址（RPA），所以**不能把上一次的地址当稳定标识**，
+  重连失败要重扫。
+
+*四步握手（0x2000）*
+
+帧固定 17 字节小端：`stage(u8) + timestamp(u64 LE) + device(u32 LE) + nonce(u32 LE)`。
+**ArkTS 的 `number` 只有 53 位**，u64 时间戳必须拆成 `tsLo`/`tsHi` 两个 u32。
+
+- stage1 的 `device` 低位字节必须是 `0x01`
+- stage2 用 8 组固定 salt 逐一试 `hash(salt ‖ camLo ‖ camHi ‖ ourLo ‖ ourHi)`，
+  命中后块序反过来算 stage3
+- stage4 字节 9–16 是相机序列号 ASCII（NUL 截止）
+
+*两段式首配（鸿蒙特有，2026-11-11 真机打通）*
+
+这是整条 BLE 链路最容易走错的地方，**只做四步握手永远配不上**：相机侧会一直停在
+「开始配对」页、`已配对设备` 为空，但 App 这边每一步都「成功」。完整剧本：
+
+1. **段 1**（BLE 上）：四步握手 → 写 `0x2002` 控制器名（32B ASCII 零填充）
+   → 写 `0x2005 = 0x01` 唤起相机无线
+2. **断开 BLE**，等 3 秒让位窗
+3. **经典蓝牙绑定**：`startBluetoothDiscovery` → 按名字（下划线归一后互含）或
+   序列号匹配相机 → `pairDevice(经典地址)` → 等 `BOND_STATE_BONDED`
+4. **重连 GATT**，**用同一份 device/nonce 复用握手**
+5. 成功后把身份落盘
+
+第 3 步的关键是**必须用经典蓝牙发现出来的地址**。直接拿 BLE 的 `deviceId`
+调 `pairDevice` 会一直停在 `BOND_STATE_BONDING` 直到超时（本项目实测两次 12 秒
+超时）。而且**必须先断开 BLE 再做发现**——相机要等 BLE 链路释放才在配对态暴露
+经典蓝牙。
+
+第 2 步的让位窗不能省：ZPill 记录过「零缓冲直发配对把相机射频楔死，杀应用才解」。
+
+*身份持久化与复用（必须做，否则只能配一次）*
+
+相机**只认 stage1 里那份 device/nonce**。之后每次连接再发全新 stage1，相机会直接
+回 `write 2900099: Remote device has an error` 秒拒。
+
+`services/BleIdentityStore.ets`（`PersistenceV2.globalConnect`）落盘
+`deviceId / cameraName / identityDevice / identityNonce / serial`。`pair()` 的分支：
+
+- `store.hasIdentity()` 为真 → 直接复用握手，不碰相机配对页
+- 否则走两段式首配
+
+段 2 复用握手失败时**不落盘**身份，避免下次拿一份相机不认的身份去复用。
+
+*容易踩的三个坑*
+
+- **回链后必须先拉服务表**：`bond` 之后 GATT 服务缓存是空的，不先 `getServices()`
+  就订阅特征会报 `401 Invalid parameter`（本项目段 2 第一次就这么断的）。
+  `handshake()` 开头的 `ensureServices()` 负责这件事。
+- **读特征之间要留间隔**：连续 8 个 `readCharacteristicValue` 打出去会全部撞上
+  `2900099`（官方对该错误码的解释之一就是「前一个非监听类 BLE 接口没回调完」）。
+  现在每次读之间隔 150ms，失败退避重试 3 次。
+- **`0x2008` 不是配对成功的标志**。ZPill 定案：它是 2B 位域
+  `(Connection<<8)|(Location<<4)|Time`，`01 00` 是相机在「要时间」；而且相机是
+  收到 `0x2002` 控制器名**之后**才发它。等它再写名字会双方互等到超时。
+  另外配对事务内不要写 `0x2008`，会搅坏注册。
+
+*特征速查*
+
+| 特征 | 用途 |
+|---|---|
+| `0x2000` | 配对认证（indicate，17B 握手帧） |
+| `0x2002` | 控制器名（写 32B ASCII 零填充） |
+| `0x2004` | 相机 Wi-Fi 凭据（只读，102B；flag `0x03` = WiFi+蓝牙块齐全） |
+| `0x2005` | 连接建立（写 1B，`0x01` 唤起相机无线，`0x80` 关闭） |
+| `0x2006` | 校时（10B，兼 45s 保活心跳） |
+| `0x2007` | 位置（41B） |
+| `0x2008` | LSS 控制点（2B 位域，相机 notify 请求，ready 后才应答） |
+| `0x2a19` | 电池（`de00` 服务下的 SIG 采纳特征） |
+
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
-- 阶段目标：确认 BLE 广播可见、GATT 结构正确；下一步才做 Blowfish 四步配对（`0x2000`）与 `0x2006`/`0x2007` 保活定位。
+- 相机 2 分钟没有 BLE 流量会断链，45 秒一拍留足余量。
+- 配对完成后**先等 2.5 秒**再写 `0x2006`（ZPill 的 writeGate）：相机刚收口时注入
+  会话还没醒，立刻写会被拒甚至被踢链。
 
 **当前边界（重要）**
 
 - 只支持 STA/热点这种「手机与相机同网」的路径；AP 模式（手机连相机热点）没做。
-- /24 网段扫描兜底、BLE 配对与保活还没接。
+- BLE 首配与复用握手已打通（1.38.1 真机验证）；BLE 侧的 `0x2004` 解密取
+  SSID/密码还没做（现在只读到 102B 密文）。
 - 连接失败的第一嫌疑仍是「相机不在『连接向导』页」——显示 IP/掩码的页面 15740 没开。
 - `GetStorageIDs` 被拒时返回 `0xFFFFFFFF` 哨兵，由 `GetObjectHandles` 按「所有存储」枚举——这是 SnapBridge 会话的已知行为。
 - 部分机型对同一台相机只保留一个 PTP/IP initiator；另一个设备的 `Init` 会踢掉前一个会话，甚至把相机踢出配对模式。调试时不要并发探测。
