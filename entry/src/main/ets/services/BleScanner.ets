@@ -18,6 +18,8 @@ export const NIKON_BLE_SERVICE_ALT = '0000de01-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_CHAR_PAIRING = '00002000-3dd4-4255-8d62-6dc7b9bd5561';
 /** 标准 CCCD：开通知/指示必须带上它，否则 setCharacteristicChangeIndication 报 401。 */
 const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
+/** 控制器名（32B ASCII 零填充，配对收口用）。 */
+export const NIKON_CHAR_NAME = '00002002-3dd4-4255-8d62-6dc7b9bd5561';
 /** 校时（10B，兼保活心跳）。 */
 export const NIKON_CHAR_TIME = '00002006-3dd4-4255-8d62-6dc7b9bd5561';
 /** 位置（41B）。 */
@@ -466,7 +468,17 @@ export class BleCameraLink {
     const stage4raw = await stage4Promise;
     const stage4 = decodePairingMessage(stage4raw);
     const serial = pairing.extractSerial(stage4);
-    this.onLog(`配对完成: 相机序列号 ${serial}`);
+    this.onLog(`配对: stage4 序列号 ${serial}`);
+
+    // 名字先行：相机收下 0x2002 控制器名后，相机侧配对才算完成。
+    // 顺序反了（先等 0x2008）会双方互等到超时——ZPill 在 Zf 上实测。
+    const name = 'StrollAndShoot';
+    const namePayload = new Uint8Array(32);
+    for (let i = 0; i < name.length && i < 32; i++) {
+      namePayload[i] = name.charCodeAt(i) & 0xFF;
+    }
+    await this.writeCharacteristic(NIKON_CHAR_NAME, namePayload);
+    this.onLog('配对完成: 0x2002 控制器名已写，相机侧配对完成');
     return serial;
   }
 
