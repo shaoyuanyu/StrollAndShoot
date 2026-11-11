@@ -394,6 +394,43 @@ export class BleCameraLink {
     });
   }
 
+  /**
+   * 读一遍所有带 read 权限的特征（除 0x2000 / 0x2008）。
+   *
+   * ZPill 在 HarmonyOS 上的实证：相机要靠「访问加密读权限的特征」才会
+   * 真正收口配对，只做四步握手 + 0x2002 时相机仍停在等待页。这里照它的
+   * 做法全表读一遍，失败不阻断握手。
+   */
+  async readAllReadable(): Promise<number> {
+    const gatt = this.gatt;
+    if (gatt === null) return 0;
+    let count = 0;
+    try {
+      const services = await gatt.getServices();
+      for (const service of services) {
+        const chars = service.characteristics ?? [];
+        for (const ch of chars) {
+          const uuid = (ch.characteristicUuid ?? '').toLowerCase();
+          if (uuid === NIKON_CHAR_PAIRING || uuid === NIKON_CHAR_CONTROL) continue;
+          // GATT 标准 read 位 = 0x02
+          const props = Number(ch.properties ?? 0);
+          if ((props & 0x02) === 0) continue;
+          try {
+            const value = await this.readCharacteristic(uuid);
+            count++;
+            this.onLog(`读特征 ${uuid.slice(4, 8)} → ${value === null ? 'null' : value.length + 'B'}`);
+          } catch (_e) {
+            // 单个特征读失败不影响握手
+          }
+        }
+      }
+    } catch (err) {
+      this.onLog(`全表读取失败: ${(err as Error).message}`);
+    }
+    this.onLog(`全表读取完成: ${count} 个特征`);
+    return count;
+  }
+
   /** 写一次相机时钟（0x2006）。 */
   async writeTime(offsetMinutes: number): Promise<void> {
     const payload = BleTimePayload.build(new Date(), offsetMinutes);
@@ -546,6 +583,8 @@ export class BleCameraLink {
     } catch (_e) {
       this.onLog('配对: 唤醒 poke 未回，继续握手');
     }
+    // 全表读一遍可读特征：相机要靠「访问加密读权限的特征」收口配对。
+    await this.readAllReadable();
     const stage1 = pairing.createStage1();
     this.onLog('配对: 开启 0x2000 indicate');
     await this.enableIndication(NIKON_CHAR_PAIRING);
