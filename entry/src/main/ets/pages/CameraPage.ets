@@ -732,7 +732,7 @@ export struct CameraPage {
    * 3. **型号名只用 15fp 次级色**。页首已经有 28fp 的「相机」大标题，立牌下面
    *    再来一个大字会打架；这里的型号只负责「这是哪台」，不负责强调。
    *
-   * 断开时**只有图片**降到 55%（`CameraModelStore` 记着上次的机型），型号名
+   * 断开时**只有图片**降到 70%（`CameraModelStore` 记着上次的机型），型号名
    * 保持原样：文字变暗就读不出来，而它正是「记住的是哪台」。
    */
   @Builder
@@ -746,7 +746,7 @@ export struct CameraPage {
           .interpolation(ImageInterpolation.High)
           .draggable(false)
           // 只有图片变暗：型号名是文字，变暗会读不出来，而它正是「记住的是哪台」
-          .opacity(this.svc.connected ? 1 : 0.55)
+          .opacity(this.svc.connected ? 1 : 0.7)
           .animation({ duration: 260, curve: Curve.EaseOut })
         Text(cameraStandeeLabel(this.svc.cameraModel))
           .fontSize(FontSize.Body)

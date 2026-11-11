@@ -1963,18 +1963,23 @@ export class CameraService {
   }
 
   /**
-   * 连接后拿到 `cameraName` 就认一次机型。
+   * 认机型：PTP 的 `cameraName` 优先，没有就退回 BLE 广播名。
    *
-   * 断开时 `cameraName` 会被清成 `''`，这里刻意不在那种情况下清 `cameraModel`：
+   * 两者格式不同但都带型号：PTP 是 `Z50_2`，BLE 是 `Z50_2_8079350`
+   * （`<型号>_<序号>`），归一化后都是 `Z502…`，同一个 needle 就能命中。
+   * 只有蓝牙在连、还没走 PTP 时也能立刻把立牌摆出来。
+   *
+   * 断开时两个字段都会被清成 `''`，这里刻意不在那种情况下清 `cameraModel`：
    * 立牌要留着（变暗），否则每次断开页面都要塌一块。
    */
-  @Monitor('cameraName')
-  onCameraNameChanged(): void {
-    const key = cameraStandeeKey(this.cameraName);
+  @Monitor('cameraName', 'bleCameraName')
+  onCameraIdentified(): void {
+    const raw = this.cameraName !== '' ? this.cameraName : this.bleCameraName;
+    const key = cameraStandeeKey(raw);
     if (key === '' || key === this.cameraModel) return;
     this.cameraModel = key;
     CameraModelStore.getInstance().set(key);
-    this.log.add(`相机立牌: ${this.cameraName} → ${key}`);
+    this.log.add(`相机立牌: ${raw} → ${key}`);
   }
 
   /** 启动时把落盘的模式读回来。 */
