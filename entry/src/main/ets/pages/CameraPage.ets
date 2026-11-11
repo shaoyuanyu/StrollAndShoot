@@ -841,6 +841,11 @@ export struct CameraPage {
     }
     .width('100%')
     .height(REFLECTION_HEIGHT)
+    // 渐变遮罩的收尾色必须与「这块下面的背板」完全同色，否则会把背板涂出一块
+    // 带硬边的矩形（1.44.1 立牌有白色背板、遮罩却涂 bg_page，浅色下就是一块
+    // 灰斑，而且只出现在倒影区域）。这里显式铺一层 bg_page 把背板固定住，
+    // 让遮罩和背板由构造保证同色。
+    .backgroundColor($r('app.color.bg_page'))
     .clip(true)
   }
 
