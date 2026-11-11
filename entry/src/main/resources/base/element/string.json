@@ -106,7 +106,7 @@
     },
     {
       "name": "camera_status_wifi_connect_failed",
-            "value": "无法连接 %1$s。请确认相机停在「连接向导」页面（显示照相机名称），且手机与相机在同一网络。"
+      "value": "无法连接 %1$s。请确认相机停在「连接向导」页面（显示照相机名称），且手机与相机在同一网络。"
     },
     {
       "name": "camera_status_wifi_disconnected",
@@ -118,7 +118,7 @@
     },
     {
       "name": "camera_wifi_hint",
-            "value": "相机操作：网络菜单 → 连接至智能设备 → Wi-Fi 连接(STA Mode)，选好 profile，直到出现「连接向导」页面（显示 Z50_2_xxxx）。显示 IP/掩码的页面还不能连。"
+      "value": "相机操作：网络菜单 → 连接至智能设备 → Wi-Fi 连接(STA Mode)，选好 profile，直到出现「连接向导」页面（显示 Z50_2_xxxx）。显示 IP/掩码的页面还不能连。"
     },
     {
       "name": "camera_wifi_host_placeholder",
@@ -134,11 +134,11 @@
     },
     {
       "name": "camera_ble_title",
-      "value": "蓝牙（实验）"
+      "value": "蓝牙连接"
     },
     {
       "name": "camera_ble_hint",
-      "value": "蓝牙用于配对、校时与定位；照片仍走 Wi-Fi。"
+      "value": "蓝牙负责配对、校时与定位；照片仍走 Wi-Fi。相机会休眠，链路断开后自动重连。"
     },
     {
       "name": "camera_ble_scan",
@@ -154,18 +154,24 @@
     },
     {
       "name": "camera_ble_paired",
-      "value": "配对成功 · 序列号 %1$s"
+      "value": "已配对 · 序列号 %1$s"
+    },
+    {
+      "name": "camera_ble_reconnecting",
+      "value": "重连中…"
+    },
+    {
+      "name": "camera_ble_connected_name",
+      "value": "已连接 · %1$s"
     },
     {
       "name": "camera_ble_pair_failed",
       "value": "配对失败"
     },
-
     {
       "name": "camera_ble_disconnect",
       "value": "断开蓝牙"
     },
-
     {
       "name": "camera_ble_services",
       "value": "已连接，枚举到 %1$d 行 GATT 服务"
@@ -182,12 +188,10 @@
       "name": "bluetooth_permission_reason",
       "value": "用于搜索并连接相机的蓝牙服务"
     },
-
     {
       "name": "camera_wifi_scanning",
       "value": "正在搜索附近的相机..."
     },
-
     {
       "name": "camera_wifi_disconnect",
       "value": "断开无线"
@@ -214,12 +218,13 @@
     },
     {
       "name": "camera_wifi_pairing_hint",
-            "value": "点「完成配对」后相机会保存这台手机并重启 Wi-Fi，app 会自动重连，不需要再点一次。若相机上显示同一组数字，可顺便核对。"
+      "value": "点「完成配对」后相机会保存这台手机并重启 Wi-Fi，app 会自动重连，不需要再点一次。若相机上显示同一组数字，可顺便核对。"
     },
     {
       "name": "camera_wifi_pairing_confirm",
       "value": "完成配对"
-    },    {
+    },
+    {
       "name": "camera_status_wifi_pairing_timeout",
       "value": "配对已确认，但 %1$s 没有恢复响应。请确认相机已回到「连接向导」页面（显示照相机名称）后再试。"
     },
@@ -227,9 +232,6 @@
       "name": "camera_status_wifi_reconnecting",
       "value": "正在重连相机（第 %1$d 次）..."
     },
-
-
-
     {
       "name": "camera_status_choose_cache",
       "value": "请选择缓存设置..."

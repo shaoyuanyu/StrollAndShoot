@@ -106,7 +106,7 @@
     },
     {
       "name": "camera_status_wifi_connect_failed",
-            "value": "Cannot reach %1$s. Make sure the camera is on the connection guide screen (showing its name) and both devices share a network."
+      "value": "Cannot reach %1$s. Make sure the camera is on the connection guide screen (showing its name) and both devices share a network."
     },
     {
       "name": "camera_status_wifi_disconnected",
@@ -118,7 +118,7 @@
     },
     {
       "name": "camera_wifi_hint",
-            "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode), pick the profile, and stop on the connection guide screen (showing Z50_2_xxxx). The IP/subnet screen is not ready yet."
+      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode), pick the profile, and stop on the connection guide screen (showing Z50_2_xxxx). The IP/subnet screen is not ready yet."
     },
     {
       "name": "camera_wifi_host_placeholder",
@@ -134,11 +134,11 @@
     },
     {
       "name": "camera_ble_title",
-      "value": "Bluetooth (experimental)"
+      "value": "Bluetooth"
     },
     {
       "name": "camera_ble_hint",
-      "value": "Bluetooth is used for pairing, clock sync and location; photos still go over Wi-Fi."
+      "value": "Bluetooth handles pairing, clock sync and location; photos still go over Wi-Fi. The camera sleeps, so the link reconnects automatically."
     },
     {
       "name": "camera_ble_scan",
@@ -157,15 +157,21 @@
       "value": "Paired · serial %1$s"
     },
     {
+      "name": "camera_ble_reconnecting",
+      "value": "Reconnecting…"
+    },
+    {
+      "name": "camera_ble_connected_name",
+      "value": "Connected · %1$s"
+    },
+    {
       "name": "camera_ble_pair_failed",
       "value": "Pairing failed"
     },
-
     {
       "name": "camera_ble_disconnect",
       "value": "Disconnect Bluetooth"
     },
-
     {
       "name": "camera_ble_services",
       "value": "Connected, %1$d GATT service lines"
@@ -182,12 +188,10 @@
       "name": "bluetooth_permission_reason",
       "value": "Used to find and connect to the camera over Bluetooth"
     },
-
     {
       "name": "camera_wifi_scanning",
       "value": "Searching for nearby cameras…"
     },
-
     {
       "name": "camera_wifi_disconnect",
       "value": "Disconnect Wi-Fi"
@@ -214,12 +218,13 @@
     },
     {
       "name": "camera_wifi_pairing_hint",
-            "value": "After you tap Complete Pairing the camera saves this phone and restarts Wi-Fi; the app reconnects automatically, no second tap needed. If the camera shows the same digits, feel free to check them."
+      "value": "After you tap Complete Pairing the camera saves this phone and restarts Wi-Fi; the app reconnects automatically, no second tap needed. If the camera shows the same digits, feel free to check them."
     },
     {
       "name": "camera_wifi_pairing_confirm",
       "value": "Complete Pairing"
-    },    {
+    },
+    {
       "name": "camera_status_wifi_pairing_timeout",
       "value": "Pairing was confirmed, but %1$s did not come back. Put the camera back on the connection guide screen (the one showing the camera name) and try again."
     },
@@ -227,9 +232,6 @@
       "name": "camera_status_wifi_reconnecting",
       "value": "Reconnecting to camera (attempt %1$d)…"
     },
-
-
-
     {
       "name": "camera_status_choose_cache",
       "value": "Choose a cache setting…"

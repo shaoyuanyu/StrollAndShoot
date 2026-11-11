@@ -188,6 +188,8 @@ export class BleCameraLink {
   private readonly backoffMs: number[] = [2000, 3000, 5000, 8000, 12000, 20000, 30000];
   /** 重连成功后的回调（上层用它恢复校时与保活）。 */
   onReconnected: (serial: string) => void = (_s: string) => {};
+  /** 重连状态变化（true = 正在重连），上层用它驱动 UI 文案。 */
+  onReconnecting: (reconnecting: boolean) => void = (_v: boolean) => {};
 
   constructor(onLog: (msg: string) => void,
               onState: (connected: boolean) => void = (_c: boolean) => {}) {
@@ -1017,6 +1019,7 @@ export class BleCameraLink {
   disableAutoReconnect(): void {
     this.autoReconnect = false;
     this.reconnecting = false;
+    this.onReconnecting(false);
     if (this.reconnectTimer >= 0) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = -1;
@@ -1029,6 +1032,7 @@ export class BleCameraLink {
     const delay = this.backoffMs[Math.min(this.backoffIndex, this.backoffMs.length - 1)];
     this.backoffIndex++;
     this.onLog(`${Math.round(delay / 1000)} 秒后自动重连（第 ${this.backoffIndex} 次）`);
+    this.onReconnecting(true);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = -1;
       void this.tryAutoReconnect();
@@ -1068,6 +1072,7 @@ export class BleCameraLink {
       this.paired = true;
       this.backoffIndex = 0;
       this.onLog(`BLE 自动重连成功（序列号 ${serial}）`);
+      this.onReconnecting(false);
       this.onReconnected(serial);
     } catch (err) {
       this.onLog(`BLE 自动重连失败: ${(err as Error).message}`);

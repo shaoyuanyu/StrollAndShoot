@@ -106,7 +106,7 @@
     },
     {
       "name": "camera_status_wifi_connect_failed",
-            "value": "無法連線 %1$s。請確認相機停在「連線精靈」頁面（顯示相機名稱），且手機與相機在同一網路。"
+      "value": "無法連線 %1$s。請確認相機停在「連線精靈」頁面（顯示相機名稱），且手機與相機在同一網路。"
     },
     {
       "name": "camera_status_wifi_disconnected",
@@ -118,7 +118,7 @@
     },
     {
       "name": "camera_wifi_hint",
-            "value": "相機操作：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線(STA Mode)，選好 profile，直到出現「連線精靈」頁面（顯示 Z50_2_xxxx）。顯示 IP/遮罩的頁面還不能連。"
+      "value": "相機操作：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線(STA Mode)，選好 profile，直到出現「連線精靈」頁面（顯示 Z50_2_xxxx）。顯示 IP/遮罩的頁面還不能連。"
     },
     {
       "name": "camera_wifi_host_placeholder",
@@ -134,11 +134,11 @@
     },
     {
       "name": "camera_ble_title",
-      "value": "藍牙（實驗）"
+      "value": "藍牙連線"
     },
     {
       "name": "camera_ble_hint",
-      "value": "藍牙用於配對、校時與定位；照片仍走 Wi-Fi。"
+      "value": "藍牙負責配對、校時與定位；照片仍走 Wi-Fi。相機會休眠，連線中斷後自動重連。"
     },
     {
       "name": "camera_ble_scan",
@@ -154,18 +154,24 @@
     },
     {
       "name": "camera_ble_paired",
-      "value": "配對成功 · 序號 %1$s"
+      "value": "已配對 · 序號 %1$s"
+    },
+    {
+      "name": "camera_ble_reconnecting",
+      "value": "重新連線中…"
+    },
+    {
+      "name": "camera_ble_connected_name",
+      "value": "已連線 · %1$s"
     },
     {
       "name": "camera_ble_pair_failed",
       "value": "配對失敗"
     },
-
     {
       "name": "camera_ble_disconnect",
       "value": "中斷藍牙"
     },
-
     {
       "name": "camera_ble_services",
       "value": "已連線，列舉到 %1$d 行 GATT 服務"
@@ -182,12 +188,10 @@
       "name": "bluetooth_permission_reason",
       "value": "用於搜尋並連接相機的藍牙服務"
     },
-
     {
       "name": "camera_wifi_scanning",
       "value": "正在搜尋附近的相機..."
     },
-
     {
       "name": "camera_wifi_disconnect",
       "value": "中斷無線"
@@ -214,12 +218,13 @@
     },
     {
       "name": "camera_wifi_pairing_hint",
-            "value": "點「完成配對」後相機會儲存這台手機並重新啟動 Wi-Fi，app 會自動重新連線，不需要再點一次。若相機上顯示同一組數字，可順便核對。"
+      "value": "點「完成配對」後相機會儲存這台手機並重新啟動 Wi-Fi，app 會自動重新連線，不需要再點一次。若相機上顯示同一組數字，可順便核對。"
     },
     {
       "name": "camera_wifi_pairing_confirm",
       "value": "完成配對"
-    },    {
+    },
+    {
       "name": "camera_status_wifi_pairing_timeout",
       "value": "配對已確認，但 %1$s 沒有恢復回應。請確認相機已回到「連線精靈」頁面（顯示相機名稱）後再試。"
     },
@@ -227,9 +232,6 @@
       "name": "camera_status_wifi_reconnecting",
       "value": "正在重新連線相機（第 %1$d 次）..."
     },
-
-
-
     {
       "name": "camera_status_choose_cache",
       "value": "請選擇快取設定…"

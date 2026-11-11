@@ -186,6 +186,10 @@ export class CameraService {
   @Trace bleServices: string[] = [];
   /** 配对成功后相机回报的序列号；空串表示未配对。 */
   @Trace bleSerial: string = '';
+  /** 已配对相机的广播名（UI 展示用，比序列号好认）。 */
+  @Trace bleCameraName: string = '';
+  /** 断链后正在自动重连（相机会休眠，链路断了自己爬起来）。 */
+  @Trace bleReconnecting: boolean = false;
   private bleScanner: BleScanner | null = null;
   private bleLink: BleCameraLink | null = null;
   private bleScanTimer: number = -1;
@@ -1605,6 +1609,7 @@ export class CameraService {
             }
           });
       }
+      this.bleCameraName = deviceName;
       const ok = await this.bleLink.connect(deviceId);
       if (!ok) {
         this.bleServices = [];
@@ -1632,8 +1637,12 @@ export class CameraService {
       this.bleLink.onReconnected = (serial: string) => {
         this.bleSerial = serial;
         this.bleConnected = true;
+        this.bleReconnecting = false;
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
+      };
+      this.bleLink.onReconnecting = (reconnecting: boolean) => {
+        this.bleReconnecting = reconnecting;
       };
       this.bleLink.enableAutoReconnect();
       // 配对成功后才允许写 0x2006/0x2007：先校时，再按 45s 保活（顺带持续校时）。
@@ -1732,6 +1741,7 @@ export class CameraService {
       await this.bleLink.disconnect();
     }
     this.bleConnected = false;
+    this.bleReconnecting = false;
     this.bleServices = [];
     this.bleSerial = '';
   }

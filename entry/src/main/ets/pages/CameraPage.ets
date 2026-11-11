@@ -374,10 +374,15 @@ export struct CameraPage {
   }
 
   /**
-   * 蓝牙（实验）卡。
+   * 蓝牙卡。
    *
-   * 第一阶段只做「扫描 + 连上 + 枚举 GATT 服务」，用来确认相机 BLE 广播可见、
-   * 服务是 de00 族。配对（Blowfish 四步握手）与保活/校时/定位是后续步骤。
+   * 状态分四档，必须能看出链路是否还活着（相机休眠会自己断链，链路断开后
+   * 会按退避自动重连，用户要看得到这个过程）：
+   *
+   * - 连接中（bond + GATT 最长几十秒）
+   * - 重连中（断链后在退避重连）
+   * - 已连接（复用握手通过，校时与保活都在跑）
+   * - 已配对但未连接
    */
   @Builder
   BleCard() {
@@ -392,14 +397,20 @@ export struct CameraPage {
           Text($r('app.string.camera_ble_connecting'))
             .fontSize(FontSize.Caption)
             .fontColor($r('app.color.primary'))
-        } else if (this.svc.bleConnected) {
-          Text(this.svc.bleSerial !== ''
-            ? $r('app.string.camera_ble_paired', this.svc.bleSerial)
-            : $r('app.string.camera_ble_pair_failed'))
+        } else if (this.svc.bleReconnecting) {
+          Text($r('app.string.camera_ble_reconnecting'))
             .fontSize(FontSize.Caption)
-            .fontColor(this.svc.bleSerial !== ''
-              ? $r('app.color.status_connected')
-              : $r('app.color.status_error'))
+            .fontColor($r('app.color.status_error'))
+        } else if (this.svc.bleConnected && this.svc.bleSerial !== '') {
+          Text(this.svc.bleCameraName !== ''
+            ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
+            : $r('app.string.camera_ble_paired', this.svc.bleSerial))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.status_connected'))
+        } else if (this.svc.bleConnected) {
+          Text($r('app.string.camera_ble_pair_failed'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.status_error'))
         }
       }
       .width('100%')
@@ -422,7 +433,7 @@ export struct CameraPage {
           }
         })
 
-      if (this.svc.bleConnected) {
+      if (this.svc.bleConnected || this.svc.bleReconnecting) {
         Text($r('app.string.camera_ble_disconnect'))
           .fontSize(FontSize.Caption)
           .fontColor($r('app.color.button_danger'))
