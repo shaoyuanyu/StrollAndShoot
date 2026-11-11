@@ -187,6 +187,10 @@
     {
       "name": "viewer_chrome_text_secondary",
       "value": "#CCFFFFFF"
+    },
+    {
+      "name": "hero_glow",
+      "value": "#33FFFFFF"
     }
   ]
 }

@@ -24,6 +24,8 @@ import { WifiLinkStore } from './WifiLinkStore';
 import { WifiApJoiner, type ApJoinOutcome } from './WifiApJoiner';
 import { CameraLinkMode, DEFAULT_LINK_MODE, isWifiMode } from '../model/CameraLinkMode';
 import { CameraLinkModeStore } from '../model/CameraLinkModeStore';
+import { CameraModelStore } from '../model/CameraModelStore';
+import { cameraStandeeKey } from '../utils/CameraStandee';
 import { collectLocalNetworks, networkHint } from './LocalNetworks';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
@@ -248,6 +250,13 @@ export class CameraService {
    * 每种模式有自己的入口、引导与状态，所见即所得。
    */
   @Trace linkMode: number = DEFAULT_LINK_MODE;
+  /**
+   * 相机页顶部立牌用哪个型号（见 `utils/CameraStandee.ets`）。
+   *
+   * `''` 表示还没认出过机型——此时整个立牌区块不渲染。连接后又断开时保留上一次
+   * 的值，页面形状不跳（用户主动断开也一样，立牌只是变暗）。
+   */
+  @Trace cameraModel: string = '';
   /** Wi-Fi AP 模式下「加入相机热点」的执行者。 */
   private apJoiner: WifiApJoiner | null = null;
   /** 正在把相机切到 Wi-Fi AP 并连上（UI 用它显示分步进度）。 */
@@ -1943,6 +1952,29 @@ export class CameraService {
     } catch (_e) {
       // 拿不到网络信息不影响页面，后续搜索时会再试一次
     }
+  }
+
+  /** 启动时把上次认出的机型读回来，立牌先摆上再等连接。 */
+  initCameraModel(): void {
+    const saved = CameraModelStore.getInstance().key;
+    if (saved !== '') {
+      this.cameraModel = saved;
+    }
+  }
+
+  /**
+   * 连接后拿到 `cameraName` 就认一次机型。
+   *
+   * 断开时 `cameraName` 会被清成 `''`，这里刻意不在那种情况下清 `cameraModel`：
+   * 立牌要留着（变暗），否则每次断开页面都要塌一块。
+   */
+  @Monitor('cameraName')
+  onCameraNameChanged(): void {
+    const key = cameraStandeeKey(this.cameraName);
+    if (key === '' || key === this.cameraModel) return;
+    this.cameraModel = key;
+    CameraModelStore.getInstance().set(key);
+    this.log.add(`相机立牌: ${this.cameraName} → ${key}`);
   }
 
   /** 启动时把落盘的模式读回来。 */

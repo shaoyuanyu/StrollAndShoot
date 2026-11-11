@@ -101,6 +101,7 @@ export struct MainScreen {
     // USB 模式是明确的「走线」，此时不该再去占相机的蓝牙（BLE 与 Wi-Fi 互斥，
     // 蓝牙链路也会让相机以为有主机在连）。
     this.svc.initLinkMode();
+    this.svc.initCameraModel();
     if (this.svc.linkMode !== CameraLinkMode.USB) {
       setTimeout(() => { this.svc.autoConnectBle(); }, 800);
     }

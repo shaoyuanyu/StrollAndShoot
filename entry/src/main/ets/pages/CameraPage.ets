@@ -5,6 +5,9 @@ import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
+import { cameraStandeeLabel, cameraStandeeMedia } from '../utils/CameraStandee';
+/** 立牌统一高度（vp）：各机型宽高比不同，按高度对齐、宽度随比例。 */
+const STANDEE_HEIGHT = 178;
 
 /**
  * 相机页。
@@ -717,9 +720,54 @@ export struct CameraPage {
     .borderRadius(Radius.Card)
   }
 
+  /**
+   * 页首立牌：当前（或上次）连接的相机商品图。
+   *
+   * 「不违和」靠三件事：
+   * 1. **不套卡片**。商品图直接立在页面底色上，与标题栏的渐隐、底部悬浮页签
+   *    同属「浮在底色上」的一层，避免页面变成「卡片堆卡片」；
+   * 2. **深色下一层很淡的光池**（`hero_glow` + 径向渐变）。机身是黑的，没有光池
+   *    就糊进黑底；浅色模式这个 token 是**全透明**——白池在浅灰底上会画出一个
+   *    看得见边缘的光圈，反而违和，浅色靠图片自带的投影就够；
+   * 3. **型号名只用 15fp 次级色**。页首已经有 28fp 的「相机」大标题，立牌下面
+   *    再来一个大字会打架；这里的型号只负责「这是哪台」，不负责强调。
+   *
+   * 断开时**只有图片**降到 55%（`CameraModelStore` 记着上次的机型），型号名
+   * 保持原样：文字变暗就读不出来，而它正是「记住的是哪台」。
+   */
+  @Builder
+  StandeeHero() {
+    if (this.svc.cameraModel !== '') {
+      Column({ space: 8 }) {
+        Image(cameraStandeeMedia(this.svc.cameraModel))
+          .width('100%')
+          .height(STANDEE_HEIGHT)
+          .objectFit(ImageFit.Contain)
+          .interpolation(ImageInterpolation.High)
+          .draggable(false)
+          // 只有图片变暗：型号名是文字，变暗会读不出来，而它正是「记住的是哪台」
+          .opacity(this.svc.connected ? 1 : 0.55)
+          .animation({ duration: 260, curve: Curve.EaseOut })
+        Text(cameraStandeeLabel(this.svc.cameraModel))
+          .fontSize(FontSize.Body)
+          .fontWeight(FontWeight.Medium)
+          .letterSpacing(0.6)
+          .fontColor($r('app.color.text_secondary'))
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
+      .radialGradient({
+        center: ['50%', '46%'],
+        radius: 172,
+        colors: [[$r('app.color.hero_glow'), 0], ['#00000000', 1]]
+      })
+    }
+  }
+
   build() {
     Scroll(this.scroller) {
       Column({ space: 16 }) {
+        this.StandeeHero()
         this.ModePicker()
         this.ConnectionCard()
         if (this.svc.pairingRequired) {

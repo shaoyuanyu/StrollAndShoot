@@ -548,6 +548,14 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 说出来。以前每次开机都会红着一行「蓝牙连接相机失败」并弹一次 toast，相机不在
 手边时尤其像故障。
 
+*相机立牌用的机型 key*
+
+`CameraService.cameraModel` 只存一个 key（`z50ii` 这类，见
+`utils/CameraStandee.ets`），由 `@Monitor('cameraName')` 在拿到 PTP DeviceInfo
+后识别并落盘到 `CameraModelStore`（PersistenceV2，key `camera_model`）。
+断开时 `cameraName` 被清空，但这里不清 `cameraModel`：立牌要留着。
+`initCameraModel()` 在启动时把上次的 key 读回来。
+
 *切换链路模式要清场*
 
 `setLinkMode(mode)` 除了落盘，还会清空 `lastScanError` / `bleHint` / `wifiHint` /
