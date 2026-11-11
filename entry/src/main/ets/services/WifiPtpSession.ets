@@ -15,6 +15,8 @@ const OP_GET_OBJECT = 0x1009;
 const OP_GET_THUMB = 0x100A;
 const OP_GET_PARTIAL_OBJECT = 0x101B;
 const OP_GET_OBJECT_PROP_LIST = 0x9805;
+const OP_GET_PAIRING_CODE = 0x952B;
+const OP_COMPLETE_PAIRING = 0x935A;
 
 const RESPONSE_OK = 0x2001;
 const RESPONSE_SESSION_ALREADY_OPEN = 0x201E;
@@ -217,6 +219,51 @@ export class WifiPtpSession implements PtpTransport {
       throw new PtpError('GetObjectPropList', r.code);
     }
     return ptpParseObjectPropList(r.data);
+  }
+
+  /**
+   * 取配对验证码（Nikon 0x952B，data-in）。
+   *
+   * 数据集是 `count(u32 LE) + count 个字节`，每个字节的十进制值连起来就是
+   * 验证码（例：`05 00 07 07` → `"5077"`）。返回 null 表示相机不要求配对
+   * （已配对过、或本来就不启用），调用方应直接按已配对处理。
+   */
+  async getPairingCode(): Promise<string | null> {
+    if (!this.open) return null;
+    try {
+      const r = await this.exec(OP_GET_PAIRING_CODE, [], true, 'GetPtpIpPairingCode');
+      if (r.code !== RESPONSE_OK || !r.data || r.data.length < 4) {
+        return null;
+      }
+      const count = r.data[0] | (r.data[1] << 8) | (r.data[2] << 16) | (r.data[3] << 24);
+      if (count <= 0 || count > r.data.length - 4) return null;
+      let code = '';
+      for (let i = 0; i < count; i++) {
+        code += r.data[4 + i].toString(10);
+      }
+      this.log(`配对验证码: ${code}`);
+      return code;
+    } catch (err) {
+      this.log(`GetPtpIpPairingCode 失败: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * 确认配对（Nikon 0x935A，参数 0x2001）。
+   *
+   * 相机把本客户端的 16B GUID 记为已配对主机。Z50II 实测：相机在回响应之前
+   * 就收线，所以链路异常按「已完成」处理；只有明确的非 OK 拒答才算失败。
+   */
+  async completePairing(): Promise<boolean> {
+    if (!this.open) return false;
+    try {
+      const r = await this.exec(OP_COMPLETE_PAIRING, [0x2001], false, 'CompletePairing');
+      return r.code === RESPONSE_OK;
+    } catch (err) {
+      this.log(`CompletePairing 链路异常（按配对完成处理）: ${(err as Error).message}`);
+      return true;
+    }
   }
 
   async closeSessionAndPipe(_priority?: PtpPriority): Promise<void> {

@@ -722,12 +722,21 @@ export struct MainScreen {
             onScan: (quick: boolean) => { this.svc.scanForCamera(quick, !quick); },
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); },
             onConnectWifi: (host: string) => {
-              this.svc.connectWifi(host).then((ok: boolean) => {
-                if (ok) {
-                  // 连上就按一次快速扫描：缓存命中时秒出，首次会自动退化为全量。
+              this.svc.connectWifi(host).then(async (ok: boolean) => {
+                if (!ok) return;
+                if (this.svc.pairingRequired) {
+                  // 相机那边不显示验证码，核对没有意义；直接确认，用户不用再点。
+                  await this.svc.completeWifiPairing();
+                } else {
                   this.svc.scanForCamera(true, true);
                 }
               });
+            },
+            onCompletePairing: () => {
+              this.svc.completeWifiPairing();
+            },
+            onScanWifi: () => {
+              this.svc.scanWifiCameras();
             }
           })
         }

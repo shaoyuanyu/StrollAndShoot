@@ -303,10 +303,33 @@ USB 之外的第二条链路：相机与手机在同一网络时，走 TCP 15740
 
 `CameraService.connectWifi(host, port)` 建会话、取 `GetDeviceInfo`、算相机身份；之后 `scanForCamera()` 发现 `wireless === true` 就跳过 USB 枚举，直接复用会话进入既有的缓存/扫描/缩略图流水线。断开时 `disconnect()` 把 session 换回 USB 实现，避免下一次 USB 扫描把 USB 端点喂给 Wi-Fi 会话。
 
+**主机注册与自动重连（1.32.0）**
+
+相机在「连接向导」页等主机注册时，会先开 15740 让 app 连上，再等 `0x952B`（取验证码）与 `0x935A`（确认）——不确认就 10 秒后收线，且 Wi-Fi 配置不落盘。
+
+- `WifiPtpSession.getPairingCode()`：`0x952B` 的数据集是 `count(u32) + count 个字节`，每个字节的十进制值拼成验证码。
+- `WifiPtpSession.completePairing()`：`0x935A` 参数 `0x2001`。**Z50II 实测相机在回响应前就收线**，所以链路异常按「已完成」处理。
+- `CameraService.connectWifi()` 连上后自动探一次配对码；有码就进配对态，不扫描。
+- `CameraService.completeWifiPairing()`：确认后按 **2/3/5/8/12 秒**退避自动重连。Z50II 实测相机重启 Wi-Fi 约 6–7 秒，第 3 次（约 10 秒）命中；不要改回「只等 1.5 秒试一次」，那样每次都要用户手动再点。
+- 配对是**按本次连接**做的：Z50II 在 4:10 和 4:20 两次连接都重新要了验证码，说明相机没有持久记住这个固定 GUID。因此 app 侧做成**自动确认**（`MainScreen.onConnectWifi` 拿到 `pairingRequired` 就直接调 `completeWifiPairing`），用户不需要点「完成配对」。
+- 验证码在 Z50II 的相机屏幕上**不显示**，核对没有意义；UI 文案只写「若相机显示同一组数字可顺便核对」。
+
+**mDNS 发现（1.32.0）**
+
+- `services/NsdScanner.ets` 浏览 Bonjour `_ptp._tcp`，实例名就是相机名（`Z50_2_8079350`），SRV 端口 15740。
+- `serviceFound` 只保证 `serviceName`，IP/端口必须再 `resolveLocalService()` 补全；serviceType 在 HarmonyOS 上**不带尾点**。
+- `CameraService.scanWifiCameras(8000)` 浏览 8 秒，结果进 `wifiCameras`；相机页的「搜索附近的相机」把它们列出来，点一下直接连，不用手填 IP。
+- 解析失败（2204006 超时）属正常，下轮广播会再报；`serviceLost` 会从列表移除。
+
+**多网卡绑定（1.32.0）**
+
+手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
+
 **当前边界（重要）**
 
-- 只支持**手动填 IP**。mDNS `_ptp._tcp` 发现、/24 网段扫描、BLE 配对与保活都还没接。
-- **主机注册（0x952B / 0x935A）没有实现**。部分机身（尤其 STA 模式）只接受已注册主机，首次连接失败时优先怀疑这一步，而不是网络。
+- 只支持 STA/热点这种「手机与相机同网」的路径；AP 模式（手机连相机热点）没做。
+- /24 网段扫描兜底、BLE 配对与保活还没接。
+- 连接失败的第一嫌疑仍是「相机不在『连接向导』页」——显示 IP/掩码的页面 15740 没开。
 - `GetStorageIDs` 被拒时返回 `0xFFFFFFFF` 哨兵，由 `GetObjectHandles` 按「所有存储」枚举——这是 SnapBridge 会话的已知行为。
 - 部分机型对同一台相机只保留一个 PTP/IP initiator；另一个设备的 `Init` 会踢掉前一个会话，甚至把相机踢出配对模式。调试时不要并发探测。
 - PTP/IP 未认证、未加密，同网段任何设备都能连；只在可信网络使用。

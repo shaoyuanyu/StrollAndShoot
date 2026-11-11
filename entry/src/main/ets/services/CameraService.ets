@@ -15,6 +15,7 @@ import { PtpSession, PtpPriority, PtpEndpointKind, setPtpLog, setPtpQuietOps, Pt
   type PtpTransport } from '../pages/PtpHost';
 import { PtpScheduler } from './PtpScheduler';
 import { WifiPtpSession } from './WifiPtpSession';
+import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -157,6 +158,18 @@ export class CameraService {
   @Trace wifiHost: string = '';
   /** 最近一次无线连接使用的端口。 */
   @Trace wifiPort: number = 15740;
+  /** 相机要求的配对验证码（0x952B）；空串表示相机不要求配对。 */
+  @Trace pairingCode: string = '';
+  /** 相机正在等待主机注册，UI 应显示配对核对入口而不是扫描结果。 */
+  @Trace pairingRequired: boolean = false;
+  /** 当前无线会话实例，配对命令要直接落在它上面（PtpScheduler 不转发）。 */
+  private wifiSession: WifiPtpSession | null = null;
+  /** mDNS 发现的局域网相机。 */
+  @Trace wifiCameras: WifiCameraInfo[] = [];
+  /** mDNS 浏览是否进行中。 */
+  @Trace wifiScanning: boolean = false;
+  private nsdScanner: NsdScanner | null = null;
+  private wifiScanTimer: number = -1;
   /** 存储是否可读（GetStorageIDs 成功）。 */
   @Trace usable: boolean = false;
   /** 最近一次扫描失败的原因，供 toast 与状态卡显示。 */
@@ -1301,7 +1314,7 @@ export class CameraService {
    * 也可以是手机开热点、相机连热点。连接失败时优先检查：相机 Wi-Fi 是否
    * 开启、是否已完成「主机注册」、15740 端口是否可达。
    */
-  async connectWifi(host: string, port: number = 15740): Promise<boolean> {
+  async connectWifi(host: string, port: number = 15740, silent: boolean = false): Promise<boolean> {
     const target = host.trim();
     if (target === '') {
       this.reportScanFailure(L10n.tr('camera_status_wifi_empty_host'));
@@ -1311,7 +1324,9 @@ export class CameraService {
       await this.disconnect();
     }
     this.syncSessionMode();
-    this.session = new PtpScheduler(this.makeWifiSession());
+    const wifi = this.makeWifiSession();
+    this.wifiSession = wifi;
+    this.session = new PtpScheduler(wifi);
     this.wireless = true;
     this.wifiHost = target;
     this.wifiPort = port;
@@ -1329,8 +1344,11 @@ export class CameraService {
     if (!ok) {
       this.wireless = false;
       this.connected = false;
+      this.wifiSession = null;
       this.session = new PtpScheduler(new PtpSession());
-      this.reportScanFailure(L10n.tr('camera_status_wifi_connect_failed', target));
+      if (!silent) {
+        this.reportScanFailure(L10n.tr('camera_status_wifi_connect_failed', target));
+      }
       return false;
     }
 
@@ -1353,8 +1371,123 @@ export class CameraService {
       this.log.add('Wi-Fi DeviceInfo 未取到，用地址作为身份');
     }
     this.log.add(`无线连接建立: ${target}:${port}，身份 ${this.cameraIdentity}`);
+
+    // 相机在「连接向导」里等主机注册时，会先开 15740 让我们连上，再等
+    // 0x952B/0x935A 确认；不确认就 10 秒后自行收线，且 Wi-Fi 配置不落盘。
+    const code = await wifi.getPairingCode();
+    if (code !== null) {
+      this.pairingCode = code;
+      this.pairingRequired = true;
+      this.statusText = L10n.tr('camera_status_wifi_pairing', code);
+      this.log.add(`相机要求配对，验证码 ${code}，等待用户核对后确认`);
+      return true;
+    }
+    this.pairingRequired = false;
+    this.pairingCode = '';
     this.checkCachingState();
     return true;
+  }
+
+  /**
+   * 完成主机注册（0x935A，参数 0x2001）。
+   *
+   * Z50II 实测：相机在回响应之前就收线，随后用它保存的配置重开 Wi-Fi。
+   * 所以这里不把断链当失败，等一拍后直接重连；重连后再探一次配对码，
+   * 拿不到才算配对完成，并接着触发扫描。
+   */
+  async completeWifiPairing(): Promise<boolean> {
+    const wifi = this.wifiSession;
+    if (!wifi) {
+      this.reportScanFailure(L10n.tr('camera_status_wifi_connect_failed', this.wifiHost));
+      return false;
+    }
+    this.statusText = L10n.tr('camera_status_wifi_pairing_confirm');
+    this.log.add('发送 CompletePairing');
+    await wifi.completePairing();
+    this.pairingRequired = false;
+    this.pairingCode = '';
+    this.connected = false;
+    this.wireless = false;
+    this.wifiSession = null;
+    this.session = new PtpScheduler(new PtpSession());
+
+    const host = this.wifiHost;
+    const port = this.wifiPort;
+    // 相机收线后要重启 Wi-Fi 服务才会重新监听 15740。Z50II 实测约 6–7 秒，
+    // 只试一次必然抢跑；这里按退避自动重试，别把「再点一次」甩给用户。
+    const delays: number[] = [2000, 3000, 5000, 8000, 12000];
+    let ok = false;
+    for (let i = 0; i < delays.length; i++) {
+      await new Promise<void>((resolve: () => void) => {
+        setTimeout(resolve, delays[i]);
+      });
+      if (i > 0) {
+        this.statusText = L10n.tr('camera_status_wifi_reconnecting', i + 1);
+      }
+      ok = await this.connectWifi(host, port, true);
+      if (ok) {
+        this.log.add(`配对后第 ${i + 1} 次重连成功`);
+        break;
+      }
+      this.log.add(`配对后第 ${i + 1} 次重连失败`);
+    }
+    if (ok && !this.pairingRequired) {
+      this.statusText = L10n.tr('camera_status_wifi_pairing_done');
+      this.scanForCamera(true, true);
+    } else if (!ok) {
+      this.reportScanFailure(L10n.tr('camera_status_wifi_pairing_timeout', host));
+    }
+    return ok;
+  }
+
+  /**
+   * 搜索局域网内的相机（mDNS `_ptp._tcp`），结果写进 `wifiCameras`。
+   *
+   * 浏览持续 [durationMs] 后自动收起；期间发现的相机随时追加，用户点哪台
+   * 就连哪台，不需要手填 IP。
+   */
+  async scanWifiCameras(durationMs: number = 8000): Promise<void> {
+    const ctx = this.context;
+    if (ctx === null || this.wifiScanning) return;
+    this.wifiScanning = true;
+    this.wifiCameras = [];
+    if (this.nsdScanner === null) {
+      this.nsdScanner = new NsdScanner(ctx,
+        (camera: WifiCameraInfo) => {
+          if (!this.wifiCameras.some((c: WifiCameraInfo) => c.name === camera.name)) {
+            this.wifiCameras = this.wifiCameras.concat([camera]);
+            this.log.add(`mDNS 发现相机: ${camera.name} @ ${camera.host}:${camera.port}`);
+          }
+        },
+        (name: string) => {
+          this.wifiCameras = this.wifiCameras.filter((c: WifiCameraInfo) => c.name !== name);
+        },
+        (msg: string) => { this.log.add(msg); });
+    }
+    try {
+      await this.nsdScanner.start();
+    } catch (err) {
+      this.log.add(`mDNS 启动失败: ${(err as Error).message}`);
+      this.wifiScanning = false;
+      return;
+    }
+    if (this.wifiScanTimer >= 0) clearTimeout(this.wifiScanTimer);
+    this.wifiScanTimer = setTimeout(() => {
+      this.wifiScanTimer = -1;
+      this.wifiScanning = false;
+    }, durationMs);
+  }
+
+  /** 停止 mDNS 浏览并清掉计时器。 */
+  stopWifiScan(): void {
+    if (this.nsdScanner !== null) {
+      this.nsdScanner.stop();
+    }
+    if (this.wifiScanTimer >= 0) {
+      clearTimeout(this.wifiScanTimer);
+      this.wifiScanTimer = -1;
+    }
+    this.wifiScanning = false;
   }
 
   private makeWifiSession(): WifiPtpSession {
@@ -3007,6 +3140,9 @@ export class CameraService {
       this.session = new PtpScheduler(new PtpSession());
       this.wireless = false;
     }
+    this.wifiSession = null;
+    this.pairingCode = '';
+    this.pairingRequired = false;
     this.connected = false;
     this.usable = false;
     this.lastScanError = '';

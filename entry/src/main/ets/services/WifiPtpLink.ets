@@ -1,4 +1,4 @@
-import { socket } from '@kit.NetworkKit';
+import { socket, connection } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 /**
@@ -119,6 +119,65 @@ function readUtf16z(data: Uint8Array, offset: number): string {
   return s;
 }
 
+/** 一条连接要绑定的本地网络：地址用于 bind，句柄用于 bindSocket。 */
+interface NetworkBinding {
+  localAddress: string;
+  net: connection.NetHandle;
+}
+
+function ipv4ToInt(ip: string): number {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return -1;
+  let v = 0;
+  for (const part of parts) {
+    const n = Number.parseInt(part, 10);
+    if (!Number.isFinite(n) || n < 0 || n > 255) return -1;
+    v = ((v << 8) | n) >>> 0;
+  }
+  return v >>> 0;
+}
+
+function sameSubnet(a: string, b: string, prefix: number): boolean {
+  const ai = ipv4ToInt(a);
+  const bi = ipv4ToInt(b);
+  if (ai < 0 || bi < 0 || prefix < 0 || prefix > 32) return false;
+  const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+  return (ai & mask) === (bi & mask);
+}
+
+/**
+ * 找到目标 IP 所属的那个本地网络。
+ *
+ * 手机同时挂办公网和相机热点时（本项目实测就是 wlan0 10.15.x + wlan1
+ * 192.168.43.x），应用 socket 默认绑在系统默认网络上，往热点网段发的 SYN
+ * 会从错误的网卡出去，表现是 `2301115 Operation in progress`（SYN 没回音）。
+ * 这里按网段匹配，把 socket 绑到相机所在的那张网卡。
+ */
+async function resolveNetworkBinding(host: string): Promise<NetworkBinding | null> {
+  try {
+    const nets = await connection.getAllNets();
+    for (const net of nets) {
+      let props: connection.ConnectionProperties;
+      try {
+        props = connection.getConnectionPropertiesSync(net);
+      } catch (_e) {
+        continue;
+      }
+      const links = props.linkAddresses;
+      if (!links || links.length === 0) continue;
+      for (const link of links) {
+        const local = link.address.address;
+        if (sameSubnet(local, host, link.prefixLength)) {
+          return { localAddress: local, net: net };
+        }
+      }
+    }
+  } catch (_e) {
+    // 查询失败就按默认网络走，不阻断连接
+  }
+  return null;
+}
+
 function buildFrame(type: number, payload: Uint8Array): Uint8Array {
   const out = new Uint8Array(8 + payload.length);
   const view = new DataView(out.buffer);
@@ -136,13 +195,16 @@ class PtpIpChannel {
   private readonly label: string;
   private readonly onFrame: (type: number, payload: Uint8Array) => void;
   private readonly onBroken: (reason: string) => void;
+  private readonly binding: NetworkBinding | null;
 
   constructor(label: string,
               onFrame: (type: number, payload: Uint8Array) => void,
-              onBroken: (reason: string) => void) {
+              onBroken: (reason: string) => void,
+              binding: NetworkBinding | null) {
     this.label = label;
     this.onFrame = onFrame;
     this.onBroken = onBroken;
+    this.binding = binding;
   }
 
   async open(host: string, port: number): Promise<boolean> {
@@ -163,6 +225,12 @@ class PtpIpChannel {
           this.onBroken(`${this.label} error ${err.code}: ${err.message}`);
         }
       });
+      if (this.binding !== null) {
+        // 先 bind 本地地址、再把 socket 绑到对应网络，否则多网卡下会走默认网络。
+        const local: socket.NetAddress = { address: this.binding.localAddress, port: 0 };
+        await this.tcp.bind(local);
+        await this.binding.net.bindSocket(this.tcp);
+      }
       const addr: socket.NetAddress = { address: host, port: port };
       const options: socket.TCPConnectOptions = { address: addr, timeout: CONNECT_TIMEOUT_MS };
       await this.tcp.connect(options);
@@ -266,11 +334,15 @@ export class WifiPtpLink {
   async connect(host: string, port: number): Promise<boolean> {
     await this.close();
 
+    const binding = await resolveNetworkBinding(host);
+    if (binding !== null) {
+      this.log(`[PTP/IP] socket 绑定本地 ${binding.localAddress}（目标 ${host}）`);
+    }
     const command = new PtpIpChannel('command', (type: number, payload: Uint8Array) => {
       this.handleCommandFrame(type, payload);
     }, (reason: string) => {
       this.failAll(reason);
-    });
+    }, binding);
     this.command = command;
     this.log(`[PTP/IP] 连接 ${host}:${port} 命令通道`);
     if (!await command.open(host, port)) {
@@ -289,7 +361,7 @@ export class WifiPtpLink {
       this.handleEventFrame(type, payload);
     }, (reason: string) => {
       this.failAll(reason);
-    });
+    }, binding);
     this.event = event;
     if (!await event.open(host, port)) {
       await this.close();

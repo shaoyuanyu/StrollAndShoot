@@ -103,7 +103,9 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 扫描失败还会由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast（`getUIContext().getPromptAction().showToast`），文案来自 `svc.lastScanError`。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
 - **未连接时多一张「无线连接」卡（1.31.0）**：标题 + 一行说明 + `TextInput`（相机 IP，回车即连）+ 主色胶囊「连接」。已连接且走 Wi-Fi 时，同一张卡改成「地址 + 断开无线」，不显示输入框；设备信息卡的「连接」一行也显示 `Wi-Fi · <host>`。连接成功后 `MainScreen` 自动触发一次快速扫描，首次会自动退化为全量。
-- 无线卡是**手动填 IP** 的第一版入口：mDNS 发现、网段扫描、BLE 配对都还没接，说明文案里只承诺「同一网络」这个前提，不要写成「自动发现」。
+- 无线卡下面有「搜索附近的相机」（1.32.0）：走 mDNS `_ptp._tcp`，浏览 8 秒，发现的相机按 `机身名 + IP` 列出，点一下直接连，不用手填 IP。搜索按钮在浏览期间显示「正在搜索附近的相机...」且不可重复触发。
+- 配对是**自动**的：`connectWifi` 拿到验证码后 `MainScreen.onConnectWifi` 直接调 `completeWifiPairing`，配对卡一般一闪而过。保留 `PairingCard` 与「完成配对」按钮只作兜底，正常路径用户不需要点。验证码在 Z50II 相机上不显示，所以卡片文案写「若相机显示同一组数字可顺便核对」。
+- 相机侧前提写死在 `camera_wifi_hint` 里：必须停在「连接向导」页（显示 `Z50_2_xxxx`），显示 IP/掩码的页面连不上。
 
 扫描阶段、缓存与快速扫描的细节见 [SERVICES.md](SERVICES.md)。
 

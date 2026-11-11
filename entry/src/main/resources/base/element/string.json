@@ -106,7 +106,7 @@
     },
     {
       "name": "camera_status_wifi_connect_failed",
-      "value": "无法连接 %1$s：请确认相机 Wi-Fi 已开启、手机与相机在同一网络，且已完成主机注册"
+            "value": "无法连接 %1$s。请确认相机停在「连接向导」页面（显示照相机名称），且手机与相机在同一网络。"
     },
     {
       "name": "camera_status_wifi_disconnected",
@@ -118,7 +118,7 @@
     },
     {
       "name": "camera_wifi_hint",
-      "value": "手机与相机需在同一网络：相机用 STA 模式加入路由器，或连到手机热点"
+            "value": "相机操作：网络菜单 → 连接至智能设备 → Wi-Fi 连接(STA Mode)，选好 profile，直到出现「连接向导」页面（显示 Z50_2_xxxx）。显示 IP/掩码的页面还不能连。"
     },
     {
       "name": "camera_wifi_host_placeholder",
@@ -129,6 +129,15 @@
       "value": "连接"
     },
     {
+      "name": "camera_wifi_scan_nearby",
+      "value": "搜索附近的相机"
+    },
+    {
+      "name": "camera_wifi_scanning",
+      "value": "正在搜索附近的相机..."
+    },
+
+    {
       "name": "camera_wifi_disconnect",
       "value": "断开无线"
     },
@@ -136,6 +145,39 @@
       "name": "camera_wifi_switch_usb",
       "value": "改用 USB"
     },
+    {
+      "name": "camera_status_wifi_pairing",
+      "value": "相机等待配对，验证码 %1$s"
+    },
+    {
+      "name": "camera_status_wifi_pairing_confirm",
+      "value": "正在完成配对..."
+    },
+    {
+      "name": "camera_status_wifi_pairing_done",
+      "value": "配对完成，正在重新连接..."
+    },
+    {
+      "name": "camera_wifi_pairing_title",
+      "value": "配对验证码"
+    },
+    {
+      "name": "camera_wifi_pairing_hint",
+            "value": "点「完成配对」后相机会保存这台手机并重启 Wi-Fi，app 会自动重连，不需要再点一次。若相机上显示同一组数字，可顺便核对。"
+    },
+    {
+      "name": "camera_wifi_pairing_confirm",
+      "value": "完成配对"
+    },    {
+      "name": "camera_status_wifi_pairing_timeout",
+      "value": "配对已确认，但 %1$s 没有恢复响应。请确认相机已回到「连接向导」页面（显示照相机名称）后再试。"
+    },
+    {
+      "name": "camera_status_wifi_reconnecting",
+      "value": "正在重连相机（第 %1$d 次）..."
+    },
+
+
 
     {
       "name": "camera_status_choose_cache",

@@ -106,7 +106,7 @@
     },
     {
       "name": "camera_status_wifi_connect_failed",
-      "value": "Cannot reach %1$s. Check that camera Wi-Fi is on, both devices share a network, and the host is registered."
+            "value": "Cannot reach %1$s. Make sure the camera is on the connection guide screen (showing its name) and both devices share a network."
     },
     {
       "name": "camera_status_wifi_disconnected",
@@ -118,7 +118,7 @@
     },
     {
       "name": "camera_wifi_hint",
-      "value": "Phone and camera must share a network: put the camera in STA mode on a router, or join it to the phone hotspot."
+            "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode), pick the profile, and stop on the connection guide screen (showing Z50_2_xxxx). The IP/subnet screen is not ready yet."
     },
     {
       "name": "camera_wifi_host_placeholder",
@@ -129,6 +129,15 @@
       "value": "Connect"
     },
     {
+      "name": "camera_wifi_scan_nearby",
+      "value": "Search for nearby cameras"
+    },
+    {
+      "name": "camera_wifi_scanning",
+      "value": "Searching for nearby cameras…"
+    },
+
+    {
       "name": "camera_wifi_disconnect",
       "value": "Disconnect Wi-Fi"
     },
@@ -136,6 +145,39 @@
       "name": "camera_wifi_switch_usb",
       "value": "Use USB"
     },
+    {
+      "name": "camera_status_wifi_pairing",
+      "value": "Camera is waiting for pairing, code %1$s"
+    },
+    {
+      "name": "camera_status_wifi_pairing_confirm",
+      "value": "Completing pairing…"
+    },
+    {
+      "name": "camera_status_wifi_pairing_done",
+      "value": "Paired. Reconnecting…"
+    },
+    {
+      "name": "camera_wifi_pairing_title",
+      "value": "Pairing code"
+    },
+    {
+      "name": "camera_wifi_pairing_hint",
+            "value": "After you tap Complete Pairing the camera saves this phone and restarts Wi-Fi; the app reconnects automatically, no second tap needed. If the camera shows the same digits, feel free to check them."
+    },
+    {
+      "name": "camera_wifi_pairing_confirm",
+      "value": "Complete Pairing"
+    },    {
+      "name": "camera_status_wifi_pairing_timeout",
+      "value": "Pairing was confirmed, but %1$s did not come back. Put the camera back on the connection guide screen (the one showing the camera name) and try again."
+    },
+    {
+      "name": "camera_status_wifi_reconnecting",
+      "value": "Reconnecting to camera (attempt %1$d)…"
+    },
+
+
 
     {
       "name": "camera_status_choose_cache",

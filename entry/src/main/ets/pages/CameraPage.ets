@@ -1,6 +1,7 @@
 import { CameraService } from '../services/CameraService';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
+import type { WifiCameraInfo } from '../services/NsdScanner';
 
 /**
  * 相机页。
@@ -16,6 +17,8 @@ export struct CameraPage {
   @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
   @Event onConnectWifi: (host: string) => void = (_h: string) => {};
+  @Event onCompletePairing: () => void = () => {};
+  @Event onScanWifi: () => void = () => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -270,7 +273,94 @@ export struct CameraPage {
             .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
         }
         .width('100%')
+
+        // mDNS 发现：相机广播 `_ptp._tcp`，实例名就是机身名，点一下就连。
+        Text(this.svc.wifiScanning
+          ? $r('app.string.camera_wifi_scanning')
+          : $r('app.string.camera_wifi_scan_nearby'))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.primary'))
+          .width('100%')
+          .onClick(() => {
+            if (!this.svc.wifiScanning) {
+              this.onScanWifi();
+            }
+          })
+
+        if (this.svc.wifiCameras.length > 0) {
+          Column() {
+            ForEach(this.svc.wifiCameras, (cam: WifiCameraInfo) => {
+              Row({ space: 8 }) {
+                Text(cam.name)
+                  .fontSize(FontSize.Body)
+                  .fontColor($r('app.color.text_primary'))
+                  .layoutWeight(1)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(cam.host)
+                  .fontSize(FontSize.Caption)
+                  .fontColor($r('app.color.text_tertiary'))
+                SymbolGlyph($r('sys.symbol.chevron_right'))
+                  .fontSize(IconSize.Body)
+                  .fontColor([$r('app.color.text_tertiary')])
+              }
+              .width('100%')
+              .padding({ top: 10, bottom: 10 })
+              .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+              .onClick(() => { this.onConnectWifi(cam.host); })
+            }, (cam: WifiCameraInfo) => cam.name)
+          }
+          .width('100%')
+        }
       }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.bg_surface'))
+    .borderRadius(Radius.Card)
+  }
+
+  /**
+   * 配对核对卡。
+   *
+   * 相机在「连接向导」页等主机注册：它先开 15740 让我们连上，再等 0x952B
+   * 取的验证码与 0x935A 确认；不确认就 10 秒后收线、Wi-Fi 配置不落盘。
+   */
+  @Builder
+  PairingCard() {
+    Column({ space: 14 }) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.link'))
+          .fontSize(IconSize.Body)
+          .fontColor([$r('app.color.primary')])
+        Text($r('app.string.camera_wifi_pairing_title'))
+          .fontSize(FontSize.CardTitle)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+      }
+      .width('100%')
+
+      Text(this.svc.pairingCode)
+        .fontSize(40)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary'))
+        .letterSpacing(8)
+        .width('100%')
+        .textAlign(TextAlign.Center)
+
+      Text($r('app.string.camera_wifi_pairing_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+
+      Button($r('app.string.camera_wifi_pairing_confirm'))
+        .width('100%')
+        .height(44)
+        .borderRadius(pillRadius(44))
+        .backgroundColor($r('app.color.primary'))
+        .fontColor($r('app.color.text_on_primary'))
+        .onClick(() => { this.onCompletePairing(); })
     }
     .width('100%')
     .padding(16)
@@ -286,7 +376,9 @@ export struct CameraPage {
         } else {
           this.EmptyCard()
         }
-        if (!this.svc.connected) {
+        if (this.svc.pairingRequired) {
+          this.PairingCard()
+        } else if (!this.svc.connected) {
           this.WirelessCard()
         }
         if (this.svc.connected) {
