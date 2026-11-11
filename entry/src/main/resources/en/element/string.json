@@ -209,6 +209,10 @@
       "value": "Pairing failed"
     },
     {
+      "name": "camera_ble_cancel",
+      "value": "Cancel"
+    },
+    {
       "name": "camera_ble_disconnect",
       "value": "Disconnect Bluetooth"
     },

@@ -172,11 +172,23 @@ export struct CameraPage {
     return this.svc.connected && this.svc.wireless;
   }
 
+  /**
+   * 配对是否真的落定。
+   *
+   * `bleConnected` 只代表 GATT 链路在（`connect()` 一返回就为真），配对要走完
+   * 四步握手 / 断链 / 经典绑定 / 复用握手好几段，中间那几十秒两条状态会同时
+   * 成立。UI 一律以「链路 ✓ 且拿到序列号」才算已配对，避免出现「正在连接」
+   * 和「已连接」并存。
+   */
+  private blePaired(): boolean {
+    return this.svc.bleConnected && this.svc.bleSerial !== '';
+  }
+
   /** 蓝牙一句话状态。 */
   private bleStatusText(): ResourceStr {
     if (this.svc.bleConnecting) return $r('app.string.camera_ble_connecting');
     if (this.svc.bleReconnecting) return $r('app.string.camera_ble_reconnecting');
-    if (this.svc.bleConnected && this.svc.bleSerial !== '') {
+    if (this.blePaired()) {
       return this.svc.bleCameraName !== ''
         ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
         : $r('app.string.camera_ble_paired', this.svc.bleSerial);
@@ -188,9 +200,7 @@ export struct CameraPage {
   private bleStatusColor(): Resource {
     if (this.svc.bleConnecting) return $r('app.color.primary');
     if (this.svc.bleReconnecting) return $r('app.color.status_error');
-    if (this.svc.bleConnected && this.svc.bleSerial !== '') {
-      return $r('app.color.status_connected');
-    }
+    if (this.blePaired()) return $r('app.color.status_connected');
     if (this.svc.bleConnected) return $r('app.color.status_error');
     return $r('app.color.text_tertiary');
   }
@@ -338,7 +348,14 @@ export struct CameraPage {
             .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (this.svc.bleConnected || this.svc.bleReconnecting) {
+          // 连接/配对进行中给「取消连接」而不是「断开蓝牙」：这几十秒里链路
+          // 可能已通但配对还没落定，写「断开」会和「正在连接」打架。
+          if (this.svc.bleConnecting) {
+            Text($r('app.string.camera_ble_cancel'))
+              .fontSize(FontSize.Caption)
+              .fontColor($r('app.color.text_secondary'))
+              .onClick(() => { this.onDisconnectBle(); })
+          } else if (this.svc.bleConnected || this.svc.bleReconnecting) {
             Text($r('app.string.camera_ble_disconnect'))
               .fontSize(FontSize.Caption)
               .fontColor($r('app.color.button_danger'))

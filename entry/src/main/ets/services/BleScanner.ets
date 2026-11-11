@@ -180,6 +180,14 @@ export class BleCameraLink {
   private identityDevice: number = 0;
   private identityNonce: number = 0;
   private identitySerial: string = '';
+  /**
+   * 用户取消标记。
+   *
+   * 配对流程有「断链 → 经典绑定 → 回链」好几段，中途点「取消连接」时如果
+   * 不做标记，`reconnectForResume` 会把链路又接回来。每个关键 await 之后
+   * 都要查一次。
+   */
+  private cancelled: boolean = false;
   /** 断链自动重连开关（用户主动断开时要关掉，否则会自己爬起来）。 */
   private autoReconnect: boolean = false;
   private reconnecting: boolean = false;
@@ -763,6 +771,7 @@ export class BleCameraLink {
    * 没有身份 → 两段式首配（段 1 握手 + 经典蓝牙绑定 + 段 2 复用握手）。
    */
   async pair(cameraName: string = ''): Promise<string | null> {
+    this.cancelled = false;
     try {
       const store = BleIdentityStore.getInstance();
       if (store.hasIdentity()) {
@@ -830,17 +839,29 @@ export class BleCameraLink {
     } catch (err) {
       this.onLog(`配对: 0x2005 写入失败: ${(err as Error).message}`);
     }
+    if (this.cancelled) {
+      this.onLog('配对: 用户已取消');
+      return null;
+    }
 
     // ---------- 断链让位 + 经典绑定 ----------
     // 相机要等 BLE 释放才暴露经典蓝牙；让位窗太短会把相机射频楔死。
     this.onLog('配对: 段 1 完成，断开 BLE 让相机暴露经典蓝牙');
     await this.disconnect();
     await BleCameraLink.sleep(3000);
+    if (this.cancelled) {
+      this.onLog('配对: 用户已取消（经典绑定未做）');
+      return null;
+    }
     const bonded = await this.bondClassic(this.cameraName, serial);
     this.onLog(bonded
       ? '配对: 经典蓝牙绑定完成'
       : '配对: 经典蓝牙绑定未完成（继续尝试回链）');
     await BleCameraLink.sleep(1200);
+    if (this.cancelled) {
+      this.onLog('配对: 用户已取消（不回链）');
+      return null;
+    }
 
     // ---------- 段 2：重连 + 复用握手 ----------
     const reconnected = await this.reconnectForResume();
@@ -1128,6 +1149,7 @@ export class BleCameraLink {
   }
 
   async disconnect(): Promise<void> {
+    this.cancelled = true;
     this.disableAutoReconnect();
     this.paired = false;
     const gatt = this.gatt;

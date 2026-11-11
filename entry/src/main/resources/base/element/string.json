@@ -209,6 +209,10 @@
       "value": "配对失败"
     },
     {
+      "name": "camera_ble_cancel",
+      "value": "取消连接"
+    },
+    {
       "name": "camera_ble_disconnect",
       "value": "断开蓝牙"
     },
