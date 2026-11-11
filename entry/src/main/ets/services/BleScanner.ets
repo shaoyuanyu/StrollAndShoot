@@ -1,6 +1,7 @@
 import { ble, connection as btConnection, constant } from '@kit.ConnectivityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { NikonBlowfish } from './NikonBlowfish';
+import { BleTimePayload, BleGeoPayload, type BleGeoFix } from './BlePayloads';
 import { NikonPairing, decodePairingMessage } from './NikonPairing';
 
 /** 扫描到的一台 BLE 相机。 */
@@ -17,6 +18,10 @@ export const NIKON_BLE_SERVICE_ALT = '0000de01-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_CHAR_PAIRING = '00002000-3dd4-4255-8d62-6dc7b9bd5561';
 /** 标准 CCCD：开通知/指示必须带上它，否则 setCharacteristicChangeIndication 报 401。 */
 const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
+/** 校时（10B，兼保活心跳）。 */
+export const NIKON_CHAR_TIME = '00002006-3dd4-4255-8d62-6dc7b9bd5561';
+/** 位置（41B）。 */
+export const NIKON_CHAR_GEO = '00002007-3dd4-4255-8d62-6dc7b9bd5561';
 
 function cccdDescriptor(charUuid: string, indicate: boolean): ble.BLEDescriptor {
   const value = new Uint8Array(2);
@@ -125,6 +130,7 @@ export class BleCameraLink {
   private readonly onLog: (msg: string) => void;
   private readonly onState: (connected: boolean) => void;
   private pendingChar: PendingChar | null = null;
+  private keepaliveTimer: number = -1;
   connected: boolean = false;
 
   constructor(onLog: (msg: string) => void,
@@ -301,6 +307,47 @@ export class BleCameraLink {
     return [];
   }
 
+  /** 写一次相机时钟（0x2006）。 */
+  async writeTime(offsetMinutes: number): Promise<void> {
+    const payload = BleTimePayload.build(new Date(), offsetMinutes);
+    await this.writeCharacteristic(NIKON_CHAR_TIME, payload);
+  }
+
+  /** 写一次位置（0x2007）。 */
+  async writeLocation(fix: BleGeoFix): Promise<void> {
+    const payload = BleGeoPayload.build(fix);
+    await this.writeCharacteristic(NIKON_CHAR_GEO, payload);
+  }
+
+  /**
+   * 保活：每 [intervalMs] 写一次 0x2006（内容就是当前时刻，顺带持续校时）。
+   *
+   * 相机 2 分钟没有 BLE 流量会断链，45 秒一拍留足余量。位置由
+   * [fixProvider] 提供，拿到就一起写；拿不到只写时间。
+   */
+  startKeepalive(intervalMs: number, offsetMinutes: number,
+                 fixProvider: () => BleGeoFix | null): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      this.writeTime(offsetMinutes).then(() => {
+        const fix = fixProvider();
+        if (fix !== null) {
+          return this.writeLocation(fix);
+        }
+        return Promise.resolve();
+      }).catch((err: Error) => {
+        this.onLog(`BLE 保活失败: ${err.message}`);
+      });
+    }, intervalMs);
+  }
+
+  stopKeepalive(): void {
+    if (this.keepaliveTimer >= 0) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = -1;
+    }
+  }
+
   /** 打开某个特征的 indicate（0x2000 配对用 indicate，不是 notify）。 */
   async enableIndication(charUuid: string): Promise<void> {
     const gatt = this.gatt;
@@ -424,6 +471,7 @@ export class BleCameraLink {
   }
 
   async disconnect(): Promise<void> {
+    this.stopKeepalive();
     const gatt = this.gatt;
     const wasConnected = this.connected;
     this.gatt = null;

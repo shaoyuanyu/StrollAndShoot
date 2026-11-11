@@ -392,9 +392,13 @@ export struct CameraPage {
             .fontSize(FontSize.Caption)
             .fontColor($r('app.color.primary'))
         } else if (this.svc.bleConnected) {
-          Text($r('app.string.camera_ble_services', this.svc.bleServices.length))
+          Text(this.svc.bleSerial !== ''
+            ? $r('app.string.camera_ble_paired', this.svc.bleSerial)
+            : $r('app.string.camera_ble_pair_failed'))
             .fontSize(FontSize.Caption)
-            .fontColor($r('app.color.status_connected'))
+            .fontColor(this.svc.bleSerial !== ''
+              ? $r('app.color.status_connected')
+              : $r('app.color.status_error'))
         }
       }
       .width('100%')

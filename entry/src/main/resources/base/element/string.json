@@ -153,6 +153,15 @@
       "value": "正在连接蓝牙相机..."
     },
     {
+      "name": "camera_ble_paired",
+      "value": "配对成功 · 序列号 %1$s"
+    },
+    {
+      "name": "camera_ble_pair_failed",
+      "value": "配对失败"
+    },
+
+    {
       "name": "camera_ble_disconnect",
       "value": "断开蓝牙"
     },

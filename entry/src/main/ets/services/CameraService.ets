@@ -183,6 +183,8 @@ export class CameraService {
   @Trace bleConnected: boolean = false;
   /** 已连接相机的 GATT 服务列表（调试用）。 */
   @Trace bleServices: string[] = [];
+  /** 配对成功后相机回报的序列号；空串表示未配对。 */
+  @Trace bleSerial: string = '';
   private bleScanner: BleScanner | null = null;
   private bleLink: BleCameraLink | null = null;
   private bleScanTimer: number = -1;
@@ -1598,6 +1600,7 @@ export class CameraService {
             this.bleConnected = connected;
             if (!connected) {
               this.bleServices = [];
+              this.bleSerial = '';
             }
           });
       }
@@ -1615,10 +1618,32 @@ export class CameraService {
       this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
       // 服务枚举完直接走四步配对（相机需停在「开始配对」页）。
       const serial = await this.bleLink.pair();
-      if (serial !== null) {
-        this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
-      } else {
+      if (serial === null) {
+        this.bleSerial = '';
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');
+        return true;
+      }
+      this.bleSerial = serial;
+      this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
+
+      // 配对成功后才允许写 0x2006/0x2007：先校时，再按 45s 保活（顺带持续校时）。
+      const offsetMinutes = -new Date().getTimezoneOffset();
+      try {
+        await this.bleLink.writeTime(offsetMinutes);
+        this.bleLink.startKeepalive(45000, offsetMinutes, () => {
+          const fix = GpsRecorder.getInstance().lastFix;
+          if (fix === null) return null;
+          return {
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            altitude: fix.altitude,
+            satellites: 0,
+            utc: new Date()
+          };
+        });
+        this.log.add(`BLE 校时已写入（offset ${offsetMinutes}min），保活 45s 已启动`);
+      } catch (err) {
+        this.log.add(`BLE 校时失败: ${(err as Error).message}`);
       }
       return true;
     } finally {
@@ -1633,6 +1658,7 @@ export class CameraService {
     }
     this.bleConnected = false;
     this.bleServices = [];
+    this.bleSerial = '';
   }
 
   private makeWifiSession(): WifiPtpSession {

@@ -153,6 +153,15 @@
       "value": "Connecting to the Bluetooth camera…"
     },
     {
+      "name": "camera_ble_paired",
+      "value": "Paired · serial %1$s"
+    },
+    {
+      "name": "camera_ble_pair_failed",
+      "value": "Pairing failed"
+    },
+
+    {
       "name": "camera_ble_disconnect",
       "value": "Disconnect Bluetooth"
     },
