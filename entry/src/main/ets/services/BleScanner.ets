@@ -298,7 +298,16 @@ export class BleCameraLink {
       descriptors: []
     };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('indicate 开启超时'));
+      }, 5000);
       gatt.setCharacteristicChangeIndication(char, true, (err: BusinessError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (err) {
           reject(new Error(`indicate ${err.code}: ${err.message}`));
         } else {
@@ -319,7 +328,16 @@ export class BleCameraLink {
       descriptors: []
     };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('写特征超时'));
+      }, 5000);
       gatt.writeCharacteristicValue(char, ble.GattWriteType.WRITE, (err: BusinessError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (err) {
           reject(new Error(`write ${err.code}: ${err.message}`));
         } else {
@@ -352,6 +370,15 @@ export class BleCameraLink {
    * 成功后相机把本客户端记为已配对主机，stage4 的字节 9–16 是相机序列号。
    */
   async pair(): Promise<string | null> {
+    try {
+      return await this.pairInternal();
+    } catch (err) {
+      this.onLog(`配对异常: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  private async pairInternal(): Promise<string | null> {
     const blowfish = new NikonBlowfish(this.onLog);
     if (!await blowfish.selfTest()) {
       this.onLog('配对: Blowfish 自测失败，终止');
@@ -359,7 +386,9 @@ export class BleCameraLink {
     }
     const pairing = new NikonPairing(blowfish, this.onLog);
     const stage1 = pairing.createStage1();
+    this.onLog('配对: 开启 0x2000 indicate');
     await this.enableIndication(NIKON_CHAR_PAIRING);
+    this.onLog('配对: indicate 已开启');
     const stage2Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, 15000);
     await this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw);
     this.onLog('配对: stage1 已发送');
