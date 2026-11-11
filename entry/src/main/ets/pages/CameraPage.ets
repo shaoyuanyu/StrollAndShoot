@@ -825,7 +825,11 @@ export struct CameraPage {
         .interpolation(ImageInterpolation.High)
         .draggable(false)
         .scale({ x: 1, y: -1 })
+        // 原图底部自带投影，镜像后会在倒影顶端糊成一条灰带，往上挪一点避开
         .translate({ y: -12 })
+        // 产品图只有 780px 宽，铺到这个尺寸要放大 1.3 倍，放大后压缩块的边角会
+        // 透出来；倒影本来就该「隐隐约约」，加一点模糊最省事也最像反光。
+        .blur(2)
         .opacity(this.svc.connected ? 0.26 : 0.18)
       Column()
         .width('100%')
