@@ -557,12 +557,13 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 `initCameraModel()` 在启动时把上次的 key 读回来；从没连过 PTP 也能认——BLE 首配
 时 `BleIdentityStore` 已经存了广播名（`Z50_2_8079350`）与序列号。
 
-`camera_model` 里还存 `version` / `serial`，供立牌右下角那行小字用：
+`camera_model` 里还存 `serial`，供标题栏型号右下角的角标用
+（`MainScreen.cameraSerialBadge()`）：
 
-- `serial` 优先取广播名尾段（`cameraSerialFromBleName()`），它和相机菜单、
-  官方 SnapBridge 一致；`BleIdentityStore.serial` 是另一个数（本机实测
-  `1246090` vs `8079350`），不要混用。PTP 的 32 位序列号去前导零后同值。
-- `version` 去掉尼康的 `V` 前缀，展示时统一加 `Ver. `。
+- 优先取 BLE 广播名尾段（`cameraSerialFromBleName()`，`Z50_2_8079350` →
+  `8079350`），它和相机菜单、官方 SnapBridge 显示的一致；
+- `BleIdentityStore.serial` 是**另一个数**（本机实测 `1246090` vs `8079350`），
+  不要混用；PTP 的 32 位序列号去前导零后才是 `8079350`。
 
 *切换链路模式要清场*
 

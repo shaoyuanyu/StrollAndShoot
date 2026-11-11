@@ -1975,7 +1975,7 @@ export class CameraService {
     }
     // 广播名尾段就是官方那串序列号；早先版本误存过 BLE stage4 的另一串，这里覆盖
     const sn = cameraSerialFromBleName(ble.cameraName);
-    if (sn !== '') store.setFacts('', sn);
+    if (sn !== '') store.setSerial(sn);
   }
 
   /**
@@ -1999,22 +1999,20 @@ export class CameraService {
   }
 
   /**
-   * 把固件版本与序列号一起记住，喂给页首立牌底部那行小字。
+   * 记住机身序列号，喂给标题栏型号右下角的角标。
    *
-   * 序列号优先用 BLE 名里的尾段（`Z50_2_8079350` → `8079350`，和相机菜单里
-   * 显示的一致）；没有就把 PTP 的 32 位序列号去掉前导零（同一台机器是
-   * `000…08079350`）。版本号去掉尼康的前缀 `V`，展示时统一加 `Ver. `。
+   * 优先用 BLE 广播名尾段（`Z50_2_8079350` → `8079350`，和相机菜单、官方
+   * SnapBridge 显示的一致）；没有就把 PTP 的 32 位序列号去掉前导零
+   * （同一台机器是 `000…08079350`）。
    */
-  @Monitor('deviceVersion', 'deviceSerialNumber', 'bleSerial')
-  onCameraFactsChanged(): void {
+  @Monitor('deviceSerialNumber', 'bleCameraName')
+  onCameraSerialChanged(): void {
     if (this.cameraModel === '') return;
-    const version = this.deviceVersion.replace(/^[Vv]/, '');
-    const serial = cameraSerialFromBleName(this.bleCameraName) !== ''
-      ? cameraSerialFromBleName(this.bleCameraName)
-      : this.deviceSerialNumber.replace(/^0+/, '');
-    if (version === '' && serial === '') return;
-    CameraModelStore.getInstance().setFacts(version, serial);
-    this.log.add(`相机信息: Ver.${version || '?'} 序列号${serial || '?'}`);
+    const fromName = cameraSerialFromBleName(this.bleCameraName);
+    const serial = fromName !== '' ? fromName : this.deviceSerialNumber.replace(/^0+/, '');
+    if (serial === '') return;
+    CameraModelStore.getInstance().setSerial(serial);
+    this.log.add(`机身序列号: ${serial}`);
   }
 
   /** 启动时把落盘的模式读回来。 */

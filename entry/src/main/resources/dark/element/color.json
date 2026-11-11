@@ -189,8 +189,8 @@
       "value": "#CCFFFFFF"
     },
     {
-      "name": "hero_bg",
-      "value": "#16171A"
+      "name": "hero_glow",
+      "value": "#24FFFFFF"
     }
   ]
 }

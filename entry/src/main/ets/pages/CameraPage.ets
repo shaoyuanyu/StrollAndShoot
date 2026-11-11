@@ -3,7 +3,6 @@ import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
-import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeMedia } from '../utils/CameraStandee';
 import { CameraModelStore } from '../model/CameraModelStore';
@@ -29,13 +28,6 @@ const REFLECTION_HEIGHT = 76;
  * 分段按钮改用 App 自己的选中色（primary_soft + primary），不再用系统默认的
  * 实底蓝块——否则一屏里标题栏主操作与分段选中项两处高亮，没有主次。
  */
-const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
-  { text: $r('app.string.camera_mode_usb') },
-  { text: $r('app.string.camera_mode_ble') },
-  { text: $r('app.string.camera_mode_ap') },
-  { text: $r('app.string.camera_mode_sta') }
-]);
-
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
@@ -231,25 +223,42 @@ export struct CameraPage {
    * - 选中项用 `primary_soft` + `primary` 文字，和画廊的「N 张」胶囊、
    *   设置页的选中态完全一致。
    */
+  /**
+   * 四选一：四个**独立的胶囊**，不是一条分段控件。
+   *
+   * 官方 `CapsuleSegmentButtonV2` 在内容区拿不到沉浸光感，而且它只能给「整条
+   * 轨道」上色、给不了「每一项」上色——四个选项因此连成一片，用户一眼扫过去
+   * 只看到四段文字，没有「这是四个互斥选项」的视觉语言。拆成四个按钮后，
+   * 间隔、各自的底色、选中反白都在说同一件事：四选一。
+   */
   @Builder
   ModePicker() {
-    CapsuleSegmentButtonV2({
-      items: MODE_ITEMS,
-      selectedIndex: this.svc.linkMode,
-      $selectedIndex: (index: number) => { this.onSelectMode(index); },
-      itemFontSize: LengthMetrics.fp(FontSize.Caption),
-      itemSelectedFontSize: LengthMetrics.fp(FontSize.Caption),
-      itemFontWeight: FontWeight.Regular,
-      itemSelectedFontWeight: FontWeight.Medium,
-      // 轨道用页面底色（比卡片暗一档）＝「凹槽」，选中项用主色实底＝「凸起」，
-      // 四个选项因此有明确的分界；之前是 12% 白＋淡蓝选中，整体发平、边界糊。
-      itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
-      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
-      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.primary')),
-      itemMinHeight: LengthMetrics.vp(40),
-      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page'))
-    })
-      .width('100%')
+    Row({ space: 6 }) {
+      this.ModeChip(0, $r('app.string.camera_mode_usb'))
+      this.ModeChip(1, $r('app.string.camera_mode_ble'))
+      this.ModeChip(2, $r('app.string.camera_mode_ap'))
+      this.ModeChip(3, $r('app.string.camera_mode_sta'))
+    }
+    .width('100%')
+  }
+
+  /** 单个链路选项。选中＝主色实底反白，未选中＝比卡片暗一档的实底。 */
+  @Builder
+  ModeChip(index: number, label: Resource) {
+    Button(label)
+      .layoutWeight(1)
+      .height(38)
+      .padding({ left: 2, right: 2 })
+      .fontSize(FontSize.Caption)
+      .fontWeight(this.svc.linkMode === index ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.svc.linkMode === index
+        ? $r('app.color.text_on_primary')
+        : $r('app.color.text_secondary'))
+      .backgroundColor(this.svc.linkMode === index
+        ? $r('app.color.primary')
+        : $r('app.color.bg_page'))
+      .borderRadius(pillRadius(38))
+      .onClick(() => { this.onSelectMode(index); })
   }
 
   /** 三步引导的一条：编号 + 一句话。 */
@@ -739,18 +748,16 @@ export struct CameraPage {
   /**
    * 页首立牌：当前（或上次）连接的相机商品图。
    *
-   * 这块特意做成**整屏通栏**（不吃页面 16vp 边距），和官方 SnapBridge 一样，
-   * 相机是「站在一块台面上」而不是「浮在空中一张图」：
+   * **没有背板**。上一版给这块铺了 `hero_bg` 通栏色，结果和页面底色差了一档，
+   * 反而更割裂——产品图不该自带一块「底板」。现在整块背景透明，只有两样东西：
    *
-   * 1. 背板 `hero_bg` 从顶部铺满，最后 18% 渐隐到页面底色——上下都没有硬边，
-   *    于是这块和下面的卡片是同一页，而不是贴在页首的一张图片；
-   * 2. 机身下方一层**倒影**（同一张图上下翻转 + 渐变淡出），把物体「压」在
-   *    台面上，这是商品图最有效的落地手段；
-   * 3. 右下角 `Ver. 1.04 / 序列号 8079350` 是真实机身信息，和下面设备信息卡
-   *    同一套口径，尺寸压到 10fp——它只用于「确认是哪台」，不抢视线。
+   * 1. 机身后面一圈**很淡的径向光**（`hero_glow`，深色 14% 白、浅色不可见）。
+   *    黑机身压黑底会糊，光负责把轮廓托出来；径向渐变没有边界，不会画出方框；
+   * 2. 机身下方一层**倒影**，向下淡出到页面底色——物体被「压」在页面上，
+   *    这块因此和下面的卡片连成一体，而不是浮在上面的一张图。
    *
-   * 型号名不在这里：它挪到了标题栏（`MainScreen.tabTitle()`），页首只留产品。
-   * 断开时**只有图片**降到 72%，元数据保持原样（文字变暗就读不出来）。
+   * 型号名与序列号都在标题栏（`MainScreen.NormalTitleRow`），页首只留产品。
+   * 断开时只有图片与倒影变淡，其余不变。
    */
   @Builder
   StandeeHero() {
@@ -768,32 +775,13 @@ export struct CameraPage {
           this.StandeeReflection()
         }
         .width('100%')
-        .padding({ top: 10 })
-
-        Row({ space: 12 }) {
-          Blank()
-          if (this.heroVersion() !== '') {
-            Text(this.heroVersion())
-              .fontSize(FontSize.Micro)
-              .fontColor($r('app.color.text_tertiary'))
-          }
-          if (this.heroSerial() !== '') {
-            Text($r('app.string.camera_hero_serial', this.heroSerial()))
-              .fontSize(FontSize.Micro)
-              .fontColor($r('app.color.text_tertiary'))
-          }
-        }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 4, bottom: 12 })
+        .padding({ top: 12, bottom: 4 })
       }
       .width('100%')
-      .linearGradient({
-        angle: 180,
-        colors: [
-          [$r('app.color.hero_bg'), 0],
-          [$r('app.color.hero_bg'), 0.8],
-          [$r('app.color.bg_page'), 1]
-        ]
+      .radialGradient({
+        center: ['50%', '46%'],
+        radius: 210,
+        colors: [[$r('app.color.hero_glow'), 0], ['#00000000', 1]]
       })
     }
   }
@@ -802,8 +790,10 @@ export struct CameraPage {
    * 立牌倒影：同一张图上下翻转，塞进一个只有半高的裁剪盒里。
    *
    * 裁剪盒与图片同宽、`alignContent: Top`，所以盒子露出的正好是被翻转后的
-   * 「上半截」＝原图的下半截，接在原图脚下就是镜像。上面再盖一层从透明到
-   * `hero_bg` 的渐变，让它往下淡出——比调透明度更像地面反光。
+   * 「上半截」＝原图的下半截，接在原图脚下就是镜像。两个必须注意的点：
+   * - 图片要往上挪 12vp：原图底部自带投影，镜像后会在倒影顶端糊成一条灰带；
+   * - 渐变的第二档取 0.34 而不是直接线性到底，纯线性时平均不透明度只剩一半，
+   *   倒影会淡到看不见。
    */
   @Builder
   StandeeReflection() {
@@ -815,7 +805,6 @@ export struct CameraPage {
         .interpolation(ImageInterpolation.High)
         .draggable(false)
         .scale({ x: 1, y: -1 })
-        // 往上挪一点：原图底部那块是自带投影，镜像后会在倒影顶端糊成一条灰带
         .translate({ y: -12 })
         .opacity(this.svc.connected ? 0.26 : 0.18)
       Column()
@@ -823,23 +812,12 @@ export struct CameraPage {
         .height('100%')
         .linearGradient({
           angle: 180,
-          colors: [['#00000000', 0], ['#00000000', 0.34], [$r('app.color.hero_bg'), 1]]
+          colors: [['#00000000', 0], ['#00000000', 0.34], [$r('app.color.bg_page'), 1]]
         })
     }
     .width('100%')
     .height(REFLECTION_HEIGHT)
     .clip(true)
-  }
-
-  /** 立牌右下角：`Ver. 1.04`；版本号未知时不渲染。 */
-  private heroVersion(): string {
-    const v = CameraModelStore.getInstance().version;
-    return v === '' ? '' : `Ver. ${v}`;
-  }
-
-  /** 立牌右下角：机身序列号；未知时不渲染。 */
-  private heroSerial(): string {
-    return CameraModelStore.getInstance().serial;
   }
 
   build() {

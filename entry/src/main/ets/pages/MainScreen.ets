@@ -4,6 +4,7 @@ import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { cameraStandeeLabel } from '../utils/CameraStandee';
+import { CameraModelStore } from '../model/CameraModelStore';
 import { CameraService } from '../services/CameraService';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { HandednessService } from '../services/HandednessService';
@@ -257,6 +258,18 @@ export struct MainScreen {
     return $r('app.string.tab_settings');
   }
 
+  /**
+   * 型号右下角的序列号角标。
+   *
+   * 只在相机页、且认出了机型时显示：认不出机型时标题是「相机」，挂一串数字
+   * 没有意义。序列号来自 `CameraModelStore`（BLE 广播名尾段），没连过 PTP 也有。
+   */
+  private cameraSerialBadge(): string {
+    if (this.visualTab !== 1) return '';
+    if (cameraStandeeLabel(this.svc.cameraModel) === '') return '';
+    return CameraModelStore.getInstance().serial;
+  }
+
   /** 多选态标题文字：官方图库是「已选择 N 项」，左对齐跟在关闭钮后面。 */
   private selectTitleText(): ResourceStr {
     return $r('app.string.gallery_select_title', this.gallerySelectedCount);
@@ -481,12 +494,25 @@ export struct MainScreen {
   @Builder
   NormalTitleRow() {
     Row() {
-      Text(this.tabTitle())
-        .fontSize(FontSize.Display)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary'))
-        .maxLines(1)
-        .layoutWeight(1)
+      // 型号 + 序列号角标：序列号跟型号右下角齐底、10fp，像机身上的铭牌
+      Row({ space: 6 }) {
+        Text(this.tabTitle())
+          .fontSize(FontSize.Display)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .flexShrink(1)
+        if (this.cameraSerialBadge() !== '') {
+          Text(this.cameraSerialBadge())
+            .fontSize(FontSize.Micro)
+            .fontColor($r('app.color.text_tertiary'))
+            .padding({ bottom: 5 })
+            .flexShrink(0)
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(VerticalAlign.Bottom)
 
       if (this.visualTab === 0 && this.svc.photos.length > 0) {
         if (this.settings.displayMode === 'file_first') {
