@@ -13,6 +13,7 @@
 - `PtpError`（定义在 `PtpHost.ets`）：`code > 0` 是相机 PTP 响应码，`code < 0` 是传输层错误（`PTP_ERR_USB` / `PTP_ERR_NOT_OPEN`）。服务层用 `describeScanError()` 映射成可执行文案（`0x200F` 拒绝访问、`0x200E` 只读卡、`0x2008` 无效存储等）；**不要再把失败折叠成 `null` / `[]`**（ISSUE-002）
 - `collectPhotoHandles()`：递归遍历目录，用 `GetObjectHandles` 的格式筛选（`0x0000` 与 `0x3001`）区分文件与目录，不使用启发式判断
 - `loadThumbnailsRowByRow()`：每 4 张为一组加载，整组完成才递增 `thumbnailVersion`
+- `getOriginalBytes(handle)`：给预览器「分享原图」用，返回相机原始压缩字节（优先读 `compressedCache`，未命中时串行取一次 USB 并缓存）；不重新编码、保留 EXIF。扫描中返回 null，避免和扫描队列抢 USB。
 - `loadFullPhoto(handle)`：优先读 `compressedCache`，未命中走 USB，解码在 TaskPool 里执行，返回 `DecodedPhotoResult`（PixelMap + 旋转后的尺寸）。完成时打一行四段耗时 `下载完成: 1.0s (取图 …ms / 方向 …ms / 拷贝 …ms / 解码 …ms)`：**「第一次打开照片卡一下」先看这行**——取图占大头是 USB/排队，拷贝占大头是主线程 30MB `ArrayBuffer.slice`，解码占大头才是 TaskPool。
 - **邻近预加载半径是 2，且预览器打开期间整体挂起**（`suspendNeighborPreload` / `resumeNeighborPreload`）。以前是 5 且每翻一张就重新排队 10 张，与预览器自己的队列抢 USB。**解码按最长边降采样到 `FULL_DECODE_MAX_EDGE`（3072px）**：手机屏幕长边约 2700px、预览器最多 5x 捏合，3072 已够用；24MP 原图全尺寸是 96MB/张，预览器同时驻留 6-7 张会把内存与纹理带宽打满。降采样用 `DecodingOptions.desiredSize`（2026-11-07 在模拟器把上限压到 600 验证过，日志 `full decode done 600x400 scale=0.500`）。
 - `downloadPhotos(handles, onProgress, ctx)`：批量下载到沙箱，按拍摄时间匹配 GPS 并写入 EXIF，最后经 `showAssetsCreationDialog` 保存到系统相册，同时维护 `download_registry.json`
@@ -41,7 +42,7 @@
 
 - `start()` 在 `EntryAbility.onCreate` 调用，动态订阅 `usual.event.hardware.usb.action.USB_DEVICE_ATTACHED`；`stop()` 在 `onDestroy` 调用，`onForeground` / `onBackground` 维护前后台标志。
 - 相机插入后延时 800ms 再枚举（相机常重枚举 `2-2 → 2-3 → 2-4`），用 `utils/UsbAttachUtil.ets` 的 VID/PID/产品名做键，15 秒内只处理一次；`CameraService.scanning` 或 `connected && usable` 时跳过。
-- **前台**：`@Trace attachVersion++`，`MainScreen.@Monitor('usbWatcher.attachVersion')` 切到相机页并弹「发现相机」对话框；点「开始扫描」走 `scanForCamera(false, true)`。预览器/二级页在栈顶时不抢前台。
+- **前台**：`@Trace attachVersion++`，`MainScreen.@Monitor('usbWatcher.attachVersion')` 切到相机页并弹「发现相机」对话框；「稍后」在左、「开始扫描」在右（右侧高亮），点「开始扫描」走 `scanForCamera(true, true)`：有缓存走快速扫描，首次/无缓存由服务自动退化为全量。预览器/二级页在栈顶时不抢前台。
 - **后台（进程还活着）**：发普通通知（`id=4211`，与 `TransferNotice` 的 4210 错开），WantAgent 带 `usbCamera=1`；点通知回前台后由 `EntryAbility.onNewWant` → `setAppForeground(true)` 触发提示。通知未授权时静默跳过。
 - **冷启动不变**：应用没运行就收不到事件；插着相机启动也不会主动弹，仍走用户手动「搜索相机」。
 

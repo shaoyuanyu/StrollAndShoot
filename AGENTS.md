@@ -60,7 +60,7 @@ agent 在完成每次功能开发或 bug 修复后，**必须**自动更新版�
 | 依赖管理 | ohpm。运行时没有第三方依赖，devDeps 只有 `@ohos/hypium`、`@ohos/hamock` |
 | 静态检查 | code-linter，规则见 `code-linter.json5`（performance + security） |
 | 设备类型 | 仅 `phone`，见 `module.json5` 的 `deviceTypes` |
-| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.25.1 / 1025001 |
+| 版本号 | 定义在 `AppScope/app.json5`，写作时为 1.30.1 / 1030001 |
 | 开发机 | macOS + DevEco Studio（日常开发）；Linux + command-line-tools（完整构建、签名、部署） |
 
 ## macOS 开发环境
@@ -407,10 +407,12 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 
 | 文件 | 作用 |
 |---|---|
-| `debug/MockPtpDevice.ets` | 虚拟相机的“硬件”：USB 描述符、DeviceInfo、1 个 storage、`DCIM → 100MOCK / 101MOCK` 两层目录树、38 张照片的元数据，以及按 handle 现场编码出的 JPEG（缩略图 180×120，原图 1200×800） |
+| `debug/MockPtpDevice.ets` | 虚拟相机的“硬件”：USB 描述符、DeviceInfo、1 个 storage、`DCIM → 100MOCK / 101MOCK` 两层目录树、38 张照片的元数据，以及按 handle 现场编码出的 JPEG（缩略图 180×120，原图 1200×800；4×3 多色块 + 白框 + 中心十字，左上角固定深色块做方向参照） |
 | `debug/MockPtpSession.ets` | `PtpTransport` 的第二个实现：`connect` / `getDeviceInfo` / `getStorageIDs` / `getObjectHandles` / `getObjectInfo` / `getThumb` / `getObject` / `getPartialObject`，每个调用带少量延迟让进度条可见。**`getObject` 固定 520ms/张**（靠近真实 USB 单张原图耗时）：之前 120ms 时 38 张几秒就传完，进度浮岛的下载中 / 保存中 / 完成三种状态根本来不及看 |
 
-**`makeJpeg` 必须保持「一行渐变 + 逐行 memcpy」的写法**（2026-11-07 实测）：原先是 1200×800 逐像素写 RGBA，96 万次 JS 循环、每次 4 次写入，`hilog` 实测 **fill 就要 127–167ms，整张 130–175ms**，而且跑在 UI 线程上；打开一张照片会连续生成「当前 + 邻近预加载」好几张，真机上表现就是「一开图 / 一传输就卡」。改成先算一行（水平渐变）再 `u8.set(row, offset)` 复制后，fill 降到 **1–2ms**、整张 10–17ms（余下是原生的 `createPixelMap` + `packToData`）。日志里每次生成会打一行 `MockPtp: jpeg 1200x800 10ms (fill 1ms)`，改这块时先看这个数。
+**`makeJpeg` 必须保持「按色带算一行 + 逐行 memcpy」的写法**（2026-11-07 实测，2026-11-09 改成多色块后复核）：原先是 1200×800 逐像素写 RGBA，96 万次 JS 循环、每次 4 次写入，`hilog` 实测 **fill 就要 127–167ms，整张 130–175ms**，而且跑在 UI 线程上；打开一张照片会连续生成「当前 + 邻近预加载」好几张，真机上表现就是「一开图 / 一传输就卡」。现在 4×3 色块图每个「色带行」只算一条行缓冲（横向 4 个色块 + 中心竖线 + 左右白框），再 `u8.set(row, offset)` 复制到该带所有行，fill 仍是 **1–2ms**、整张 10–17ms（余下是原生的 `createPixelMap` + `packToData`）。日志里每次生成会打一行 `MockPtp: jpeg 1200x800 10ms (fill 1ms)`，改这块时先看这个数。
+
+多色块 + 白框 + 中心十字是刻意的：纯色渐变看不出 `Contain`/`Cover` 的裁切差异，也看不出缩放锚点是否在几何中心、缩略图是否把边框裁掉。左上角固定深色块是方向/翻转的不对称参照。改图案时保持「每个色带只算一行」的结构，不要退回逐像素写。
 
 `PtpHost.ets` 里 `PtpSession` 与 `MockPtpSession` 共用 `PtpTransport` 接口，`CameraService.session` 声明为该接口，`scanForCamera()` 开头用 `syncSessionMode()` 按调试开关选实现。于是：
 
@@ -704,7 +706,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - **一级页**用 `.title({ builder: this.TitleBar, height: titleBarInsetVp() }, { barStyle: BarStyle.STACK })` 自定义 builder，见下文「顶部标题栏」；标题栏里的玻璃胶囊用通用属性 `systemMaterial`。
 - **轻量二级页**（如缓存管理）仍用 `.hideTitleBar(true)` + `components/PageHeader.ets`（自己避让状态栏）。
 - **定位记录页与轨迹全屏页**用原生 `.title()` 标题栏，返回/选择/日期胶囊才能拿到真材质。
-- **预览器** `.hideTitleBar(true)`，自己全屏；转场见 [PAGES.md](PAGES.md)。
+- **预览器** 用 `NavDestination.title({ builder, height }, { barStyle: BarStyle.STACK })` 挂自己的标题栏：标题栏是通用控件唯一能拿到真材质的两处区域之一；内容区顶部仍留 56vp（与 `PhotoMorph` 同源）让开。底部下载/收藏/分享放在一个 56vp 高的 `Tabs` 悬浮页签里当材质背板。转场见 [PAGES.md](PAGES.md)。
 - 轨迹全屏页用 `BarStyle.STACK` 自定义标题栏，地图内容可以延伸到标题栏下方；`hideBackButton(true)`，否则系统返回键会和自定义返回键叠成两个。
 
 #### 内容避让与底部留白
@@ -753,6 +755,8 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - `position` 的原点是标题栏顶部（= 屏幕顶部，因为 `windowLayoutFullScreen`），所以可以直接用屏幕绝对 vp 坐标（`WindowUtils.windowHeightPx` 换算）；
 - **标题栏容器不裁剪超出边界的子节点**，所以能画到屏幕中部和底部；材质照样生效，且**不会拦截其他区域的点击**（实测点「全选」、点缩略图、滚列表都正常）。
 
+**全屏预览器的底部操作栏（2026-11-10，用户已确认保留）**：内容区需要一条「下载 / 收藏 / 分享」玻璃操作栏时，用一个高度 56vp、`TabContent` 为空的 `Tabs` 当材质背板（`barOverlap(true)` + `barPosition: End` + `barFloatingStyle.systemMaterial`），照片区域仍由外层 `Column` 承担；直接给内容区的 `Row` 设 `systemMaterial` 不生效。这是为拿系统材质而接受的**设计语义例外**（不符合《底部页签》3–5 个一级导航的规范），2026-11-10 用户确认保留；若要严格合规，改成普通底部工具栏 + `backgroundBlurStyle`/渐变。
+
 **不要试图用弹层（popup / tips / dialog）在内容区拿材质 —— 它会吞掉整页点击**（同日实测，试过又退回）。官方确实把 `Popup控制` / `Tips控制` / `菜单控制` / `半模态转场` / `PromptAction` 列为「沉浸光感可在全页面生效」的接口，`bindPopup` + `CustomPopupOptions.systemMaterial` 也真能渲染出材质（折射、高光都对）。但**弹层一显示就铺一层全屏遮罩**：点标题栏「全选」、点缩略图、滚动列表全部失效；`autoCancel: false` + `focusable: false` + `levelMode: LevelMode.EMBEDDED`（需 `import { LevelMode } from '@ohos.promptAction'`）都救不回来。
 
 #### bindSheet 的材质
@@ -795,11 +799,11 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 #### 颜色资源
 
-颜色资源共 41 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
+颜色资源共 47 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
 
 - 品牌与语义：`primary`、`primary_light`、`primary_soft`、`status_connected`、`status_disconnected`、`status_error`、`button_danger`
 - 背景、材质与文本：`bg_page`、`bg_surface`、`bg_debug_log`、`thumbnail_placeholder`、`glass_bg`、`nav_bg`、`nav_bg_mid`、`nav_bg_weak`、`bg_page_fade`、`progress_track`、`scrim`、`filter_chip_bg`、`card_border`、`divider`、`text_primary`、`text_secondary`、`text_tertiary`、`text_on_primary`、`text_on_dark`、`log_text`
-- 预览器专用（始终深色）：`viewer_scrim`、`viewer_banner_bg`、`viewer_text_on_dark_80`、`viewer_text_on_dark_70`、`viewer_glass_button`、`viewer_chrome`、`viewer_chrome_motion`、`viewer_placeholder_bg`、`viewer_placeholder_thumb`、`viewer_placeholder_image`、`viewer_text_secondary`、`viewer_text_tertiary`、`viewer_accent`
+- 预览器专用（跟随深浅色；浅色为页面底、深色为纯黑）：`viewer_backdrop`、`viewer_scrim`、`viewer_scrim_top`、`viewer_scrim_clear`、`viewer_banner_bg`、`viewer_text_on_dark_80`、`viewer_text_on_dark_70`、`viewer_chrome_text`、`viewer_chrome_text_secondary`、`viewer_glass_button`、`viewer_chrome`、`viewer_chrome_motion`、`viewer_material_tint`、`viewer_placeholder_bg`、`viewer_placeholder_thumb`、`viewer_placeholder_image`、`viewer_text_secondary`、`viewer_text_tertiary`、`viewer_accent`
 
 设计语言为 HarmonyOS 沉浸光感：
 
@@ -807,6 +811,8 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - 纯黑/白卡片
 - 品牌蓝 `#0A59F7`（深色 `#4C91FF`）只用于主行动与选中态
 - 底栏与预览器标题栏使用半透明模糊材质
+
+**页面内监听深浅色变化**：用 `ApplicationContext.on('environment', callback)` 注册、`off('environment', callbackId)` 注销。回调里用 `WindowUtils.isDarkMode(ctx)` 取应用的有效模式，**不能用 `config.colorMode`**：官方文档明确，应用显式设置深浅色后，系统主题变化仍会触发该回调。`backgroundBlurStyle` 的 `colorMode`、`chromeBg()` 等在 build 里计算的值不会随资源系统自动刷新，必须用 `@Local` 状态驱动页面重建；预览器缩略图条已按此处理（2026-11-10，1.30.1）。
 
 **新增界面一律引用颜色资源与 UiTokens，不要写定颜色、字号、圆角、行高或图标尺寸。**
 
@@ -841,7 +847,9 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 ### 已核对官方结论
 
 - `linearGradientBlur(radius, options)` 的 `fractionStops` 是 `Array<[number, number]>`，每档含义是 **`[模糊程度, 模糊位置]`**，两个值范围都是 0–1；**模糊位置必须严格递增**，且数组至少 2 档，最后一档位置要写到 1，否则未覆盖区间的遮罩没有定义（模拟器上表现为三角碎片）。
-- 模拟器（Mate 80，HarmonyOS 7.0.0）的渲染服务在日志里会打 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false`：**GPU 不支持磨砂玻璃（沉浸光感）着色器**。单个悬浮页签的材质能看，但多选态这种「标题栏材质按钮 + 底部操作栏材质 + 页签材质」叠加、且持续重绘的场景，会退化成大片多边形色块。**这是模拟器能力限制，不是应用代码问题**：在改动前的基线上同样复现（2026-11-09 用 `git stash` 对照），关掉内容模糊、去掉操作栏材质、`barHeight` 0/56 都不改变。真机需单独确认。
+- 模拟器（Mate 80，HarmonyOS 7.0.0）的渲染服务在日志里会打 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false`：**GPU 不支持磨砂玻璃（沉浸光感）着色器**。单个悬浮页签的材质能看，但「标题栏材质按钮 + 底部操作栏材质 + 页签材质」叠加并持续重绘（多选态、画廊滚动/切页、预览器返回）时，会退化成大片多边形色块。**这是模拟器渲染管线的缺陷，不是应用代码问题**（2026-11-09 用 `git stash` 对照基线同样复现）。官方依据：UI Design Kit「模拟器支持情况」明确模拟器**不支持 HDS 沉浸视效（含沉浸光感材质）**；图形模块文档也列了「模拟器与真机的差异」；模拟器 FAQ 对图形异常的建议是清数据重启、更新驱动/模拟器。
+- **2026-11-09 深入 A/B**（画廊顶部彩色三角形）：把应用级 `ohos.arkui.UIMaterial.state` 设为 `disable`（`hilog` 里着色器日志归零）、全部 `systemMaterial` 换 `uiMaterial.Material.empty`、`backgroundBlurStyle` 换 `NONE`、完全移除 `linearGradientBlur`、去掉 `List.clip(false)` / `cachedCount(6, true)` / `virtualScroll`、关掉扫描浮卡、缩略图换成纯色块 —— 顶部大块彩色三角形**仍然复现**，形状随重绘变化；应用内 `Window.snapshot()`（`--ps shot`）同样能截到。结论：**不是某一个应用属性可以稳定规避的渲染器缺陷**，不要把这类整页截图当成布局验收依据。
+- **处理方式**：布局、状态、导航、交互用模拟器验证；**材质/模糊观感与整页视觉以真机为准**。模拟器上如果必须截图，可以用设置页「调试 → 关闭磨砂玻璃」（`utils/GlassEffect.ets` 统一换空材质、`BlurStyle.NONE`、0 模糊）减少材质叠加造成的乱花，但它**不能保证消除**上述渲染器缺陷；遇到持续花屏先重启/清数据重启模拟器、更新 DevEco Studio 与模拟器镜像，仍复现就用真机或向华为反馈（附 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false` 日志与复现步骤）。
 
 - USB 单次 `bulkTransfer` 的总数据（含 pipe、endpoint、buffer、timeout）必须小于 200KB，官方 `usbManager` 参考的 `bulkTransfer` 一节明确写了，超出返回 -1。`usbSubmitTransfer` 走 ashmem，官方只约束 `length` 为 [0, INT_MAX]；实测 1MB / 8MB 可用。改动缓冲区必须在真机验证。
 - `@SyncMonitor`：官方文档写明从 API 23 开始支持，`@Monitor` 从 API 12 开始支持。

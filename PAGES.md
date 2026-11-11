@@ -12,7 +12,7 @@
 
 ### MainScreen.ets
 
-NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时取该缩略图的屏幕矩形（`getRectangleById('thumb_<handle>')`，px）与附近 81 个单元格的位置缓存，连同 `positionLookup` 回调一起作为 NavPathStack 参数传给预览器，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。缩略图位图不必传：预览器自己从 `svc.thumbnailPixelMapMap` 取。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。USB 插入相机时，`@Monitor('usbWatcher.attachVersion')` 会切到相机页并弹「发现相机」确认框；预览器/二级页在栈顶时不抢前台。
+NavDestination，标签页容器。持有标签状态、下载进度、已下载集合、GPS 开关状态、选择模式。订阅 `cachingDialogRequired` 弹出“发现新相机”对话框。点击缩略图时取该缩略图的屏幕矩形（`getRectangleById('thumb_<handle>')`，px）与附近 81 个单元格的位置缓存，连同 `positionLookup` 回调一起作为 NavPathStack 参数传给预览器，再 `pushPath('PhotoViewerScreen')` 触发一镜到底转场。缩略图位图不必传：预览器自己从 `svc.thumbnailPixelMapMap` 取。返回键在选择模式下先退出选择模式。标题栏是自己写的 `@Builder`（`NormalTitleRow` / `SelectTitleRow`）：大标题 + 右侧玻璃胶囊（格式筛选是 `Select` 下拉、加一颗「选择」胶囊），材质用通用属性 `systemMaterial`。USB 插入相机时，`@Monitor('usbWatcher.attachVersion')` 会切到相机页并弹「发现相机」确认框；预览器/二级页在栈顶时不抢前台。确认框的「稍后」在左、「开始扫描」在右（`secondaryButton` + `fontColor: primary`），点击走 `scanForCamera(true, true)`（有缓存走快速扫描，否则自动全量）。
 
 标签页索引拆成两个：`currentTab` 是 `Tabs({ index })` 的受控索引，只在 `onChange`（切换动画结束后）更新；`visualTab` 是标题栏、底部页签、浮岛等视觉状态用的索引，在 `Tabs.onSelected`（点击页签 / 滑动离手开始切换动画时）更新。**不要把 `currentTab` 用于标题栏条件**，否则旧页的按钮会在新页上停留整个 220ms 动画。官方 `Tabs` 的 `onChange` 说明与示例 17 就是这个用法。
 
@@ -39,6 +39,8 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 2026-11-09 复现：模拟器（Mate 80 / 7.0.0）进入多选态后，整页会出现大片白/灰/彩色多边形。排查结论是**模拟器 GPU 不支持磨砂玻璃着色器**（`hilog` 里 `GEXFrostedGlassBlurShaderFilter::IsFilterSupported is false`），而多选态同时挂了「标题栏材质按钮 + 底部操作栏材质 + 页签材质」并持续重绘。用 `git stash` 回到改动前基线同样复现；关掉内容区模糊、去掉操作栏材质、`barHeight` 设 0 或 56 都不消失。**功能本身正常**（选择计数、拖拽框选、全选、下载栏都工作），真机需要另行确认材质渲染。
 
+**调试缓解与排查结论（2026-11-09）**：设置页「调试 → 关闭磨砂玻璃」打开后，`utils/GlassEffect.ets` 用 `uiMaterial.Material.empty` / `BlurStyle.NONE` / 0 模糊替换所有材质与模糊，材质叠加造成的乱花会减少。但本轮进一步 A/B 发现：**即使把应用级材质开关设为 disable、全部材质换空、完全移除 `linearGradientBlur`、去掉 `List.clip(false)`/`cachedCount(6,true)`/`virtualScroll`、关掉扫描浮卡、把缩略图换成纯色块，顶部的大块彩色三角形仍然复现**，且形状随重绘变化；应用内 `Window.snapshot()` 同样能截到。这说明是模拟器的渲染管线（virtio-gpu / GLES 驱动）在模糊与图层合成上的缺陷，不是某个应用属性可以稳定规避的。处理方式：**布局、状态、交互用模拟器验证；材质/模糊观感与整页截图以真机为准**。官方依据：UI Design Kit「模拟器支持情况」明确模拟器不支持 HDS 沉浸视效（含沉浸光感材质），图形模块也有「模拟器与真机的差异」；模拟器 FAQ 建议清数据重启、更新驱动/模拟器。
+
 ### 多选模式
 
 2026-11-06 对照顶行官方图库（`com.huawei.hmos.photos`）逐像素校准过一轮，形态与实现要点如下。
@@ -62,6 +64,8 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 #### 选中态
 
 与官方图库一致，**不加遮罩、不加描边**（早期版本用 `primary_soft` 蒙一层淡蓝 + 左上角勾选，都是错的）。勾选圆点 20vp，在单元格 **右下角**、内缩 4vp：选中实心蓝 + 白勾，未选半透明黑 + 1.5vp 白描边。已下载的照片不可选，只在 **右上角** 留一个绿点（`status_connected`，10vp），**不要再给整张缩略图描一圈绿框**。
+
+**绿点即时刷新（2026-11-09）**：`GalleryPage` 用 `@Monitor('downloadedKeys')` 清空行缓存并递增 `downloadedDotRevision`，把它编进行 key。`Repeat` 命中相同 key 不会重跑 `each`，不这样做时从预览器「保存到相册」后回到画廊，绿点要等滚动/切页才出现。
 
 #### 日期标题（含整组全选）
 
@@ -109,6 +113,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 导航类行带 `chevron_right`（定位记录管理、缩略图缓存）。删除定位记录统一放在「定位记录管理」页（多选批量删除，或全屏轨迹页「更多」里删当天），设置页不再提供「清除定位记录」入口，避免误触。
 - 调试日志面板仍是等宽字体、高 240vp，只在调试包里渲染。
 - 调试区新增「模拟 GPS 轨迹」开关：以当前定位为起点生成相机图案，覆盖今天的地图/列表显示；真实 `gps_records.jsonl` 不变，关掉开关立即恢复。仅 debug 包可见。
+- 调试区新增「关闭磨砂玻璃」开关（2026-11-09，仅 debug 包）：打开后 `utils/GlassEffect.ets` 把所有 `.systemMaterial(...)` 换成官方 `uiMaterial.Material.empty`、`backgroundBlurStyle` 换成 `BlurStyle.NONE`、`linearGradientBlur` 半径归零。模拟器 GPU 不支持磨砂着色器，材质叠加时会画出乱花的多边形，打开它才能拿截图验收布局与交互；真机不需要。
 
 调试包判定与模拟相机见 [AGENTS.md](AGENTS.md) 的「调试用的虚拟相机」；模拟 GPS 轨迹见上文「SettingsPage.ets」。
 
@@ -140,6 +145,20 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - **全尺寸加载不能被静默丢弃**：USB 忙（另一张正在下载且不可取消）时把请求记进 `pendingFullResHandle`，当前下载结束的 `finally` 里优先补投「当前页」，其次补投排队的那张（ISSUE-014-A/B）。
 - 原图按“当前照片优先，前后各 3 张”排队串行加载，手势期间暂停；预加载结果只写普通 Map，等翻到那张时再由 `presentCached()` 挂到渲染状态上。淘汰时 `PixelMap.release()` 要 `setTimeout(0)` 延后，不要正好压在手势中间。返回时用当前照片的缩略图更新共享元素，保证转场起点正确。
 - 一次捏合结束会打两行性能日志：`ViewerPerf pinch updates=…, frames=…, fps=…, lateFrames=…, gapMax=…ms, workMax=…ms`（hilog，tag `ViewerPerf`）与 `PERF viewer pinch: swiperScrolls=…`（AppLog）。fps 掉 / gapMax 大 = UI 线程被拖住；fps 正常但不跟手 = 渲染侧。
+- **控件显隐只由单击照片触发，不做自动隐藏**（2026-11-09 按用户反馈去掉 2 秒自动隐藏）：单击照片切换标题栏与底部操作栏；缩略图条常驻，不参与显隐。隐藏分两步，先淡出 180ms 再 `Visibility.Hidden`。**不能**用 `if` 拆掉标题栏（照片区域会瞬间变高、图片位置跳动，一镜到底落点也会偏），也**不能**只把父容器设成 `hitTestBehavior(None)`——它只作用于父节点本身，子按钮仍会响应，隐藏后点击原来的返回/保存位置仍会误触（实测），必须用 `Visibility.Hidden` 让整棵子树退出命中测试。缩略图条不跟 `overlayAlpha`，只跟转场的 `chromeAlpha`。
+- **标题栏挂在 NavDestination.title（2026-11-10）**：高度仍是 56vp（`VIEWER_TITLE_BAR_HEIGHT`），返回与「详情」两颗 40vp 圆形钮用 `systemMaterial(ULTRA_THIN + 跟随主题的 materialColor)`，背板用压色渐变而不是材质。**通用组件只有 Navigation/NavDestination 标题栏与横向 Tabs 的底部 TabBar 两处能拿到系统沉浸光感**，在内容区写 `systemMaterial` 不生效——这就是之前「预览器没有沉浸光感」的根因。标题只显示拍摄时间 + 「序号 / 总数」；文件名 / 大小 / 分辨率移进上滑详情面板，避免一行副标题被省略号吃掉。标题栏高度必须与 `PhotoMorph` 的常量同源，否则一镜到底的落点会和真实照片错开几 vp。
+- **底部操作栏（2026-11-10）**：下载 / 收藏 / 分享放在一个只有 56vp 高的 `Tabs` 悬浮底部页签里（`barOverlap(true)` + `barPosition: End` + `barFloatingStyle.systemMaterial`），`TabContent` 为空，照片区域仍由内容 `Column` 承担。材质底色跟随主题（浅色给白底、深色给黑底），避免胶囊与页面背板撞色。操作栏放在缩略图条**上方**（底部让出导航条 + `thumbStripHeight()` + 8vp），随单击照片与标题栏一起淡出；缩略图条常驻。
+  - **产品决策（2026-11-10，用户确认）**：保留「Tabs 当材质背板」的 workaround，接受它与《底部页签》规范（页签放 3–5 个一级导航、不放次要动作）的语义偏差；不改成普通工具栏。以后若要求严格合规，按「普通底部工具栏 + backgroundBlurStyle/渐变」替换即可。
+- **照片显示区域上移（2026-11-11）**：底部控件（缩略图条 + 间距 + 操作栏）占掉图片区域一截，照片原来在整块区域里居中，视觉上偏下。现在主 `Swiper` 底部让出 `bottomChromeHeight() = thumbItemW + 16 + 8 + 56`，照片在剩余可见区域居中；`MorphGeometry.containRect(aspect, bottomChrome)` 使用同一个值，保证一镜到底落点不偏。以 365vp 屏宽、9 个缩略图为例：`itemW ≈ 35.3vp`，底部控件 `≈ 115.3vp`，照片中心上移 `≈ 57.6vp`。
+- **保存到系统相册**：底部操作栏的下载项未保存时是下载图标、已保存是绿色对勾、保存中显示转圈。复用画廊的 `svc.downloadPhotos`（USB 读取 → 写沙箱 → GPS → 系统相册确认框 → 下载记录）；先清空并暂停预览器自己的邻近预加载，避免抢同一条 USB 管道。保存成功后通过 NavPathStack 传入的 `onDownloadSaved` 回调让 `MainScreen.syncDownloadedKeys()` 刷新画廊绿点。扫描中拒绝保存；系统确认框取消时以「下载记录里没有这条」为准提示「已取消保存」。
+- **收藏（2026-11-10）**：`model/FavoritesStore.ets` 用 `PersistenceV2`（key `photo_favorites`）持久化键列表，键与下载记录同源（`cameraKey::filename::size`）。预览器底部切换收藏，画廊单元格左下角显示书签角标，跨重启保留。
+- **分享（2026-11-11）**：**单击分享 = 原图**、**长按分享 = 压缩图**，两者都不弹选择框，直接走 `systemShare.SharedData` + `fileUri.getUriFromPath` 拉起系统面板。原图走 `CameraService.getOriginalBytes()`（相机原始压缩字节，优先命中 `compressedCache`，未命中时串行取一次 USB），不重新编码、保留 EXIF；压缩图把已解码 `PixelMap` 重编码为高质量 JPEG。取原图期间会暂停预览器的邻近预加载；扫描中拒绝取原图并提示。
+- **浅色模式适配（2026-11-10）**：预览器不再固定深色，页面背板、顶部压色、标题/操作栏文字、占位图、缩略图条与系统栏都跟随应用深浅色。`MorphBackdrop` 用 `viewer_backdrop`（浅色 `#F1F3F5` / 深色 `#000000`），与画廊页面同色，所以一镜到底的背景在浅色下不会先压黑再亮回来。`viewer_scrim_top/clear`、`viewer_glass_button`、`viewer_material_tint`、`viewer_chrome`、`viewer_chrome_motion`、`viewer_placeholder_*` 在 `base` / `dark` 各一套；标题与操作栏文字用 `viewer_chrome_text` / `viewer_chrome_text_secondary`。压在照片上的加载转圈（`text_on_dark` + `viewer_scrim`）与扫描横幅（`viewer_text_on_dark_*` + `viewer_banner_bg`）保持深色，避免照片底色变化时对比度丢失。`backgroundBlurStyle` 的 `colorMode`、系统栏图标由 `WindowUtils.isDarkMode()` 决定；进入/退出预览器时用 `applyThemeSystemBars()` 与全局主题对齐。浅色下标题栏、底部操作栏与详情面板的材质需在真机复核，模拟器只能验证布局、配色与材质形状。
+- **停留期间切换系统主题（2026-11-10，1.30.1）**：预览器在 `aboutToAppear` 注册 `ApplicationContext.on('environment')`，在 `aboutToDisappear` 用 `off('environment', callbackId)` 注销。回调里用 `WindowUtils.isDarkMode(ctx)` 取应用的有效模式，**不能用 `config.colorMode`**：应用显式设置深浅色时，系统主题变化仍会触发该回调。把 `isDark` 改成 `@Local` 并参与 `build()`（缩略图条 `backgroundBlurStyle` 的 `colorMode` 依赖它），主题切换时页面重建，`chromeBg()` 返回的颜色资源才会按新主题重新解析，同时重刷系统栏。此前缩略图条不跟随，就是因为它只在 `aboutToAppear` 读了一次普通字段，之后既不重建也没有新的 colorMode。
+- **上滑详情（2026-11-11）**：`bindSheet`（`detents: [MEDIUM, LARGE]`，`systemMaterial: THICK`；调试关闭磨砂时退回不透明底色 + 顶部圆角），显示文件名、拍摄时间、尺寸、文件大小、格式、相机与位置。位置按 `captureDate` 从 `GpsRecorder.findClosest` 匹配（30 分钟窗口），用单点 `GpsTrack.buildDayTrack(day, [gps])` 复用 `GpsTrackMap`：签名包上直接显示地图 + 点位标记，未签名包走 Canvas 示意图；点击地图/「查看当天轨迹」收起面板并 push 到 `GpsTrackViewerPage`。`GpsTrackMap` 新增 `showStats=false` 隐藏「1 条记录」统计，并修复单点轨迹不画折线但仍要加 marker。标题栏右侧 info 钮也能打开。
+- **上滑手势**：挂在主 `Swiper` 的被动 `onTouch` 上采样（上移 ≥ 40vp 且横向位移小），不额外加 PanGesture，避免和捏合 / 翻页抢识别；单击照片的显隐也在这里统一处理（位移 < 8vp），**不要再给 `MainImageView` 单独挂 `onClick`**——上滑结束时会先触发一次 click，把标题栏和缩略图条误藏。
+- **转场期间就开始取原图（2026-11-11）**：`initFromParams` 先把首张照片的 `spinnerOn` 置真，并立即 `loadFullRes(handle, true)`，不再等一镜到底落地。共享层始终用缩略图，全尺寸结果只更新被 `photoAlpha` 盖住的内容层；照片落位时通常已经就绪。翻页仍走 `SPINNER_DELAY_MS`，避免快速滑动时转圈闪。
+- **缩略图条**：非中心项透明度 0.68，中心项保持 1.3x + 2vp 高亮边框，减少缩略图对照片的视觉干扰。
 
 ### 扫描期间只看缩略图（2026-11-09）
 
@@ -153,9 +172,9 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 1. **只有照片在动**：起于被点缩略图单元格的矩形（方图、`Cover` 居中裁切），终于照片在预览器里的实际显示矩形（`Contain` 等比放入图片区域）。因为一直用 `Cover` 画，矩形从方图长到照片比例的过程天然就是「从中心裁切逐渐露出全图」，落位时矩形比例 == 照片比例，`Cover` 与 `Contain` 完全重合，可以无缝交还给页面内容。
 2. **背景 180ms 压到纯黑**；
-3. **标题栏与缩略图条在照片快落位时才淡入**（220ms 起、200ms 淡完），返回时反过来先淡出 140ms，再收照片。
+3. **标题栏、缩略图条与底部操作栏在照片快落位时才淡入**（220ms 起、200ms 淡完），返回时反过来先淡出 140ms，再收照片；缩略图条只跟 `chromeAlpha`，不跟单击显隐。
 
-层级（都在 `PhotoViewerScreen` 的根 `Stack` 里，从下到上）：`MorphBackdrop`（黑底，`@Trace backdrop` 逐帧变）→ 内容 `Column`（主图 `Swiper` 挂 `.opacity(photoAlpha)`、标题栏与缩略图条各挂 `.opacity(chromeAlpha)`）→ `PhotoMorphLayer`（共享照片层，仅 `morph.visible` 时挂载）。
+层级（都在 `PhotoViewerScreen` 的根 `Stack` 里，从下到上）：`MorphBackdrop`（页面背板，浅色为页面底、深色为纯黑，`@Trace backdrop` 逐帧变）→ 内容 `Column`（主图 `Swiper` 挂 `.opacity(photoAlpha)`，缩略图条挂 `.opacity(chromeAlpha)`）→ 底部操作栏（`.opacity(chromeAlpha * overlayAlpha)`，在缩略图条上方）→ `PhotoMorphLayer`（共享照片层，仅 `morph.visible` 时挂载）。标题栏在 NavDestination 的 `.title()` 层，自己挂 `chromeAlpha * overlayAlpha`。
 
 - **禁止再对整个 NavDestination 做 scale / translate / clip**（旧做法）：那会把标题栏、缩略图条一起从一个小方块里缩放着长出来，观感是「一个迷你版预览器在放大」，和官方差得很远。曾同时用 `showDetailContent` 布尔量做内容显隐，而它在 `animateTo` 里被翻转，`if` 立刻读到新值 → 共享层在动画第 0 帧就被拆掉，等于什么都没做。
 - **`animateTo` 不会插值「本帧才创建」的节点的 `width/height/position`**（2026-11-07 实测：`onAppear` 里拿到的就是终点矩形）。共享层是转场开始那一刻才创建的，所以矩形必须用 `displaySync` 帧回调逐帧写 `PhotoMorphState`，缓动值取 `curve.interpolate(t)`（与引擎同一条曲线）。背景与标题栏的 `opacity` 作用在常驻节点上，可以继续用 `animateTo`。
@@ -166,14 +185,14 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
   - ③（当前）`startRectAnimation()` 先 `morph.apply(from)`，再用 `ui.animateTo({ duration, curve, onFinish }, () => morph.apply(to))` 让框架插值，JS 只在首尾各跑一次。真机观感恢复正常，`onFinish` 里与共享层同帧换手并 `finishTransition()`，另有 `duration + 200ms` 的兜底定时器防止共享层卡住。
   - **前提**：共享层必须在动画开始前已经渲染过一帧（`onReady` 里就 `apply(起点)` + `visible = true`）。`animateTo` 不会插值「本帧才创建」的节点的 `width/height/position`；若以后改成「动画开始才创建共享层」，必须退回逐帧方案。
 - 转场埋点：`ViewerPerf transition push|pop native <ms>ms`（原生动画耗时）。改转场后先看这行，别只凭观感；需要逐帧数据时再把 `PinchPerf` + `displaySync` 的采样接回来。
-- 预览器页的 `NavDestination` 背景必须透明、内容区也**不许铺纯黑底**（否则下层画廊从第一帧就被挡住，只剩共享层在动）；黑底只由 `MorphBackdrop` 提供，它同时负责「透过它看到画廊」。
+- 预览器页的 `NavDestination` 背景必须透明、内容区也**不许铺不透明的页面底色**（否则下层画廊从第一帧就被挡住，只剩共享层在动）；页面背板只由 `MorphBackdrop` 提供，它同时负责「透过它看到画廊」。
 - 返回起点取「当前屏幕上的照片矩形」：未放大就是 `Contain` 矩形；放大过则用 `ZoomableImage.onTransform` 在**手势结束时**汇报的 `scale/offX/offY` 换算（`rect × s` 绕同一中心缩放再平移），这样放大状态下按返回也从当前画面收回，不会先跳回等比显示。`offX/offY` 是屏幕空间位移（`applyTransform` 的注释已经写明 finger 位移要乘 scale 换回屏幕空间，说明 `.translate` 在 `.scale` 之后应用）。
 - **返回终点 = 当前照片的缩略图矩形；格子在可视区外就先把画廊滚过去再收**（对齐官方图库「回家时网格已经在当前张」）：
   - 目标格子可能①没被 `virtualScroll` 渲染（视口外）②渲染了但在屏幕外（`cachedCount` 缓存窗口），两种都拿不到可用的屏幕矩形，收回会收进看不见的地方。
   - `popRectFor()` 用 `positionLookup`（`getRectangleById('thumb_<handle>')` 实时查，push 时缓存的位置**只作兜底**，因为它可能已过期）判断「至少一半在窗口内」；否则通过 `requestGalleryScroll` → `MainScreen.galleryScrollVersion` 计数 → `GalleryPage` 的 `@Monitor` → `scroller.scrollToIndex(row, false, ScrollAlign.CENTER)` 滚过去。
   - 预览器按帧重试目标矩形（`POP_TARGET_RETRY_MS` × `POP_TARGET_RETRIES`），拿到才开始收回；**背景透出也挪到这一刻**，所以网格的跳变发生在完全不透明的背景下，用户看不到；请求过滚动还要多等 `POP_SCROLL_SETTLE_FRAMES` 一帧让新布局上屏。
   - 最终兜底顺序：实时矩形 → push 时缓存 → 最初点击的格子（`pop: 目标矩形兜底 …`）。日志里 `pop: 目标格子不在可视区，请求画廊滚动` / `viewer pop: scrollToIndex N` / `pop: 收回目标 …` 三行就能定位这类问题。
-- 打开照片时**不立刻弹转圈**：`PhotoRenderState.spinnerOn` 在加载超过 `SPINNER_DELAY_MS`（420ms）才置真，否则照片落位瞬间会盖一个菊花，和「糊图先出现再变清晰」的官方观感冲突。
+- 首次打开照片时**照片一落位就显示转圈**：`initFromParams` 先把 `spinnerOn` 置真，`finishTransitionGate()` 直接发起原图下载；翻页仍等 `SPINNER_DELAY_MS`（300ms）再显示，避免快速滑动时转圈闪。
 - 转场日志：`push morph <l,t> <w>x<h> pm=…` 与 `pop: handle=… pm=… rect=… -> …`（AppLog），排查时先看这两行矩形是否等于缩略图格子 / `Contain` 矩形。
 
 相关：缩略图与原图的加载、预加载队列见 [SERVICES.md](SERVICES.md)；预览器返回后画廊滚动依赖的 `@Monitor` 数据流见本文「主界面与画廊」。
