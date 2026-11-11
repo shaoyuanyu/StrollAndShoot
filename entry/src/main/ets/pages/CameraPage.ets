@@ -449,7 +449,22 @@ export struct CameraPage {
 
         // 蓝牙已就绪、无线还没起：这是「相机现在在蓝牙模式」的正常状态。
         // 给一个明确的交接按钮，用户点一下才把相机推到 Wi-Fi（互斥，不自动做）。
-        if (this.blePaired() && !this.wifiConnected() && !this.svc.wifiAutoConnecting) {
+        // 交接进行中：显示分步进度，别让用户对着一个不动的按钮反复点。
+        if (this.svc.apJoining) {
+          Row({ space: 10 }) {
+            LoadingProgress()
+              .width(18).height(18)
+              .color($r('app.color.primary'))
+            Text(this.svc.wirelessStage !== ''
+              ? this.svc.wirelessStage
+              : $r('app.string.camera_conn_open_wifi'))
+              .fontSize(FontSize.Caption)
+              .fontColor($r('app.color.text_secondary'))
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ top: 4, bottom: 4 })
+        } else if (this.blePaired() && !this.wifiConnected() && !this.svc.wifiAutoConnecting) {
           Button($r('app.string.camera_conn_open_wifi'))
             .width('100%')
             .height(44)

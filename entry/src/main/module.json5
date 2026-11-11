@@ -54,6 +54,9 @@
         "name": "ohos.permission.GET_WIFI_INFO"
       },
       {
+        "name": "ohos.permission.SET_WIFI_INFO"
+      },
+      {
         "name": "ohos.permission.ACCESS_BLUETOOTH",
         "reason": "$string:bluetooth_permission_reason",
         "usedScene": {
