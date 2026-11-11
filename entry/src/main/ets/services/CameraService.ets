@@ -222,8 +222,16 @@ export class CameraService {
    * 相机永远在两个模式之间被踢。所以交接必须节流、且只在真要传照片时做。
    */
   private lastHandoverAt: number = 0;
-  /** 交接冷却：这段时间内再连 BLE 只做待机，不推相机进 Wi-Fi。 */
-  private readonly handoverCooldownMs: number = 90000;
+  /**
+   * 交接冷却：这段时间内再连 BLE 只做待机，不推相机进 Wi-Fi。
+   *
+   * 取 **3 分钟**，口径来自 SnapBridge 官方帮助（Wi-Fi STA 模式页）：
+   * 「完成或中断从照相机下载照片的进程后，无法立即切换至 Wi-Fi STA 模式。
+   * 在下载照片或中断传送后，请等待至少 3 分钟后再进行切换。」
+   * 说明相机侧在退出 Wi-Fi 之后有一段状态机在走，推早了会被拒绝、或者
+   * 直接引发 BLE/Wi-Fi 乒乓。90 秒是拍脑袋的，按官方口径改掉。
+   */
+  private readonly handoverCooldownMs: number = 180000;
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
   @Trace bleScanning: boolean = false;
