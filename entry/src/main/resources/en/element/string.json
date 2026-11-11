@@ -97,6 +97,47 @@
       "value": "The camera still holds the previous session. Unplug and replug the USB cable, or restart the camera."
     },
     {
+      "name": "camera_status_wifi_empty_host",
+      "value": "Enter the camera IP address"
+    },
+    {
+      "name": "camera_status_wifi_connecting",
+      "value": "Connecting to Wi-Fi camera %1$s…"
+    },
+    {
+      "name": "camera_status_wifi_connect_failed",
+      "value": "Cannot reach %1$s. Check that camera Wi-Fi is on, both devices share a network, and the host is registered."
+    },
+    {
+      "name": "camera_status_wifi_disconnected",
+      "value": "Wireless connection lost. Reconnect to continue."
+    },
+    {
+      "name": "camera_wifi_title",
+      "value": "Wireless"
+    },
+    {
+      "name": "camera_wifi_hint",
+      "value": "Phone and camera must share a network: put the camera in STA mode on a router, or join it to the phone hotspot."
+    },
+    {
+      "name": "camera_wifi_host_placeholder",
+      "value": "Camera IP, e.g. 192.168.1.5"
+    },
+    {
+      "name": "camera_wifi_connect",
+      "value": "Connect"
+    },
+    {
+      "name": "camera_wifi_disconnect",
+      "value": "Disconnect Wi-Fi"
+    },
+    {
+      "name": "camera_wifi_switch_usb",
+      "value": "Use USB"
+    },
+
+    {
       "name": "camera_status_choose_cache",
       "value": "Choose a cache setting…"
     },

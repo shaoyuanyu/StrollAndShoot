@@ -97,6 +97,47 @@
       "value": "相机还挂着上一次的连接：请拔插 USB 线，或重启相机后重试"
     },
     {
+      "name": "camera_status_wifi_empty_host",
+      "value": "请输入相机 IP 地址"
+    },
+    {
+      "name": "camera_status_wifi_connecting",
+      "value": "正在连接 Wi-Fi 相机 %1$s..."
+    },
+    {
+      "name": "camera_status_wifi_connect_failed",
+      "value": "无法连接 %1$s：请确认相机 Wi-Fi 已开启、手机与相机在同一网络，且已完成主机注册"
+    },
+    {
+      "name": "camera_status_wifi_disconnected",
+      "value": "无线连接已断开，请重新连接"
+    },
+    {
+      "name": "camera_wifi_title",
+      "value": "无线连接"
+    },
+    {
+      "name": "camera_wifi_hint",
+      "value": "手机与相机需在同一网络：相机用 STA 模式加入路由器，或连到手机热点"
+    },
+    {
+      "name": "camera_wifi_host_placeholder",
+      "value": "相机 IP，如 192.168.1.5"
+    },
+    {
+      "name": "camera_wifi_connect",
+      "value": "连接"
+    },
+    {
+      "name": "camera_wifi_disconnect",
+      "value": "断开无线"
+    },
+    {
+      "name": "camera_wifi_switch_usb",
+      "value": "改用 USB"
+    },
+
+    {
       "name": "camera_status_choose_cache",
       "value": "请选择缓存设置..."
     },

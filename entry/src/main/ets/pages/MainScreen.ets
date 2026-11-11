@@ -720,7 +720,15 @@ export struct MainScreen {
             scroller: this.cameraScroller,
             // 全量扫描是用户明确点下的动作，跳过节流；快捷扫描保留 800ms 节流
             onScan: (quick: boolean) => { this.svc.scanForCamera(quick, !quick); },
-            onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); }
+            onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); },
+            onConnectWifi: (host: string) => {
+              this.svc.connectWifi(host).then((ok: boolean) => {
+                if (ok) {
+                  // 连上就按一次快速扫描：缓存命中时秒出，首次会自动退化为全量。
+                  this.svc.scanForCamera(true, true);
+                }
+              });
+            }
           })
         }
         .tabBar(this.TabItem($r('app.string.tab_camera'), $r('sys.symbol.camera'), 1))

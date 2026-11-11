@@ -97,6 +97,47 @@
       "value": "相機還掛著上一次的連接：請拔插 USB 線，或重新啟動相機後重試"
     },
     {
+      "name": "camera_status_wifi_empty_host",
+      "value": "請輸入相機 IP 位址"
+    },
+    {
+      "name": "camera_status_wifi_connecting",
+      "value": "正在連線 Wi-Fi 相機 %1$s..."
+    },
+    {
+      "name": "camera_status_wifi_connect_failed",
+      "value": "無法連線 %1$s：請確認相機 Wi-Fi 已開啟、手機與相機在同一網路，且已完成主機註冊"
+    },
+    {
+      "name": "camera_status_wifi_disconnected",
+      "value": "無線連線已中斷，請重新連線"
+    },
+    {
+      "name": "camera_wifi_title",
+      "value": "無線連線"
+    },
+    {
+      "name": "camera_wifi_hint",
+      "value": "手機與相機需在同一網路：相機用 STA 模式加入路由器，或連到手機熱點"
+    },
+    {
+      "name": "camera_wifi_host_placeholder",
+      "value": "相機 IP，如 192.168.1.5"
+    },
+    {
+      "name": "camera_wifi_connect",
+      "value": "連線"
+    },
+    {
+      "name": "camera_wifi_disconnect",
+      "value": "中斷無線"
+    },
+    {
+      "name": "camera_wifi_switch_usb",
+      "value": "改用 USB"
+    },
+
+    {
       "name": "camera_status_choose_cache",
       "value": "請選擇快取設定…"
     },

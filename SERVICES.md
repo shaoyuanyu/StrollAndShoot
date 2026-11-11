@@ -277,6 +277,42 @@ interface PhotoEntry {
   3. **内核 / HDF 驱动**：随系统镜像由设备厂商构建，三方应用没有加载内核模块的接口，也不能通过 AppGallery 分发。
 - 补充：`usbManager` 没有设备插拔监听，只能轮询 `getDevices()`；大文件数据阶段已改用 API 18 的 `usbSubmitTransfer`，见下文 P3。
 
+### Wi-Fi PTP/IP 链路（1.31.0）
+
+USB 之外的第二条链路：相机与手机在同一网络时，走 TCP 15740 的 PTP/IP，命令集与 USB 完全相同，只是容器换成了 PTP/IP 帧。上层扫描、缩略图、下载流程一行没改。
+
+**分层**
+
+| 文件 | 职责 |
+|---|---|
+| `services/WifiPtpLink.ets` | 传输层：两条 TCP 通道、PTP/IP 帧切分、Init 握手、事务匹配、Ping/Pong |
+| `services/WifiPtpSession.ets` | 语义层：实现 `PtpTransport`，把 `GetObjectInfo` 等 PTP 操作翻译成 PTP/IP 事务 |
+| `pages/PtpHost.ets` | 新增 `PtpEndpoint`（`kind` + USB 设备或 `host/port`），`PtpTransport.connect()` 改为收端点 |
+| `services/PtpScheduler.ets` | 不变，继续把事务排队串行；`CameraService` 用 `new PtpScheduler(new WifiPtpSession())` 装配 |
+
+**协议要点**（官方 CIPA DC-X005 + ZPill / N-Link / Camera_Bridge 真机实证）
+
+- 包头 8 字节小端：`length u32`（含头）+ `type u32`；包类型 1–14。
+- 命令通道先 `InitCommand`，**再开第二条 TCP 连接**发 `InitEvent`（同一端口）。两条都要成功。
+- 尼康方言：`InitCommand` 载荷是 `GUID(16B) + UTF-16LE 主机名(含 NUL) + 版本 0x00010000`，**没有**标准 PTP/IP 的主机名长度前缀。固定 GUID `00112233…EEFF` 与 SnapBridge 客户端一致。
+- `CmdRequest` 的 DataOut 字段恒为 1。
+- 大对象走 `StartData(9) → Data(10)* → EndData(12)`，随后才是 `CmdResponse(7)`。
+- 保活 `Ping(13) / Pong(14)`。
+
+**连接与扫描**
+
+`CameraService.connectWifi(host, port)` 建会话、取 `GetDeviceInfo`、算相机身份；之后 `scanForCamera()` 发现 `wireless === true` 就跳过 USB 枚举，直接复用会话进入既有的缓存/扫描/缩略图流水线。断开时 `disconnect()` 把 session 换回 USB 实现，避免下一次 USB 扫描把 USB 端点喂给 Wi-Fi 会话。
+
+**当前边界（重要）**
+
+- 只支持**手动填 IP**。mDNS `_ptp._tcp` 发现、/24 网段扫描、BLE 配对与保活都还没接。
+- **主机注册（0x952B / 0x935A）没有实现**。部分机身（尤其 STA 模式）只接受已注册主机，首次连接失败时优先怀疑这一步，而不是网络。
+- `GetStorageIDs` 被拒时返回 `0xFFFFFFFF` 哨兵，由 `GetObjectHandles` 按「所有存储」枚举——这是 SnapBridge 会话的已知行为。
+- 部分机型对同一台相机只保留一个 PTP/IP initiator；另一个设备的 `Init` 会踢掉前一个会话，甚至把相机踢出配对模式。调试时不要并发探测。
+- PTP/IP 未认证、未加密，同网段任何设备都能连；只在可信网络使用。
+
+
+
 ### PTP 事务调度（PtpScheduler，2026-11-09）
 
 `CameraService.session` 现在固定包一层 `services/PtpScheduler.ets`：所有 PTP 事务进一条 promise 队列，串行执行，按优先级插队（`FOREGROUND` 前台原图 > `PRELOAD` 邻近预加载 > `SCAN` 扫描）。

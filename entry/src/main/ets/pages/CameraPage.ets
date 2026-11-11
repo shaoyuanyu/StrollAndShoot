@@ -15,6 +15,16 @@ export struct CameraPage {
   @Param scroller: Scroller = new Scroller();
   @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
+  @Event onConnectWifi: (host: string) => void = (_h: string) => {};
+
+  /** 无线连接输入框；首次进入用上次成功的地址预填。 */
+  @Local wifiInput: string = '';
+
+  aboutToAppear(): void {
+    if (this.wifiInput === '' && this.svc.wifiHost !== '') {
+      this.wifiInput = this.svc.wifiHost;
+    }
+  }
 
   private statusColor(): Resource {
     if (this.svc.scanning) return $r('app.color.primary');
@@ -150,7 +160,10 @@ export struct CameraPage {
       CameraInfoRow({ label: $r('app.string.camera_info_usb_serial'), value: this.svc.usbSerialNumber || $r('app.string.common_none') })
       CameraInfoRow({ label: $r('app.string.camera_info_cache_id'), value: this.svc.cameraIdentity || $r('app.string.common_none') })
       CameraInfoRow({ label: $r('app.string.camera_info_photo_count'), value: `${this.svc.photoCount}` })
-      CameraInfoRow({ label: $r('app.string.camera_info_connection'), value: $r('app.string.camera_connection_ptp') })
+      CameraInfoRow({
+        label: $r('app.string.camera_info_connection'),
+        value: this.svc.wireless ? `Wi-Fi · ${this.svc.wifiHost}` : $r('app.string.camera_connection_ptp')
+      })
     }
     .width('100%')
     .padding({ left: 16, right: 16 })
@@ -181,6 +194,90 @@ export struct CameraPage {
     .borderRadius(Radius.Card)
   }
 
+  /**
+   * 无线连接卡。
+   *
+   * 只做「填地址 → 连接」这一件事：发现（mDNS / 网段扫描）与 BLE 配对
+   * 留在后续迭代，先把 PTP/IP 链路跑通。已连接时显示当前地址与断开入口。
+   */
+  @Builder
+  WirelessCard() {
+    Column({ space: 12 }) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.wifi'))
+          .fontSize(IconSize.Body)
+          .fontColor([$r('app.color.primary')])
+        Text($r('app.string.camera_wifi_title'))
+          .fontSize(FontSize.CardTitle)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+        Blank()
+        if (this.svc.wireless) {
+          Text($r('app.string.camera_status_connected'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.status_connected'))
+        }
+      }
+      .width('100%')
+
+      Text($r('app.string.camera_wifi_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+
+      if (this.svc.wireless) {
+        Row({ space: 12 }) {
+          Text(`${this.svc.wifiHost}:${this.svc.wifiPort}`)
+            .fontSize(FontSize.Body)
+            .fontColor($r('app.color.text_primary'))
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Button($r('app.string.camera_wifi_disconnect'))
+            .height(36)
+            .fontSize(FontSize.Caption)
+            .borderRadius(pillRadius(36))
+            .backgroundColor($r('app.color.filter_chip_bg'))
+            .fontColor($r('app.color.text_primary'))
+            .onClick(() => { this.onDisconnect(); })
+        }
+        .width('100%')
+      } else {
+        Row({ space: 8 }) {
+          TextInput({
+            placeholder: $r('app.string.camera_wifi_host_placeholder'),
+            text: this.wifiInput
+          })
+            .height(40)
+            .layoutWeight(1)
+            .fontSize(FontSize.Body)
+            .borderRadius(Radius.Chip)
+            .backgroundColor($r('app.color.filter_chip_bg'))
+            .onChange((value: string) => { this.wifiInput = value; })
+            .onSubmit(() => {
+              if (this.wifiInput.trim() !== '' && !this.svc.scanning) {
+                this.onConnectWifi(this.wifiInput.trim());
+              }
+            })
+          Button($r('app.string.camera_wifi_connect'))
+            .height(40)
+            .fontSize(FontSize.Body)
+            .borderRadius(pillRadius(40))
+            .backgroundColor($r('app.color.primary'))
+            .fontColor($r('app.color.text_on_primary'))
+            .enabled(!this.svc.scanning && this.wifiInput.trim() !== '')
+            .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.bg_surface'))
+    .borderRadius(Radius.Card)
+  }
+
   build() {
     Scroll(this.scroller) {
       Column({ space: 16 }) {
@@ -188,6 +285,9 @@ export struct CameraPage {
           this.StatusCard()
         } else {
           this.EmptyCard()
+        }
+        if (!this.svc.connected) {
+          this.WirelessCard()
         }
         if (this.svc.connected) {
           this.DeviceCard()

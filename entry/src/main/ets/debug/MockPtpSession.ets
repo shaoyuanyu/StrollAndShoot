@@ -1,8 +1,7 @@
-import usbManager from '@ohos.usbManager';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MockPtpDevice, MOCK_ROOT } from './MockPtpDevice';
 import type { DeviceInfo, ObjectInfo, ObjectPropEntry, ObjectPropList,
-  PtpTransport } from '../pages/PtpHost';
+  PtpEndpoint, PtpTransport } from '../pages/PtpHost';
 
 const TAG = 'MockPtpSession';
 const DOMAIN = 0x0000;
@@ -28,7 +27,7 @@ export class MockPtpSession implements PtpTransport {
     return this.open ? 'MOCK-PTP-CAMERA' : '';
   }
 
-  async connect(_device: usbManager.USBDevice): Promise<boolean> {
+  async connect(_endpoint: PtpEndpoint): Promise<boolean> {
     hilog.info(DOMAIN, TAG, 'connect: simulating USB handshake');
     await delay(600);
     this.open = true;

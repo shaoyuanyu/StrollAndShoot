@@ -1,6 +1,5 @@
-import usbManager from '@ohos.usbManager';
 import hilog from '@ohos.hilog';
-import { PtpPriority, type PtpTransport, type DeviceInfo, type ObjectInfo,
+import { PtpPriority, type PtpTransport, type PtpEndpoint, type DeviceInfo, type ObjectInfo,
   type ObjectPropList } from '../pages/PtpHost';
 
 /**
@@ -45,8 +44,8 @@ export class PtpScheduler implements PtpTransport {
     return this.inner.sessionConflict;
   }
 
-  connect(device: usbManager.USBDevice, priority: PtpPriority = PtpPriority.FOREGROUND): Promise<boolean> {
-    return this.enqueue(priority, () => this.inner.connect(device));
+  connect(endpoint: PtpEndpoint, priority: PtpPriority = PtpPriority.FOREGROUND): Promise<boolean> {
+    return this.enqueue(priority, () => this.inner.connect(endpoint));
   }
 
   getDeviceInfo(priority: PtpPriority = PtpPriority.FOREGROUND): Promise<DeviceInfo | null> {

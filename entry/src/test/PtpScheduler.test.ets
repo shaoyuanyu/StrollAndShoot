@@ -1,6 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import usbManager from '@ohos.usbManager';
-import { PtpPriority, type PtpTransport, type DeviceInfo, type ObjectInfo,
+import { PtpPriority, type PtpTransport, type PtpEndpoint, type DeviceInfo, type ObjectInfo,
   type ObjectPropEntry, type ObjectPropList } from '../main/ets/pages/PtpHost';
 import { PtpScheduler } from '../main/ets/services/PtpScheduler';
 
@@ -20,7 +19,7 @@ class FakeTransport implements PtpTransport {
     return false;
   }
 
-  async connect(_device: usbManager.USBDevice, _priority?: PtpPriority): Promise<boolean> {
+  async connect(_endpoint: PtpEndpoint, _priority?: PtpPriority): Promise<boolean> {
     return true;
   }
 

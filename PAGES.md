@@ -102,6 +102,8 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - **状态卡标题永远优先显示 `svc.statusText`**，`connected` 只决定圆点颜色与是否展示设备卡。历史上写成 `connected ? 已连接 : statusText`，导致连上相机之后所有失败原因（无存储 / 拒绝访问 / 扫描出错）都不可见（ISSUE-001）。圆点颜色：扫描中蓝、`connected && usable` 绿、`connected && !usable` 红、未连接灰。未连接态的空态卡下方也会显示 `lastScanError`。
 - 扫描失败还会由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast（`getUIContext().getPromptAction().showToast`），文案来自 `svc.lastScanError`。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
+- **未连接时多一张「无线连接」卡（1.31.0）**：标题 + 一行说明 + `TextInput`（相机 IP，回车即连）+ 主色胶囊「连接」。已连接且走 Wi-Fi 时，同一张卡改成「地址 + 断开无线」，不显示输入框；设备信息卡的「连接」一行也显示 `Wi-Fi · <host>`。连接成功后 `MainScreen` 自动触发一次快速扫描，首次会自动退化为全量。
+- 无线卡是**手动填 IP** 的第一版入口：mDNS 发现、网段扫描、BLE 配对都还没接，说明文案里只承诺「同一网络」这个前提，不要写成「自动发现」。
 
 扫描阶段、缓存与快速扫描的细节见 [SERVICES.md](SERVICES.md)。
 

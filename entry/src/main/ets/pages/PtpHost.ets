@@ -146,6 +146,33 @@ export function ptpResponseName(code: number): string {
   }
 }
 
+/**
+ * PTP 数据集解析的公开入口。
+ *
+ * Wi-Fi 链路（`WifiPtpSession`）拿到的数据段与 USB 完全相同，直接复用
+ * Native 解析器；这里只做一层转发，避免把 `libentry.so` 的原始接口暴露到
+ * 更多文件里。
+ */
+export function ptpParseDeviceInfo(data: Uint8Array): DeviceInfo {
+  return ptpNative.parseDeviceInfo(data);
+}
+
+export function ptpParseStorageIDs(data: Uint8Array): number[] {
+  return ptpNative.parseStorageIDs(data);
+}
+
+export function ptpParseObjectHandles(data: Uint8Array): number[] {
+  return ptpNative.parseObjectHandles(data);
+}
+
+export function ptpParseObjectInfo(data: Uint8Array, handle: number): ObjectInfo {
+  return ptpNative.parseObjectInfo(data, handle);
+}
+
+export function ptpParseObjectPropList(data: Uint8Array): ObjectPropList {
+  return ptpNative.parseObjectPropList(data);
+}
+
 let sharedLog: AppLog | null = null;
 export function setPtpLog(log: AppLog): void { sharedLog = log; }
 
@@ -201,6 +228,31 @@ export enum PtpPriority {
   SCAN = 2
 }
 
+/** 相机接入方式。USB 走 `usbManager`，Wi-Fi 走 PTP/IP（TCP 15740）。 */
+export enum PtpEndpointKind {
+  USB = 0,
+  WIFI = 1
+}
+
+/**
+ * 一次连接的端点描述。
+ *
+ * 用一个「可选字段 + kind 判别」的结构而不是联合类型，是因为 ArkTS
+ * 对判别联合的属性收窄支持有限；所有实现都必须先看 `kind`，再去读
+ * 自己关心的字段。
+ */
+export interface PtpEndpoint {
+  kind: PtpEndpointKind;
+  /** kind == USB 时必填。 */
+  device?: usbManager.USBDevice;
+  /** kind == WIFI 时必填，IPv4 或主机名。 */
+  host?: string;
+  /** kind == WIFI 时必填，默认 15740。 */
+  port?: number;
+  /** 展示名：USB 用设备名，Wi-Fi 用 mDNS 实例名或 IP。 */
+  label?: string;
+}
+
 /**
  * 相机会话的传输契约。
  *
@@ -212,7 +264,7 @@ export interface PtpTransport {
   readonly connectedDeviceName: string;
   /** 相机侧残留了上一次会话（0x201E 且补发 CloseSession 未恢复）。调试用的虚拟相机不提供。 */
   readonly sessionConflict?: boolean;
-  connect(device: usbManager.USBDevice, priority?: PtpPriority): Promise<boolean>;
+  connect(endpoint: PtpEndpoint, priority?: PtpPriority): Promise<boolean>;
   getDeviceInfo(priority?: PtpPriority): Promise<DeviceInfo | null>;
   getStorageIDs(priority?: PtpPriority): Promise<number[]>;
   getObjectHandles(storageId: number, parent?: number, formatCode?: number,
@@ -293,7 +345,12 @@ export class PtpSession implements PtpTransport {
     return cameras;
   }
 
-  async connect(device: usbManager.USBDevice, _priority?: PtpPriority): Promise<boolean> {
+  async connect(endpoint: PtpEndpoint, _priority?: PtpPriority): Promise<boolean> {
+    if (endpoint.kind !== PtpEndpointKind.USB || endpoint.device === undefined) {
+      log('PtpSession 只支持 USB 端点');
+      return false;
+    }
+    const device = endpoint.device;
     // Close any existing connection properly before starting a new one
     if (this.pipe) {
       await this.closeSessionAndPipe();

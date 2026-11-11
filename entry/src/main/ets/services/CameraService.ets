@@ -10,9 +10,11 @@ import { dataSharePredicates } from '@kit.ArkData';
 import usbManager from '@ohos.usbManager';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { decodeThumbnailTask, decodeFullPhotoTask } from '../workers/ImageDecoder';
-import { PtpSession, PtpPriority, setPtpLog, setPtpQuietOps, PtpError, PTP_ERR_USB,
-  PTP_ERR_NOT_OPEN, type DeviceInfo, type ObjectInfo, type PtpTransport } from '../pages/PtpHost';
+import { PtpSession, PtpPriority, PtpEndpointKind, setPtpLog, setPtpQuietOps, PtpError,
+  PTP_ERR_USB, PTP_ERR_NOT_OPEN, type DeviceInfo, type ObjectInfo, type PtpEndpoint,
+  type PtpTransport } from '../pages/PtpHost';
 import { PtpScheduler } from './PtpScheduler';
+import { WifiPtpSession } from './WifiPtpSession';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -144,6 +146,17 @@ export class CameraService {
    * 仍然是 `connected === true`，界面要看 `usable` 才能给出正确结论（ISSUE-003）。
    */
   @Trace connected: boolean = false;
+  /**
+   * 当前会话是否走 Wi-Fi（PTP/IP）。USB 为 false。
+   *
+   * 无线模式下 `scanForCamera()` 不再枚举 USB 设备，直接复用已建立的
+   * PTP/IP 会话；`syncSessionMode()` 也不会把 session 换回 USB。
+   */
+  @Trace wireless: boolean = false;
+  /** 最近一次无线连接使用的主机（展示与重连用）。 */
+  @Trace wifiHost: string = '';
+  /** 最近一次无线连接使用的端口。 */
+  @Trace wifiPort: number = 15740;
   /** 存储是否可读（GetStorageIDs 成功）。 */
   @Trace usable: boolean = false;
   /** 最近一次扫描失败的原因，供 toast 与状态卡显示。 */
@@ -1278,6 +1291,188 @@ export class CameraService {
     this.appendRegistryRecord(record);
   }
 
+  /**
+   * 连接 Wi-Fi 相机（PTP/IP over TCP 15740）。
+   *
+   * 只负责建立会话、取设备身份；照片扫描复用 `scanForCamera()`——它会
+   * 识别 `wireless` 并跳过 USB 枚举。
+   *
+   * 前置条件：手机与相机在同一网络。既可以是相机 STA 模式加入同一路由器，
+   * 也可以是手机开热点、相机连热点。连接失败时优先检查：相机 Wi-Fi 是否
+   * 开启、是否已完成「主机注册」、15740 端口是否可达。
+   */
+  async connectWifi(host: string, port: number = 15740): Promise<boolean> {
+    const target = host.trim();
+    if (target === '') {
+      this.reportScanFailure(L10n.tr('camera_status_wifi_empty_host'));
+      return false;
+    }
+    if (this.connected) {
+      await this.disconnect();
+    }
+    this.syncSessionMode();
+    this.session = new PtpScheduler(this.makeWifiSession());
+    this.wireless = true;
+    this.wifiHost = target;
+    this.wifiPort = port;
+    this.connected = false;
+    this.usable = false;
+    this.statusText = L10n.tr('camera_status_wifi_connecting', target);
+
+    const endpoint: PtpEndpoint = {
+      kind: PtpEndpointKind.WIFI,
+      host: target,
+      port: port,
+      label: target
+    };
+    const ok = await this.session.connect(endpoint, PtpPriority.FOREGROUND);
+    if (!ok) {
+      this.wireless = false;
+      this.connected = false;
+      this.session = new PtpScheduler(new PtpSession());
+      this.reportScanFailure(L10n.tr('camera_status_wifi_connect_failed', target));
+      return false;
+    }
+
+    this.connected = true;
+    this.usable = false;
+    this.statusText = L10n.tr('camera_status_connected');
+    const deviceInfo = await this.session.getDeviceInfo();
+    if (deviceInfo) {
+      this.deviceManufacturer = deviceInfo.manufacturer;
+      this.deviceSerialNumber = deviceInfo.serialNumber;
+      this.deviceVersion = deviceInfo.deviceVersion;
+      this.deviceOps = deviceInfo.operationsSupported ?? [];
+      this.cameraIdentity = this.buildWifiCameraIdentity(deviceInfo, target);
+      this.cameraName = deviceInfo.model || deviceInfo.manufacturer || target;
+      this.log.add(`Wi-Fi DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" ` +
+        `serial="${deviceInfo.serialNumber}"`);
+    } else {
+      this.cameraIdentity = `wifi_${target.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+      this.cameraName = target;
+      this.log.add('Wi-Fi DeviceInfo 未取到，用地址作为身份');
+    }
+    this.log.add(`无线连接建立: ${target}:${port}，身份 ${this.cameraIdentity}`);
+    this.checkCachingState();
+    return true;
+  }
+
+  private makeWifiSession(): WifiPtpSession {
+    const s = new WifiPtpSession();
+    s.setLog((m: string) => this.log.add(m));
+    return s;
+  }
+
+  private buildWifiCameraIdentity(info: DeviceInfo, host: string): string {
+    const sanitize = (s: string): string => s.replace(/[^a-zA-Z0-9_.-]/g, '_').substring(0, 64);
+    const manu = (info.manufacturer || '').trim();
+    const model = (info.model || '').trim();
+    const serial = (info.serialNumber || '').trim();
+    if (serial) {
+      return sanitize(`${manu}_${model}_${serial}`);
+    }
+    return sanitize(`${manu}_${model}_wifi_${host}`);
+  }
+
+  /**
+   * 建立/复用 USB 会话。无线模式不走这里，直接复用 `connectWifi()` 建好的会话。
+   * 返回 false 时由调用方收尾（清 scanning / 已在内部报过错）。
+   */
+  private async ensureUsbSession(): Promise<boolean> {
+    const cameras = this.sessionIsMock ? MockPtpDevice.findCameras() : PtpSession.findCameras();
+    if (cameras.length === 0) {
+      this.connected = false;
+      this.cameraName = '';
+      this.reportScanFailure(L10n.tr('camera_status_no_camera'));
+      this.scanning = false;
+      return false;
+    }
+
+    const sameDevice = this.connected &&
+      this.session.connectedDeviceName === cameras[0].name;
+
+    if (sameDevice) {
+      // Same camera — keep USB session alive.
+      // 不再清空 photos：一次失败的快速扫描不该让已经有内容的画廊先空一下
+      // （ISSUE-005）。缩略图内存缓存仍然清掉，Phase 0 / Phase 2b 会重新填。
+      this.thumbnailPixelMapMap.clear();
+      this.thumbnailLoadedSet.clear();
+      this.preloadedOrientations.clear();
+      this.exifOrigDims.clear();
+      this.orientationMap.clear();
+      this.orientedDisplaySizes.clear();
+      this.clearFullCache();
+      this.statusText = L10n.tr('camera_status_connected');
+
+      // Refresh camera identity from PTP if not already set
+      if (!this.cameraIdentity) {
+        const deviceInfo = await this.session.getDeviceInfo();
+        if (deviceInfo) {
+          this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
+          this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
+          this.log.add(`相机身份(刷新): ${this.cameraIdentity}`);
+        }
+      }
+      // Re-check caching state (user may have changed prefs in settings)
+      this.checkCachingState();
+
+    } else {
+      // Different camera or first connect
+      if (this.connected) {
+        await this.disconnect();
+      }
+
+      this.statusText = L10n.tr('camera_status_found_camera', cameras[0].productName);
+  
+
+      const usbEndpoint: PtpEndpoint = {
+        kind: PtpEndpointKind.USB,
+        device: cameras[0],
+        label: cameras[0].name
+      };
+      const ok = await this.session.connect(usbEndpoint);
+      if (!ok) {
+        this.connected = false;
+        // 0x201E：相机里还留着上一次崩溃时的会话，光重试没有用，要用户拔插一次线。
+        this.reportScanFailure(L10n.tr(this.session.sessionConflict === true
+          ? 'camera_status_session_conflict' : 'camera_status_connect_failed'));
+        this.scanning = false;
+        return false;
+      }
+
+      this.cameraName = cameras[0].productName || cameras[0].manufacturerName ||
+                        cameras[0].name;
+      this.statusText = L10n.tr('camera_status_connected');
+      this.connected = true;
+      this.usable = false;
+
+      // Fetch PTP device identity for unique camera identification
+      const deviceInfo = await this.session.getDeviceInfo();
+      this.deviceManufacturer = deviceInfo?.manufacturer || cameras[0].manufacturerName || '';
+      this.deviceSerialNumber = deviceInfo?.serialNumber || cameras[0].serial || '';
+      this.deviceVersion = deviceInfo?.deviceVersion || '';
+      this.usbVidPid = `VID_${cameras[0].vendorId.toString(16).padStart(4,'0')}_PID_${cameras[0].productId.toString(16).padStart(4,'0')}`;
+      this.usbSerialNumber = cameras[0].serial || '';
+      if (deviceInfo) {
+        this.log.add(`PTP DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" serial="${deviceInfo.serialNumber}" ver="${deviceInfo.deviceVersion}"`);
+        this.deviceOps = deviceInfo.operationsSupported ?? [];
+        this.log.add(`PTP 支持操作 ${this.deviceOps.length} 个` +
+          `${this.deviceOps.includes(0x9805) ? '（含 GetObjectPropList）' : '（无 GetObjectPropList）'}`);
+        this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
+        this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
+      } else {
+        // Fallback: use USB-level info
+        this.cameraIdentity = `vid_${cameras[0].vendorId.toString(16).padStart(4,'0')}_pid_${cameras[0].productId.toString(16).padStart(4,'0')}`;
+        this.log.add(`USB fallback identity: ${this.cameraIdentity}`);
+      }
+      this.log.add(`相机身份: ${this.cameraIdentity}`);
+
+      // Check caching preference for this camera
+      this.checkCachingState();
+    }
+    return true;
+  }
+
   async scanForCamera(quickMode: boolean = true, bypassThrottle: boolean = false): Promise<void> {
     const startedAt = Date.now();
     if (this.scanning || this.pendingCachingResolve !== null) {
@@ -1302,91 +1497,20 @@ export class CameraService {
 
 
     try {
-      const cameras = this.sessionIsMock ? MockPtpDevice.findCameras() : PtpSession.findCameras();
-      if (cameras.length === 0) {
-        this.connected = false;
-        this.cameraName = '';
-        this.reportScanFailure(L10n.tr('camera_status_no_camera'));
-        this.scanning = false;
-        return;
-      }
-
-      const sameDevice = this.connected &&
-        this.session.connectedDeviceName === cameras[0].name;
-
-      if (sameDevice) {
-        // Same camera — keep USB session alive.
-        // 不再清空 photos：一次失败的快速扫描不该让已经有内容的画廊先空一下
-        // （ISSUE-005）。缩略图内存缓存仍然清掉，Phase 0 / Phase 2b 会重新填。
-        this.thumbnailPixelMapMap.clear();
-        this.thumbnailLoadedSet.clear();
-        this.preloadedOrientations.clear();
-        this.exifOrigDims.clear();
-        this.orientationMap.clear();
-        this.orientedDisplaySizes.clear();
-        this.clearFullCache();
-        this.statusText = L10n.tr('camera_status_connected');
-
-        // Refresh camera identity from PTP if not already set
-        if (!this.cameraIdentity) {
-          const deviceInfo = await this.session.getDeviceInfo();
-          if (deviceInfo) {
-            this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
-            this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
-            this.log.add(`相机身份(刷新): ${this.cameraIdentity}`);
-          }
-        }
-        // Re-check caching state (user may have changed prefs in settings)
-        this.checkCachingState();
-
-      } else {
-        // Different camera or first connect
-        if (this.connected) {
-          await this.disconnect();
-        }
-
-        this.statusText = L10n.tr('camera_status_found_camera', cameras[0].productName);
-    
-
-        const ok = await this.session.connect(cameras[0]);
-        if (!ok) {
-          this.connected = false;
-          // 0x201E：相机里还留着上一次崩溃时的会话，光重试没有用，要用户拔插一次线。
-          this.reportScanFailure(L10n.tr(this.session.sessionConflict === true
-            ? 'camera_status_session_conflict' : 'camera_status_connect_failed'));
+      if (this.wireless) {
+        // 无线会话已在 connectWifi() 里建立；这里只确认它还在。
+        if (!this.connected) {
+          this.reportScanFailure(L10n.tr('camera_status_wifi_disconnected'));
           this.scanning = false;
           return;
         }
-
-        this.cameraName = cameras[0].productName || cameras[0].manufacturerName ||
-                          cameras[0].name;
         this.statusText = L10n.tr('camera_status_connected');
-        this.connected = true;
-        this.usable = false;
-
-        // Fetch PTP device identity for unique camera identification
-        const deviceInfo = await this.session.getDeviceInfo();
-        this.deviceManufacturer = deviceInfo?.manufacturer || cameras[0].manufacturerName || '';
-        this.deviceSerialNumber = deviceInfo?.serialNumber || cameras[0].serial || '';
-        this.deviceVersion = deviceInfo?.deviceVersion || '';
-        this.usbVidPid = `VID_${cameras[0].vendorId.toString(16).padStart(4,'0')}_PID_${cameras[0].productId.toString(16).padStart(4,'0')}`;
-        this.usbSerialNumber = cameras[0].serial || '';
-        if (deviceInfo) {
-          this.log.add(`PTP DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" serial="${deviceInfo.serialNumber}" ver="${deviceInfo.deviceVersion}"`);
-          this.deviceOps = deviceInfo.operationsSupported ?? [];
-          this.log.add(`PTP 支持操作 ${this.deviceOps.length} 个` +
-            `${this.deviceOps.includes(0x9805) ? '（含 GetObjectPropList）' : '（无 GetObjectPropList）'}`);
-          this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
-          this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
-        } else {
-          // Fallback: use USB-level info
-          this.cameraIdentity = `vid_${cameras[0].vendorId.toString(16).padStart(4,'0')}_pid_${cameras[0].productId.toString(16).padStart(4,'0')}`;
-          this.log.add(`USB fallback identity: ${this.cameraIdentity}`);
+      } else {
+        const ready = await this.ensureUsbSession();
+        if (!ready) {
+          this.scanning = false;
+          return;
         }
-        this.log.add(`相机身份: ${this.cameraIdentity}`);
-
-        // Check caching preference for this camera
-        this.checkCachingState();
       }
 
       // 新相机：连接成功后立刻问「要不要缓存」，问完再扫。
@@ -2862,6 +2986,8 @@ export class CameraService {
    * 上层扫描流程完全一致。
    */
   private syncSessionMode(): void {
+    // 无线会话由 connectWifi() 自己装配，调试开关不应该把它换回 USB/虚拟相机。
+    if (this.wireless) return;
     const wantMock = MockPtpDevice.isEnabled();
     if (wantMock === this.sessionIsMock) return;
     const previous: PtpTransport = this.session;
@@ -2876,6 +3002,11 @@ export class CameraService {
 
   async disconnect(): Promise<void> {
     await this.session.closeSessionAndPipe();
+    if (this.wireless) {
+      // 回到 USB 默认实现，下一次「搜索相机」才不会把 USB 端点喂给 Wi-Fi 会话。
+      this.session = new PtpScheduler(new PtpSession());
+      this.wireless = false;
+    }
     this.connected = false;
     this.usable = false;
     this.lastScanError = '';
