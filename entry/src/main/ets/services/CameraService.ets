@@ -1627,8 +1627,13 @@ export class CameraService {
       this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
 
       // 配对成功后才允许写 0x2006/0x2007：先校时，再按 45s 保活（顺带持续校时）。
+      // 首笔要等 2.5 秒（ZPill 的 writeGate）：相机刚收口时注入会话还没醒，
+      // 立刻写会被拒收甚至被踢链。
       const offsetMinutes = -new Date().getTimezoneOffset();
       try {
+        await new Promise<void>((resolve: () => void) => {
+          setTimeout(resolve, 2500);
+        });
         await this.bleLink.writeTime(offsetMinutes);
         this.bleLink.startKeepalive(45000, offsetMinutes, () => {
           const fix = GpsRecorder.getInstance().lastFix;
