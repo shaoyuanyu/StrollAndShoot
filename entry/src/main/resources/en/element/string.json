@@ -174,7 +174,7 @@
     },
     {
       "name": "camera_conn_guide",
-      "value": "STA mode needs the camera on the same network. Turn on the personal hotspot on this phone, then on the camera open Network menu → Connect to smart device → Wi-Fi connection, pick that hotspot and stay on the connection wizard screen. After that this screen connects by itself — no IP typing."
+      "value": "The app uses the camera's own Wi-Fi hotspot: tapping “View photos” wakes the camera over Bluetooth and then joins its hotspot automatically. On the camera just pick AP mode once under Network menu → Connect to smart device → Wi-Fi connection (not STA); no further camera-side steps."
     },
     {
       "name": "camera_ble_unnamed",
