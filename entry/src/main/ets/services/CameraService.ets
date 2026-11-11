@@ -190,6 +190,14 @@ export class CameraService {
   private nsdScanner: NsdScanner | null = null;
   private subnetScanner: SubnetScanner | null = null;
   private wifiScanTimer: number = -1;
+  /**
+   * mDNS 浏览窗口的结束回调。
+   *
+   * `scanWifiCameras()` 等的是「窗口到点」这个 promise；`stopWifiScan()` 提前
+   * 清掉计时器时必须把这个 promise 也 resolve 掉，否则它永远不 settle，
+   * `await scanWifiCameras()` 会把调用方（自动接续 / 重连）一起挂死。
+   */
+  private wifiScanResolve: (() => void) | null = null;
   private wifiReconnectTimer: number = -1;
   private wifiReconnectIndex: number = 0;
   /** 无线自动重连退避（与 BLE 同款节奏）。 */
@@ -1528,8 +1536,10 @@ export class CameraService {
     }
     const mdnsWindow = new Promise<void>((resolve: () => void) => {
       if (this.wifiScanTimer >= 0) clearTimeout(this.wifiScanTimer);
+      this.wifiScanResolve = resolve;
       this.wifiScanTimer = setTimeout(() => {
         this.wifiScanTimer = -1;
+        this.wifiScanResolve = null;
         resolve();
       }, durationMs);
     });
@@ -1542,11 +1552,39 @@ export class CameraService {
     });
     await Promise.all([mdnsWindow, subnetWork]);
     this.wifiScanning = false;
+    this.wifiScanResolve = null;
     if (this.wifiCameras.length === 0 && this.wifiHint === '') {
       // 网络前提成立却一台都没找到：问题在相机那边（没进 Wi-Fi 模式、
       // 被客户端隔离、或相机把上一个会话还挂在 15740 上）。
       this.wifiHint = '同一网络里没有发现相机。确认相机已进入「连接至智能设备」的 Wi-Fi 模式。';
     }
+  }
+
+  /**
+   * 扫一段，**一发现相机就提前收工**。
+   *
+   * 网段扫描一轮要三十秒（507 个候选 × 700ms / 12 并发）。自动接续如果等满
+   * 整轮，用户会以为卡住了；而 mDNS 命中往往只要一两秒。所以按 500ms 轮询，
+   * 一看到相机就停扫、立刻去连。
+   */
+  private async scanUntilCamera(maxWaitMs: number): Promise<WifiCameraInfo | null> {
+    const scan = this.scanWifiCameras(6000);
+    const deadline = Date.now() + maxWaitMs;
+    let found: WifiCameraInfo | null = null;
+    while (Date.now() < deadline) {
+      found = this.pickWifiCamera();
+      if (found !== null) break;
+      if (!this.wifiScanning) break;
+      await new Promise<void>((resolve: () => void) => {
+        setTimeout(resolve, 500);
+      });
+    }
+    if (found !== null) {
+      this.log.add(`自动无线: 提前收工，命中 ${found.name}`);
+      this.stopWifiScan();
+    }
+    await scan;
+    return found !== null ? found : this.pickWifiCamera();
   }
 
   private mergeWifiCamera(camera: WifiCameraInfo, source: string): void {
@@ -1569,6 +1607,13 @@ export class CameraService {
     if (this.wifiScanTimer >= 0) {
       clearTimeout(this.wifiScanTimer);
       this.wifiScanTimer = -1;
+    }
+    // 必须把窗口 promise 兑现：只清计时器会让 `await scanWifiCameras()`
+    // 永远等下去（自动接续就卡在这儿）。
+    const resolve = this.wifiScanResolve;
+    this.wifiScanResolve = null;
+    if (resolve !== null) {
+      resolve();
     }
     this.wifiScanning = false;
   }
@@ -1928,8 +1973,9 @@ export class CameraService {
         return false;
       }
 
-      await this.scanWifiCameras(6000);
-      const camera = this.pickWifiCamera();
+      // 上限比一整轮网段扫描还长：命中就提前收工，没命中就让它跑完，
+      // 不人为截断搜索（截断会把「慢但能找到」变成「找不到」）。
+      const camera = await this.scanUntilCamera(45000);
       if (camera === null) {
         this.log.add(`自动无线: 没有发现相机。${this.wifiHint}`);
         return false;
