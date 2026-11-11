@@ -99,7 +99,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `visualTab === 1` 分支，不是 `currentTab`）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
 - 内容区是 24vp 圆角白卡、内边距 16vp：**连接卡**、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。
-#### 连接卡：两种模式，一张卡（1.40.0）
+#### 连接卡：两种模式，一张卡（1.41.0）
 
 功能上只有两种连接方式，UI 必须按这两种讲：
 
@@ -110,22 +110,25 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 历史上 USB 状态、Wi-Fi 卡、蓝牙卡是三张各自为政的卡片，会出现「上面写未连接相机、下面写已连接」的自相矛盾（2026-11-11 用户实测反馈）。现在合并成一张 `ConnectionCard`：
 
-- 顶部一句话状态（`headerText()`）：`statusText` 只在**已连接或正在扫描**时采用；否则显示明确的「未连接」。`statusText` 的初值是「就绪」，未连接时直接显示它会让人以为已经连上。
+- 顶部一句话状态（`headerText()`）：`statusText` 只在**已连接或正在扫描**时采用；否则依次看 `bleConnecting` / `wifiAutoConnecting` / `wifiReconnecting`，把链条上正在做的那一步讲出来；都没有才显示「未连接」。`statusText` 的初值是「就绪」，未连接时直接显示它会让人以为已经连上。
 - 两个内嵌模式块（`Radius.Inner` + `filter_chip_bg`），各自一个状态点 + 模式名 + 右侧状态。未连接的点用 `text_tertiary` **灰色**，不要用琥珀色的 `status_disconnected`——两个模式并排时橙色会读成告警。
 - **USB 块**：只讲 USB。`usbConnected = connected && !wireless`。
-- **无线块**：`wifiConnected = connected && wireless`。块内第一行是蓝牙状态（`bleStatusText()` 四态：正在连接 / 重连中 / 已连接·机身名 / 未连接），已连接时右侧给红色「断开蓝牙」；下面是 Wi-Fi 部分——已连接显示 `host:port` + 断开，未连接显示 IP 输入 + 主色「连接」+「搜索附近的相机」+「搜索蓝牙相机」（蓝牙未连接时才出现），最后是相机侧操作步骤说明。
+- **无线块**：`wifiConnected = connected && wireless`，右侧状态走 `wirelessStatusText()` 四态：已连接 / 「正在连接无线…」/「无线重连中…」/「等待无线」（蓝牙已配对、无线还没通）。**最后那一态用告警色**：它不是「正在做」，是真没连上。块内第一行是蓝牙状态（`bleStatusText()` 四态：正在连接 / 重连中 / 已连接·机身名 / 未连接），已连接时右侧给红色「断开蓝牙」；下面是 Wi-Fi 部分——已连接显示 `host:port` + 断开，未连接显示 IP 输入 + 主色「连接」+「搜索附近的相机」+「搜索蓝牙相机」（蓝牙未连接时才出现），再下面是 `WirelessGuide()`。
+- `WirelessGuide()` 三行小字：`networkSummary`（本机地址 / Wi-Fi SSID / 热点）、`wifiHint`（扫不到的原因）、STA 的一次性配置引导（**手机先开热点 → 相机菜单选这个热点**）。前两行为空时不渲染。分不清「我网络不对」和「相机没进 Wi-Fi 模式」是这条链路上最常见的卡点，所以把两行原样摊开。
 - 扫描进度、相机名、`lastScanError` 都收在连接卡顶部，不再有独立的空态卡。
 - 圆点颜色：扫描中蓝、`connected && usable` 绿、`connected && !usable` 红、未连接灰。
 - 扫描失败还会由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast（`getUIContext().getPromptAction().showToast`），文案来自 `svc.lastScanError`。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
+- `ModeHeader(title, sub, on, status, statusColor)` 有 5 个值参数。`@Builder` 的值参数本身不订阅刷新，但这里每次都是 `build()` 重新求值，所以安全；**不要**把这个 builder 挪到不随状态重建的位置。
 
 #### 无线连接的其余规则
 
 - 「搜索附近的相机」走 mDNS `_ptp._tcp`，浏览 8 秒，发现的相机按 `机身名 + IP` 列出，点一下直接连。搜索期间显示「正在搜索附近的相机...」且不可重复触发。
 - 配对是**自动**的：`connectWifi` 拿到验证码后 `MainScreen.onConnectWifi` 直接调 `completeWifiPairing`，配对卡一般一闪而过。保留 `PairingCard` 与「完成配对」按钮只作兜底。验证码在 Z50II 相机上不显示，所以卡片文案写「若相机显示同一组数字可顺便核对」。
-- 相机侧前提：必须停在「连接向导」页（显示 `Z50_2_xxxx`），显示 IP/掩码的页面连不上。
+- **蓝牙配对成功之后无线会自动接续**（1.41.0）：先试落盘的地址，再 mDNS/网段扫描，连上直接扫照片。所以「蓝牙已连接」之后不需要用户再点一次「搜索附近的相机」；手动入口保留，只是不再是必经之路。
+- 相机侧前提：必须停在「连接向导」页（显示 `Z50_2_xxxx`），显示 IP/掩码的页面连不上；STA 模式还要先让相机入网（见 `WirelessGuide()`）。
 - 已连接且走 Wi-Fi 时，设备信息卡的「连接」一行显示 `Wi-Fi · <host>`。
-- 蓝牙卡的独立形态已取消（1.40.0），节都在无线块里；配对与保活实现见 [SERVICES.md](SERVICES.md)。
+- 蓝牙卡的独立形态已取消（1.40.0），节都在无线块里；配对与保活实现见 [SERVICES.md](SERVICES.md)，自动接续见同文「无线链路的自动接续」。
 
 扫描阶段、缓存与快速扫描的细节见 [SERVICES.md](SERVICES.md)。
 

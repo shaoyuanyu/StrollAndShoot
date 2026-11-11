@@ -422,11 +422,110 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以�
 - 配对完成后**先等 2.5 秒**再写 `0x2006`（ZPill 的 writeGate）：相机刚收口时注入
   会话还没醒，立刻写会被拒甚至被踢链。
 
+**无线链路的自动接续（1.41.0）**
+
+蓝牙配好只是半条链路。照片要走 Wi-Fi STA 上的 PTP/IP，所以在 BLE 配对落定之后
+必须接着把无线那半条接起来，否则用户看到的是「蓝牙已连接 + 无线未连接」两张
+互不相干的卡。
+
+*网络枚举：`services/LocalNetworks.ets`*
+
+只用 `connection.getAllNets()` 不够——它**不保证**列出没有 INTERNET 能力的
+热点网络，而 STA 链路里最典型的网络恰好就是手机热点。三条来源并起来：
+
+1. `getAllNets()` 的链路地址（权威，但可能漏热点）；
+2. `wifiManager.getIpInfo()` 的 STA 地址（`getAllNets` 偶尔也漏 STA）；
+3. 热点开着（`isHotspotActive()`）且前两条没覆盖时，补平台约定的
+   `192.168.43`。三方应用没有任何接口能读热点接口自己的地址
+   （`getHotspotConfig` 一类要系统权限），只能按约定猜，所以这一条是启发式、
+   且只在必要时加。
+
+`IpInfo.ipAddress` 的字节序没有官方文档背书（社区口径是 Android DhcpInfo 的
+小端约定），所以做一次**自洽校验**：地址与网关同 /24 才采信小端，否则试大端，
+都不自洽退回小端。这样即使口径反了也不会把整轮扫描打到错误网段。
+
+`SubnetScanner` 用它的 `subnets` 展开 /24，并**把热点网段排在最前**：热点没有
+外网、mDNS 常被挡，网段扫描往往是唯一出路，不能让它排在办公网后面等十几秒。
+
+*自动接续的三个触发点*
+
+| 触发点 | 行为 |
+|---|---|
+| `connectBle()` 配对成功 | `autoLinkWifi('ble-paired')` |
+| BLE 断链自动重连成功 | 若无线没连上，`autoLinkWifi('ble-reconnected')` |
+| App 冷启动 `autoConnectBle()` | 见下 |
+
+冷启动分两种情况：有 BLE 身份就走 BLE，连上后由上面第一条接无线；**没有 BLE
+身份或 BLE 彻底不通时，无线仍单独试一次**（`autoLinkWifi(..., allowScan=false)`）
+——用户可能只想要相册，不需要蓝牙保活/地理标记。`allowScan=false` 表示只用
+记住的地址，不在冷启动时空跑一轮 254 个地址的扫描。
+
+`autoLinkWifi()` 的顺序刻意是「记得的地址 → mDNS/网段扫描」：相机地址几乎不
+变，先直连能把冷启动压到一两秒；直连失败才扫。连上之后 `finishAutoLink()`
+直接 `scanForCamera()`，让「蓝牙连上 → 无线连上 → 相册出来」是一条连续的链路。
+
+*地址持久化：`services/WifiLinkStore.ets`*
+
+`PersistenceV2.globalConnect()`，key `wifi_link`，存 `host / port / cameraName`。
+只存「上次连上过的地址」，不存身份与配对码。以前 `wifiHost` 是纯内存
+`@Trace`，每次冷启动都得让用户重新找一次 IP。
+
+*`0x2005` 必须两条路都写*
+
+`0x2005 = 0x01` 唤起相机无线，`0x80` 关闭。以前只有首配（`pairFresh`）写
+`0x01`，复用握手（`resumePairing`）不写——于是相机休眠/重开之后走 resume 的
+路径上相机无线一直是关着的：BLE 日志全绿，PTP 永远连不上。现在两条路都写。
+
+`0x80` 只在 `disconnectBle()` 且**无线会话不在用**时写：STA 模式下这一笔会让
+相机退出网络，顺手把正在用的 PTP 会话也断掉。
+
+*无线侧的自动重连*
+
+`WifiPtpSession.setBrokenHandler()` 把「运行中断链」上报给 `CameraService`。
+以前 `broken` 只是内部标志：断链之后 App 还停在「已连接」，点什么都失败。
+注意 `connect()` 失败也走同一个 handler，所以只有**已经建立过会话**的断开才算
+运行中断链（`wasOpen` 判断），否则会在连接失败瞬间排出重连、和用户正在点的
+那次连接打架。
+
+退避 `[2000, 3000, 5000, 8000, 12000, 20000, 30000]`，与 BLE 同节奏；每轮先试
+记住的地址再重扫。用户显式断开（`disconnect()` / `disconnectBle()`）会把
+`wifiAutoReconnectArmed` 置 false 并清掉计时器，避免刚点完断开又被接回来。
+
+*扫不到时的原因（`networkHint()`）*
+
+扫不到相机分两种：**网络前提不成立**（没有可用网络、Wi-Fi 与热点都没开）与
+**相机那边的事**（没进 Wi-Fi 模式、被客户端隔离、上一个会话还挂在 15740 上）。
+`scanWifiCameras()` 先摸一遍本机网络写进 `networkSummary`，再把
+`networkHint()` 的结论写进 `wifiHint`；两台都为空时补一句「同一网络里没有
+发现相机，确认相机已进入连接至智能设备」。相机页把这两行原样显示。
+
+*`0x2004` 凭据解密：`services/NikonWifiCredentials.ets`*
+
+blob 是 **97B 或 102B** 密文：`32B 加密 SSID + 64B 加密密码 + 1B 安全模式`
+（97B，SnapBridge 口径），或前面多一个 flag 字节、安全字节后多一段 LSS 尾
+（102B，LSS 口径）。两条解密路线：
+
+1. **LSS 会话密钥派生**（主路）：`ctx = idx‖N_A[1..3]‖X[0..3]`，
+   `K = MAC8(key1‖key2‖ctx)`（MAC 用与握手同一个定键 CBC-MAC），K 当标准
+   Blowfish 密钥编排，SSID 与密码**各自独立 CBC、IV 全零**。ctx 字节序与 key1
+   语义在还原报告里没定死，留 2×4 组候选，由**可打印性 oracle** 裁决。
+2. **定键试探**（兜底，只在 97B 布局上）：直接拿握手定键 ECB / CBC 试解。
+
+材料全部取**线上原样字节**：`key1` = stage4 帧字节 9..17（是 8B 身份字段，不是
+「序列号字符串」）、`key2` = stage1 帧字节 9..17、`cameraNonce` = stage2 帧字节
+1..9、`phoneNonce` = stage1 帧字节 1..9，加上命中的 `saltIndex`。全试未中如实
+返回 `null`，**不臆造明文**。
+
+真机日志形如 `配对: 相机热点「Z50_2_8079350」· 开放 · 密码 0 字符 · 来源 lss-kdf …`。
+密码只打长度不打明文。
+
 **当前边界（重要）**
 
 - 只支持 STA/热点这种「手机与相机同网」的路径；AP 模式（手机连相机热点）没做。
-- BLE 首配与复用握手已打通（1.38.1 真机验证）；BLE 侧的 `0x2004` 解密取
-  SSID/密码还没做（现在只读到 102B 密文）。
+  凭据解密已经落地（1.41.0），缺的是 `wifiManager` 候选配置族那一层接入。
+- **「相机入网」这一步 App 代替不了**：三方应用没有任何接口能开热点
+  （`enableHotspot` 要系统权限），相机也必须人工在菜单里选一次网络。所以 STA
+  只能做成「一次性配置 + 之后自动接续」，相机页给了步骤引导。
 - 连接失败的第一嫌疑仍是「相机不在『连接向导』页」——显示 IP/掩码的页面 15740 没开。
 - `GetStorageIDs` 被拒时返回 `0xFFFFFFFF` 哨兵，由 `GetObjectHandles` 按「所有存储」枚举——这是 SnapBridge 会话的已知行为。
 - 部分机型对同一台相机只保留一个 PTP/IP initiator；另一个设备的 `Init` 会踢掉前一个会话，甚至把相机踢出配对模式。调试时不要并发探测。

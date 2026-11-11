@@ -13,9 +13,9 @@ import { BusinessError } from '@kit.BasicServicesKit';
  * 标准向量（零密钥 + 全零块 → `4EF997456198DD78`）确认系统实现没跑偏。
  */
 const NIKON_KEY: number[] = [0xFF, 0xFF, 0xAA, 0x55, 0x11, 0x22, 0x33, 0x00];
-/** CryptoFramework 的算法字符串；不同版本可能要求 Blowfish64，失败时会回退。 */
-const CIPHER_TRANSFORM = 'Blowfish|ECB|NoPadding';
-const CIPHER_TRANSFORM_ALT = 'Blowfish64|ECB|NoPadding';
+/** CryptoFramework 的算法名；不同版本可能要求 Blowfish64，失败时会回退。 */
+const KEY_ALG = 'Blowfish';
+const KEY_ALG_ALT = 'Blowfish64';
 
 function u32ToBytesBE(l: number, r: number): Uint8Array {
   const out = new Uint8Array(8);
@@ -38,28 +38,35 @@ function bytesToU32BE(data: Uint8Array): number[] {
 
 export class NikonBlowfish {
   private readonly onLog: (msg: string) => void;
-  private transform: string = CIPHER_TRANSFORM;
+  private algName: string = KEY_ALG;
   private ready: boolean = false;
 
   constructor(onLog: (msg: string) => void) {
     this.onLog = onLog;
   }
 
+  /** 建一个指定模式的 cipher；算法名不支持时回退到 Blowfish64 并记住。 */
+  private createCipher(modeSuffix: string): cryptoFramework.Cipher {
+    try {
+      return cryptoFramework.createCipher(`${this.algName}|${modeSuffix}`);
+    } catch (err) {
+      const alt = this.algName === KEY_ALG ? KEY_ALG_ALT : KEY_ALG;
+      this.algName = alt;
+      this.onLog(`[Blowfish] 回退算法串: ${alt}|${modeSuffix}`);
+      return cryptoFramework.createCipher(`${alt}|${modeSuffix}`);
+    }
+  }
+
+  private async symKey(keyBytes: number[]): Promise<cryptoFramework.SymKey> {
+    const keyGen = cryptoFramework.createSymKeyGenerator(KEY_ALG);
+    const keyBlob: cryptoFramework.DataBlob = { data: new Uint8Array(keyBytes) };
+    return await keyGen.convertKey(keyBlob);
+  }
+
   /** 用指定 8 字节密钥 ECB 加密一个块，返回 (L, R)。 */
   async encryptBlockWithKey(keyBytes: number[], l: number, r: number): Promise<number[]> {
-    const keyGen = cryptoFramework.createSymKeyGenerator('Blowfish');
-    const keyBlob: cryptoFramework.DataBlob = { data: new Uint8Array(keyBytes) };
-    const symKey = await keyGen.convertKey(keyBlob);
-
-    let cipher: cryptoFramework.Cipher;
-    try {
-      cipher = cryptoFramework.createCipher(this.transform);
-    } catch (err) {
-      // 有些版本只认 Blowfish64；一次失败后切过去并记住。
-      this.transform = CIPHER_TRANSFORM_ALT;
-      cipher = cryptoFramework.createCipher(this.transform);
-      this.onLog(`[Blowfish] 回退算法串: ${this.transform}`);
-    }
+    const symKey = await this.symKey(keyBytes);
+    const cipher = this.createCipher('ECB|NoPadding');
     await cipher.init(cryptoFramework.CryptoMode.ENCRYPT_MODE, symKey, null);
     const input: cryptoFramework.DataBlob = { data: u32ToBytesBE(l, r) };
     const output = await cipher.doFinal(input);
@@ -70,6 +77,34 @@ export class NikonBlowfish {
   /** 用尼康定键加密一个块。 */
   async nikonEncryptBlock(l: number, r: number): Promise<number[]> {
     return await this.encryptBlockWithKey(NIKON_KEY, l, r);
+  }
+
+  /**
+   * 用指定密钥做一次 CBC 解密，**整段一次解完**，IV 全零。
+   *
+   * 尼康 `0x2004` 的 SSID（32B）与密码（64B）是两个独立字段，各自 CBC、
+   * IV 全零（还原报告 §3.4：库每次调用重读 IV、不回写终链）。所以这里不用
+   * 逐块解，直接把整段丢给系统实现。
+   */
+  async decryptCbcZeroIv(keyBytes: number[], cipherBytes: Uint8Array): Promise<Uint8Array> {
+    const symKey = await this.symKey(keyBytes);
+    const cipher = this.createCipher('CBC|NoPadding');
+    const iv: cryptoFramework.IvParamsSpec = {
+      algName: 'IvParamsSpec',
+      iv: { data: new Uint8Array(8) }
+    };
+    await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, iv);
+    const output = await cipher.doFinal({ data: cipherBytes });
+    return new Uint8Array(output.data);
+  }
+
+  /** 用指定密钥 ECB 解密整段（定键兜底路径用）。 */
+  async decryptEcb(keyBytes: number[], cipherBytes: Uint8Array): Promise<Uint8Array> {
+    const symKey = await this.symKey(keyBytes);
+    const cipher = this.createCipher('ECB|NoPadding');
+    await cipher.init(cryptoFramework.CryptoMode.DECRYPT_MODE, symKey, null);
+    const output = await cipher.doFinal({ data: cipherBytes });
+    return new Uint8Array(output.data);
   }
 
   /**

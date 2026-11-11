@@ -43,6 +43,7 @@ export class WifiPtpSession implements PtpTransport {
   private broken: boolean = false;
   private label: string = '';
   private log: (msg: string) => void = (_m: string) => {};
+  private onBrokenUp: (reason: string) => void = (_r: string) => {};
 
   /** 与 USB 实现保持一致：0x201E 且 CloseSession 救不回来时置位。 */
   sessionConflict: boolean = false;
@@ -53,6 +54,20 @@ export class WifiPtpSession implements PtpTransport {
 
   setLog(fn: (msg: string) => void): void {
     this.log = fn;
+  }
+
+  /**
+   * 链路意外断开的上报口。
+   *
+   * 以前 `broken` 只是内部标志：事务里抛个错就完了，上层看到的只是「某次操作
+   * 失败」，没人知道整条链路已经死了。相机一休眠，App 就静默停在「已连接」，
+   * 点什么都失败。`CameraService` 接这个回调去排自动重连。
+   *
+   * 注意只报**非主动**断开：`closeSessionAndPipe()` 里会先清掉 handler，
+   * 用户自己断开不会触发重连。
+   */
+  setBrokenHandler(fn: (reason: string) => void): void {
+    this.onBrokenUp = fn;
   }
 
   async connect(endpoint: PtpEndpoint, _priority?: PtpPriority): Promise<boolean> {
@@ -75,6 +90,14 @@ export class WifiPtpSession implements PtpTransport {
     link.setBrokenHandler((reason: string) => {
       this.broken = true;
       this.log(`[Wi-Fi] 链路断开: ${reason}`);
+      // `connect()` 失败也会走到这里（同一个 handler）；只有**已经建立过
+      // 会话**的断开才算「运行中断链」，否则会在连接失败的瞬间排出重连，
+      // 和用户正在点的那次连接打架。
+      const wasOpen = this.open;
+      this.open = false;
+      if (wasOpen) {
+        this.onBrokenUp(reason);
+      }
     });
     link.onEvent = (code: number, params: number[]) => {
       this.log(`[Wi-Fi] 相机事件 0x${code.toString(16)} params=${params.length}`);

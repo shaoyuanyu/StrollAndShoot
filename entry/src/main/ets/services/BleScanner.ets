@@ -3,6 +3,8 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { NikonBlowfish } from './NikonBlowfish';
 import { BleTimePayload, BleGeoPayload, type BleGeoFix } from './BlePayloads';
 import { NikonPairing, decodePairingMessage, type PairingMessage } from './NikonPairing';
+import { decodeWifiCredentials, type LssHandshakeMaterial,
+  type WifiCredentials } from './NikonWifiCredentials';
 import { BleIdentityStore } from './BleIdentityStore';
 
 /** 扫描到的一台 BLE 相机。 */
@@ -180,6 +182,11 @@ export class BleCameraLink {
   private identityDevice: number = 0;
   private identityNonce: number = 0;
   private identitySerial: string = '';
+  /** 最近一次成功握手的材料，`0x2004` 会话密钥要从这里派生。 */
+  private material: LssHandshakeMaterial | null = null;
+  /** 解出来的相机热点凭据（AP 模式用；STA 模式下仅作「配对被相机认可」的凭据）。 */
+  private credentials: WifiCredentials | null = null;
+
   /**
    * 用户取消标记。
    *
@@ -646,6 +653,24 @@ export class BleCameraLink {
     await this.writeCharacteristic(NIKON_CHAR_ESTABLISH, new Uint8Array([value]));
   }
 
+  /**
+   * 关掉相机无线（`0x2005 = 0x80`）。
+   *
+   * 与 `0x01` 是对称的反义操作（ZPill 的 `closeCameraWifi` 同款）。以前只写
+   * 开不写关，用户断开相机之后相机热点还一直开着耗电。
+   *
+   * **只在用户明确「断开相机」时调**：STA 模式下这一笔会让相机退出网络，
+   * 顺手把 PTP 会话也断掉。
+   */
+  async closeCameraWifi(): Promise<void> {
+    try {
+      await this.writeEstablishment(0x80);
+      this.onLog('0x2005=0x80 已写（关闭相机无线）');
+    } catch (err) {
+      this.onLog(`0x2005 关闭失败: ${(err as Error).message}`);
+    }
+  }
+
   /** 写一次相机时钟（0x2006）。 */
   async writeTime(offsetMinutes: number): Promise<void> {
     const payload = BleTimePayload.build(new Date(), offsetMinutes);
@@ -803,6 +828,15 @@ export class BleCameraLink {
     this.identityNonce = store.identityNonce;
     this.identitySerial = serial.length > 0 ? serial : store.serial;
     await this.writeControllerName();
+    // 复用握手也要唤起相机无线。以前只有首配写这一笔，于是相机休眠/重开之后
+    // 走 resume 的路径上相机无线一直是关着的：BLE 全绿、PTP 永远连不上。
+    try {
+      await BleCameraLink.sleep(200);
+      await this.writeEstablishment(0x01);
+      this.onLog('配对: 0x2005=0x01 已写（复用握手后唤起相机无线）');
+    } catch (err) {
+      this.onLog(`配对: 0x2005 写入失败: ${(err as Error).message}`);
+    }
     // 相机有没有真正收下，看 0x2004 给不给内容。
     await BleCameraLink.sleep(300);
     await this.logConnectionConfig();
@@ -896,15 +930,36 @@ export class BleCameraLink {
     return this.identitySerial;
   }
 
-  /** 读 0x2004 并落日志：相机承认本次会话才会回 102B。 */
+  /**
+   * 读 `0x2004` 并解出相机热点凭据。
+   *
+   * 这个特征是**会话激活**的：相机认为本次 BLE 会话已配对完成才会返回内容。
+   * 所以它既是 AP 模式的原料，也是「相机侧到底认不认这次配对」的黄金指标 ——
+   * 比任何日志推断都可靠。
+   */
   private async logConnectionConfig(): Promise<void> {
     const config = await this.readConnectionConfig();
-    if (config !== null && config.length > 0) {
-      this.onLog(`配对: 0x2004 凭据 ${config.length}B`
-        + BleCameraLink.describeBytes(config));
-    } else {
-      this.onLog('配对: 0x2004 仍为空');
+    if (config === null || config.length === 0) {
+      this.credentials = null;
+      this.onLog('配对: 0x2004 仍为空（相机还没把这台手机当成已配对主机）');
+      return;
     }
+    this.onLog(`配对: 0x2004 读到 ${config.length}B 密文`);
+    const creds = await decodeWifiCredentials(config, this.material,
+      (m: string) => this.onLog(m));
+    this.credentials = creds;
+    if (creds === null) {
+      // 解不开不臆造明文：留 null，等下次握手换一组材料再试。
+      this.onLog(`配对: 0x2004 未能解出（材料 ${this.material === null ? '缺失' : '齐全'}）`);
+      return;
+    }
+    this.onLog(`配对: 相机热点「${creds.ssid}」· ${creds.securityLabel}`
+      + ` · 密码 ${creds.password.length} 字符 · 来源 ${creds.keySource}`);
+  }
+
+  /** 相机热点凭据；没读到或没解出来为 null。AP 模式接进来时用。 */
+  getCredentials(): WifiCredentials | null {
+    return this.credentials;
   }
 
   /**
@@ -998,6 +1053,16 @@ export class BleCameraLink {
     const stage4 = decodePairingMessage(await stage4Promise);
     const serial = pairing.extractSerial(stage4);
     this.onLog(`配对: stage4 序列号 ${serial}${resume ? '（复用握手）' : ''}`);
+    // 留住握手材料：0x2004 的会话密钥要从这四帧里派生（见
+    // NikonWifiCredentials）。字段一律取**线上原样字节**，不做 NUL 截断 ——
+    // key1 是 stage4 的 8B 身份字段，不是「序列号字符串」。
+    this.material = {
+      key1: stage4.raw.slice(9, 17),
+      key2: stage1.raw.slice(9, 17),
+      saltIndex: result.saltIndex,
+      cameraNonce: stage2.raw.slice(1, 9),
+      phoneNonce: stage1.raw.slice(1, 9)
+    };
     return serial;
   }
 

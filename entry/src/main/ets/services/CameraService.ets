@@ -20,6 +20,8 @@ import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
 import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
 import { BleIdentityStore } from './BleIdentityStore';
+import { WifiLinkStore } from './WifiLinkStore';
+import { collectLocalNetworks, networkHint } from './LocalNetworks';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -172,9 +174,28 @@ export class CameraService {
   @Trace wifiCameras: WifiCameraInfo[] = [];
   /** mDNS 浏览是否进行中。 */
   @Trace wifiScanning: boolean = false;
+  /**
+   * 蓝牙配对落定后正在自动找/连无线。
+   *
+   * 与 `wifiScanning`（用户手点的 mDNS 浏览）分开：这条是链路自己推进的，
+   * UI 要能把「蓝牙好了，正在接无线」讲出来，而不是显示成两张互不相干的卡。
+   */
+  @Trace wifiAutoConnecting: boolean = false;
+  /** 无线会话掉线后正在自动重连。 */
+  @Trace wifiReconnecting: boolean = false;
+  /** 扫不到相机时的原因（空串 = 网络没问题，是相机那边的事）。 */
+  @Trace wifiHint: string = '';
+  /** 本机网络一句话快照（地址 / SSID / 热点），诊断与 UI 提示都用。 */
+  @Trace networkSummary: string = '';
   private nsdScanner: NsdScanner | null = null;
   private subnetScanner: SubnetScanner | null = null;
   private wifiScanTimer: number = -1;
+  private wifiReconnectTimer: number = -1;
+  private wifiReconnectIndex: number = 0;
+  /** 无线自动重连退避（与 BLE 同款节奏）。 */
+  private readonly wifiBackoffMs: number[] = [2000, 3000, 5000, 8000, 12000, 20000, 30000];
+  /** 用户显式断开时置位，避免自动重连把刚断开的相机又接回来。 */
+  private wifiAutoReconnectArmed: boolean = false;
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
   @Trace bleScanning: boolean = false;
@@ -1394,6 +1415,10 @@ export class CameraService {
       this.log.add('Wi-Fi DeviceInfo 未取到，用地址作为身份');
     }
     this.log.add(`无线连接建立: ${target}:${port}，身份 ${this.cameraIdentity}`);
+    // 地址落盘：下次冷启动 / 断线重连先试这个地址，不用每次都扫一遍网段。
+    WifiLinkStore.getInstance().save(target, port, this.cameraName);
+    this.wifiAutoReconnectArmed = true;
+    this.wifiHint = '';
 
     // 相机在「连接向导」里等主机注册时，会先开 15740 让我们连上，再等
     // 0x952B/0x935A 确认；不确认就 10 秒后自行收线，且 Wi-Fi 配置不落盘。
@@ -1474,6 +1499,13 @@ export class CameraService {
     if (ctx === null || this.wifiScanning) return;
     this.wifiScanning = true;
     this.wifiCameras = [];
+    this.wifiHint = '';
+    // 先摸一遍本机网络：扫不到相机时，是「网络前提不成立」还是「相机没进
+    // Wi-Fi 模式」，这一步决定了给用户哪句提示。
+    const nets = await collectLocalNetworks();
+    this.networkSummary = nets.summary;
+    this.wifiHint = networkHint(nets);
+    this.log.add(`本机网络: ${nets.summary}`);
     if (this.nsdScanner === null) {
       this.nsdScanner = new NsdScanner(ctx,
         (camera: WifiCameraInfo) => {
@@ -1510,6 +1542,11 @@ export class CameraService {
     });
     await Promise.all([mdnsWindow, subnetWork]);
     this.wifiScanning = false;
+    if (this.wifiCameras.length === 0 && this.wifiHint === '') {
+      // 网络前提成立却一台都没找到：问题在相机那边（没进 Wi-Fi 模式、
+      // 被客户端隔离、或相机把上一个会话还挂在 15740 上）。
+      this.wifiHint = '同一网络里没有发现相机。确认相机已进入「连接至智能设备」的 Wi-Fi 模式。';
+    }
   }
 
   private mergeWifiCamera(camera: WifiCameraInfo, source: string): void {
@@ -1640,6 +1677,12 @@ export class CameraService {
         this.bleReconnecting = false;
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
+        // 相机睡醒之后无线也得重新唤起，否则照片那半条永远是断的。
+        if (!this.connected) {
+          this.autoLinkWifi('ble-reconnected').catch((err: Error) => {
+            this.log.add(`重连后自动无线失败: ${err.message}`);
+          });
+        }
       };
       this.bleLink.onReconnecting = (reconnecting: boolean) => {
         this.bleReconnecting = reconnecting;
@@ -1649,6 +1692,11 @@ export class CameraService {
       // 首笔要等 2.5 秒（ZPill 的 writeGate）：相机刚收口时注入会话还没醒，
       // 立刻写会被拒收甚至被踢链。
       this.startBleKeepalive(2500);
+      // 蓝牙是「无线」的前置：配对一落定就接着把 Wi-Fi 那半条接上。
+      // 否则用户看到的是「蓝牙已连接 + 无线未连接」，还得自己去点扫描。
+      this.autoLinkWifi('ble-paired').catch((err: Error) => {
+        this.log.add(`自动无线启动失败: ${err.message}`);
+      });
       return true;
     } finally {
       this.bleConnecting = false;
@@ -1700,10 +1748,14 @@ export class CameraService {
   async autoConnectBle(): Promise<boolean> {
     if (this.bleConnected || this.bleConnecting) return this.bleConnected;
     const store = BleIdentityStore.getInstance();
-    if (!store.hasIdentity()) return false;
-    if (store.deviceId.length === 0) return false;
+    if (!store.hasIdentity() || store.deviceId.length === 0) {
+      // 没有 BLE 身份不代表无线也连不上：上次连过的无线地址还在，值得先试
+      // 一次（用户可能只想要相册，不需要蓝牙保活/地理标记）。
+      await this.autoLinkWifi('cold-start-no-ble', false);
+      return false;
+    }
     this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）`);
-    if (store.deviceId.length > 0 && await this.connectBle(store.deviceId, store.cameraName)) {
+    if (await this.connectBle(store.deviceId, store.cameraName)) {
       return true;
     }
     // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
@@ -1715,6 +1767,9 @@ export class CameraService {
         return true;
       }
     }
+    // BLE 这条路彻底不通时，无线这半条仍单独试一次（比如蓝牙被系统关了、
+    // 但手机还挂在相机所在的热点上）。
+    await this.autoLinkWifi('cold-start-ble-failed', false);
     return false;
   }
 
@@ -1737,7 +1792,15 @@ export class CameraService {
 
   /** 断开 BLE。 */
   async disconnectBle(): Promise<void> {
+    // 用户显式断开：先撤掉无线侧的自动重连，免得刚点完「断开」又被接回来。
+    this.wifiAutoReconnectArmed = false;
+    this.cancelWifiReconnect();
     if (this.bleLink !== null) {
+      // 无线会话还在用的时候不能写 0x2005=0x80：STA 模式下这一笔会让相机
+      // 退出网络，顺手把正在用的 PTP 会话也断掉。只在「只连着蓝牙」时关。
+      if (!this.wireless) {
+        await this.bleLink.closeCameraWifi();
+      }
       await this.bleLink.disconnect();
     }
     this.bleConnected = false;
@@ -1746,10 +1809,172 @@ export class CameraService {
     this.bleSerial = '';
   }
 
+  /** 取消排队中的无线自动重连。 */
+  private cancelWifiReconnect(): void {
+    if (this.wifiReconnectTimer >= 0) {
+      clearTimeout(this.wifiReconnectTimer);
+      this.wifiReconnectTimer = -1;
+    }
+    this.wifiReconnecting = false;
+    this.wifiReconnectIndex = 0;
+  }
+
   private makeWifiSession(): WifiPtpSession {
     const s = new WifiPtpSession();
     s.setLog((m: string) => this.log.add(m));
+    // 链路意外断开（相机休眠、热点掉了、相机主动收线）时排一次自动重连。
+    // 以前这里没有任何上报口：断链之后 App 还停在「已连接」，点什么都失败。
+    s.setBrokenHandler((reason: string) => { this.onWifiBroken(reason); });
     return s;
+  }
+
+  /**
+   * 无线链路掉线：清会话状态并按退避重连。
+   *
+   * 与 BLE 侧同节奏：先试记住的地址（快），连不上再重扫（相机换网段/DHCP
+   * 重发地址的情况）。用户显式断开后 `wifiAutoReconnectArmed` 为 false，
+   * 自动重连不会启动。
+   */
+  private onWifiBroken(reason: string): void {
+    if (!this.wifiAutoReconnectArmed) {
+      this.log.add(`无线链路断开（未启用自动重连）: ${reason}`);
+      return;
+    }
+    if (this.wifiReconnecting) return;
+    this.log.add(`无线链路断开，准备自动重连: ${reason}`);
+    this.wifiReconnecting = true;
+    this.connected = false;
+    this.usable = false;
+    this.wifiReconnectIndex = 0;
+    this.scheduleWifiReconnect();
+  }
+
+  private scheduleWifiReconnect(): void {
+    if (this.wifiReconnectTimer >= 0) {
+      clearTimeout(this.wifiReconnectTimer);
+      this.wifiReconnectTimer = -1;
+    }
+    if (!this.wifiAutoReconnectArmed) {
+      this.wifiReconnecting = false;
+      return;
+    }
+    const delay = this.wifiBackoffMs[Math.min(this.wifiReconnectIndex,
+      this.wifiBackoffMs.length - 1)];
+    this.statusText = L10n.tr('camera_status_wifi_reconnecting', this.wifiReconnectIndex + 1);
+    this.wifiReconnectTimer = setTimeout(() => {
+      this.wifiReconnectTimer = -1;
+      this.tryWifiReconnect().catch((err: Error) => {
+        this.log.add(`无线自动重连异常: ${err.message}`);
+      });
+    }, delay);
+  }
+
+  private async tryWifiReconnect(): Promise<void> {
+    if (!this.wifiAutoReconnectArmed) {
+      this.wifiReconnecting = false;
+      return;
+    }
+    this.wifiReconnectIndex++;
+    const ok = await this.autoLinkWifi('reconnect');
+    if (ok) {
+      this.wifiReconnecting = false;
+      this.wifiReconnectIndex = 0;
+      this.log.add('无线自动重连成功');
+      return;
+    }
+    if (this.wifiReconnectIndex >= this.wifiBackoffMs.length) {
+      this.wifiReconnecting = false;
+      this.wifiReconnectIndex = 0;
+      this.log.add('无线自动重连放弃（退避用尽）');
+      this.statusText = L10n.tr('camera_status_wifi_connect_failed', this.wifiHost);
+      return;
+    }
+    this.scheduleWifiReconnect();
+  }
+
+  /**
+   * 把无线链路接起来（自动路径的唯一入口）。
+   *
+   * 顺序刻意是「记得的地址 → mDNS/网段扫描」：
+   * 1. 地址几乎从不变化，先直连能把冷启动从十几秒压到一两秒；
+   * 2. 直连失败才扫，避免每次都跑 254 个地址的端口探测。
+   *
+   * 成功后顺带把照片扫一遍，让「蓝牙连上 → 无线连上 → 相册出来」是一条
+   * 连续的链路，而不是要用户再点一次「搜索相机」。
+   */
+  async autoLinkWifi(source: string, allowScan: boolean = true): Promise<boolean> {
+    if (this.connected && this.wireless) return true;
+    if (this.wifiAutoConnecting) {
+      this.log.add(`自动无线已在进行中，忽略 ${source} 的重复触发`);
+      return false;
+    }
+    this.wifiAutoConnecting = true;
+    try {
+      const nets = await collectLocalNetworks();
+      this.networkSummary = nets.summary;
+      this.log.add(`自动无线（${source}）: ${nets.summary}`);
+
+      const store = WifiLinkStore.getInstance();
+      if (store.hasHost()) {
+        this.log.add(`自动无线: 先试上次地址 ${store.host}:${store.port}`);
+        if (await this.connectWifi(store.host, store.port, true)) {
+          await this.finishAutoLink();
+          return true;
+        }
+        this.log.add('自动无线: 上次地址不通，改为扫描');
+      }
+      if (!allowScan) {
+        this.log.add('自动无线: 本次不走网段扫描（冷启动先只试记住的地址）');
+        return false;
+      }
+
+      await this.scanWifiCameras(6000);
+      const camera = this.pickWifiCamera();
+      if (camera === null) {
+        this.log.add(`自动无线: 没有发现相机。${this.wifiHint}`);
+        return false;
+      }
+      this.log.add(`自动无线: 命中 ${camera.name} @ ${camera.host}`);
+      if (await this.connectWifi(camera.host, camera.port, true)) {
+        await this.finishAutoLink();
+        return true;
+      }
+      return false;
+    } finally {
+      this.wifiAutoConnecting = false;
+    }
+  }
+
+  /** 自动连上之后的收口：相机要注册就先注册，然后直接扫照片。 */
+  private async finishAutoLink(): Promise<void> {
+    this.wifiAutoReconnectArmed = true;
+    this.wifiHint = '';
+    if (this.pairingRequired) {
+      await this.completeWifiPairing();
+      return;
+    }
+    if (!this.connected) return;
+    await this.scanForCamera(true, true);
+  }
+
+  /**
+   * 从扫描结果里挑一台。
+   *
+   * mDNS 的实例名就是相机名，比「网段扫描得到的裸 IP」可信得多，所以优先；
+   * 同类里优先名字像尼康机身的（`Z50_2_...`），再不行才取第一台。
+   */
+  private pickWifiCamera(): WifiCameraInfo | null {
+    if (this.wifiCameras.length === 0) return null;
+    const byName = this.wifiCameras.filter((c: WifiCameraInfo) => !this.isRawIpName(c.name));
+    const named = byName.find((c: WifiCameraInfo) => /^[A-Za-z]/.test(c.name));
+    if (named !== undefined) return named;
+    if (byName.length > 0) return byName[0];
+    return this.wifiCameras[0];
+  }
+
+  /** 网段扫描的候选名就是 IP 本身，用它区分「有名字的 mDNS 结果」。 */
+  private isRawIpName(name: string): boolean {
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(name);
   }
 
   private buildWifiCameraIdentity(info: DeviceInfo, host: string): string {
@@ -3390,6 +3615,9 @@ export class CameraService {
   }
 
   async disconnect(): Promise<void> {
+    // 用户主动断开：撤掉自动重连，避免刚断开就被自己接回来。
+    this.wifiAutoReconnectArmed = false;
+    this.cancelWifiReconnect();
     await this.session.closeSessionAndPipe();
     if (this.wireless) {
       // 回到 USB 默认实现，下一次「搜索相机」才不会把 USB 端点喂给 Wi-Fi 会话。

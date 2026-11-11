@@ -149,12 +149,28 @@
       "value": "Not connected"
     },
     {
-      "name": "camera_ble_unnamed",
-      "value": "Unnamed camera"
+      "name": "camera_conn_wifi_linking",
+      "value": "Linking Wi-Fi…"
     },
     {
-      "name": "camera_conn_steps",
-      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode), pick a profile and wait for the \"connection wizard\" screen."
+      "name": "camera_conn_wifi_relinking",
+      "value": "Reconnecting Wi-Fi…"
+    },
+    {
+      "name": "camera_conn_wifi_waiting",
+      "value": "Waiting for Wi-Fi"
+    },
+    {
+      "name": "camera_conn_network",
+      "value": "This phone: %s"
+    },
+    {
+      "name": "camera_conn_guide",
+      "value": "STA mode needs the camera on the same network. Turn on the personal hotspot on this phone, then on the camera open Network menu → Connect to smart device → Wi-Fi connection, pick that hotspot and stay on the connection wizard screen. After that this screen connects by itself — no IP typing."
+    },
+    {
+      "name": "camera_ble_unnamed",
+      "value": "Unnamed camera"
     },
     {
       "name": "camera_wifi_hint",

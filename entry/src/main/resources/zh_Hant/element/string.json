@@ -149,12 +149,28 @@
       "value": "未連線"
     },
     {
-      "name": "camera_ble_unnamed",
-      "value": "未命名相機"
+      "name": "camera_conn_wifi_linking",
+      "value": "正在連線無線…"
     },
     {
-      "name": "camera_conn_steps",
-      "value": "相機操作：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線(STA Mode)，選好 profile，直到出現「連線精靈」頁。"
+      "name": "camera_conn_wifi_relinking",
+      "value": "無線重新連線中…"
+    },
+    {
+      "name": "camera_conn_wifi_waiting",
+      "value": "等待無線"
+    },
+    {
+      "name": "camera_conn_network",
+      "value": "本機網路：%s"
+    },
+    {
+      "name": "camera_conn_guide",
+      "value": "STA 模式需要相機先入網：先在手機上開啟個人熱點，再到相機「網路選單 → 連接至智慧型裝置 → Wi-Fi 連線」選擇這個熱點，並讓相機停在「連線精靈」頁。之後這裡會自動連上，不需要再填 IP。"
+    },
+    {
+      "name": "camera_ble_unnamed",
+      "value": "未命名相機"
     },
     {
       "name": "camera_wifi_hint",

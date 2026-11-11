@@ -54,6 +54,11 @@ export struct CameraPage {
     if (busy && this.svc.statusText !== '') {
       return this.svc.statusText;
     }
+    // 会话还没建立时，把链条上正在做的那一步讲出来：否则顶部一直写「未连接」，
+    // 而下面两行在忙，又回到「状态互相打架」的老问题上。
+    if (this.svc.bleConnecting) return $r('app.string.camera_ble_connecting');
+    if (this.svc.wifiAutoConnecting) return $r('app.string.camera_conn_wifi_linking');
+    if (this.svc.wifiReconnecting) return $r('app.string.camera_conn_wifi_relinking');
     return this.svc.connected
       ? $r('app.string.camera_status_connected')
       : $r('app.string.camera_conn_disconnected');
@@ -205,9 +210,75 @@ export struct CameraPage {
     return $r('app.color.text_tertiary');
   }
 
+  /**
+   * 无线模式的前提说明。
+   *
+   * STA 模式是「相机加入手机所在网络」，这一步 App 代替不了：三方应用没有
+   * 任何接口能读/配热点，`enableHotspot` 一类都要系统权限。所以只能把
+   * 「手机要开热点、相机要选这个热点」讲清楚，而不是让用户对着空列表猜。
+   *
+   * 同时把本机网络快照与扫不到的原因摊开：分不清「我网络不对」和「相机没
+   * 进 Wi-Fi 模式」是这条链路上最常见的卡点。
+   */
+  @Builder
+  WirelessGuide() {
+    Column({ space: 6 }) {
+      if (this.svc.networkSummary !== '') {
+        Text($r('app.string.camera_conn_network', this.svc.networkSummary))
+          .fontSize(FontSize.Micro)
+          .lineHeight(16)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
+      if (this.svc.wifiHint !== '') {
+        Text(this.svc.wifiHint)
+          .fontSize(FontSize.Micro)
+          .lineHeight(16)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
+      Text($r('app.string.camera_conn_guide'))
+        .fontSize(FontSize.Micro)
+        .lineHeight(16)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /**
+   * 无线模式的「第几段」。
+   *
+   * 无线 = 蓝牙（配对/保活）+ Wi-Fi STA（照片通道）。以前只有「已连接 /
+   * 未连接」两态，于是「蓝牙已配对、正在接无线」这段几十秒被显示成
+   * 「未连接」，看起来像什么都没做。现在把中间态讲出来：
+   *
+   * - 已连上：无线会话在；
+   * - 蓝牙好了、正在自动接无线：显示进度；
+   * - 蓝牙好了、无线还没起来：半个状态，需要用户/机制继续推进；
+   * - 都没有：未连接。
+   */
+  private wirelessStatusText(): ResourceStr {
+    if (this.wifiConnected()) return $r('app.string.camera_conn_connected');
+    if (this.svc.wifiAutoConnecting) return $r('app.string.camera_conn_wifi_linking');
+    if (this.svc.wifiReconnecting) return $r('app.string.camera_conn_wifi_relinking');
+    if (this.blePaired()) return $r('app.string.camera_conn_wifi_waiting');
+    return $r('app.string.camera_conn_disconnected');
+  }
+
+  private wirelessStatusColor(): Resource {
+    if (this.wifiConnected()) return $r('app.color.status_connected');
+    if (this.svc.wifiAutoConnecting || this.svc.wifiReconnecting) return $r('app.color.primary');
+    // 蓝牙就绪但无线没通：不是「正在做」，是真没连上，给告警色。
+    if (this.blePaired()) return $r('app.color.status_error');
+    return $r('app.color.text_tertiary');
+  }
+
   /** 卡片内的模式块外壳：左侧状态点 + 模式名 + 右侧状态。 */
   @Builder
-  ModeHeader(title: Resource, sub: ResourceStr, on: boolean, status: ResourceStr) {
+  ModeHeader(title: Resource, sub: ResourceStr, on: boolean, status: ResourceStr,
+             statusColor: Resource) {
     Row({ space: 8 }) {
       Row()
         .width(6).height(6).borderRadius(pillRadius(6))
@@ -227,7 +298,7 @@ export struct CameraPage {
       Blank()
       Text(status)
         .fontSize(FontSize.Caption)
-        .fontColor(on ? $r('app.color.status_connected') : $r('app.color.text_tertiary'))
+        .fontColor(statusColor)
     }
     .width('100%')
   }
@@ -314,7 +385,9 @@ export struct CameraPage {
           '',
           this.usbConnected(),
           this.usbConnected() ? $r('app.string.camera_conn_connected')
-                             : $r('app.string.camera_conn_disconnected'))
+                             : $r('app.string.camera_conn_disconnected'),
+          this.usbConnected() ? $r('app.color.status_connected')
+                              : $r('app.color.text_tertiary'))
         Text($r('app.string.camera_conn_usb_hint'))
           .fontSize(FontSize.Caption)
           .lineHeight(18)
@@ -333,8 +406,8 @@ export struct CameraPage {
           $r('app.string.camera_conn_wireless'),
           $r('app.string.camera_conn_wireless_sub'),
           this.wifiConnected(),
-          this.wifiConnected() ? $r('app.string.camera_conn_connected')
-                              : $r('app.string.camera_conn_disconnected'))
+          this.wirelessStatusText(),
+          this.wirelessStatusColor())
 
         // 蓝牙：配对与保活，是无线模式的前置
         Row({ space: 8 }) {
@@ -439,6 +512,8 @@ export struct CameraPage {
           }
           .width('100%')
 
+          this.WirelessGuide()
+
           if (this.svc.wifiCameras.length > 0) {
             Column() {
               ForEach(this.svc.wifiCameras, (cam: WifiCameraInfo) => {
@@ -491,12 +566,6 @@ export struct CameraPage {
             }
             .width('100%')
           }
-
-          Text($r('app.string.camera_conn_steps'))
-            .fontSize(FontSize.Caption)
-            .lineHeight(18)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
         }
       }
       .width('100%')
