@@ -622,8 +622,21 @@ export class BleCameraLink {
     const serial = pairing.extractSerial(stage4);
     this.onLog(`配对: stage4 序列号 ${serial}`);
 
-    // 名字先行：相机收下 0x2002 控制器名后，相机侧配对才算完成。
-    // 顺序反了（先等 0x2008）会双方互等到超时——ZPill 在 Zf 上实测。
+    // N-link 的流程：stage4 后先等 0x2008 的 final OK（01 00），最多 3 秒，
+    // 收到或超时才写 0x2002。ZPill 在 Zf 上是「名字先行」，但 Z50II 实测
+    // 立刻写名字会让相机一直停在等待页，按 N-link 的顺序更稳。
+    this.onLog('配对: stage4 完成，等 0x2008 final OK');
+    try {
+      const notify = await this.waitCharacteristic(NIKON_CHAR_CONTROL, 3000);
+      let hex = '';
+      for (let i = 0; i < notify.length; i++) {
+        hex += (notify[i] < 16 ? '0' : '') + notify[i].toString(16) + ' ';
+      }
+      this.onLog(`配对: 0x2008 收到 [${hex.trim()}]`);
+    } catch (_e) {
+      this.onLog('配对: 0x2008 等待超时，继续写控制器名');
+    }
+
     const name = 'StrollAndShoot';
     const namePayload = new Uint8Array(32);
     for (let i = 0; i < name.length && i < 32; i++) {
