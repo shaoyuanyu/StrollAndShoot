@@ -1609,7 +1609,17 @@ export class CameraService {
       }
       this.bleConnected = true;
       this.bleServices = await this.bleLink.listServices();
+      for (const line of this.bleServices) {
+        this.log.add(`GATT ${line}`);
+      }
       this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
+      // 服务枚举完直接走四步配对（相机需停在「开始配对」页）。
+      const serial = await this.bleLink.pair();
+      if (serial !== null) {
+        this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
+      } else {
+        this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');
+      }
       return true;
     } finally {
       this.bleConnecting = false;

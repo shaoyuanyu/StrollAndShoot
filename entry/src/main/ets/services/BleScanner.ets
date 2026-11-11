@@ -1,5 +1,7 @@
 import { ble, connection as btConnection, constant } from '@kit.ConnectivityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { NikonBlowfish } from './NikonBlowfish';
+import { NikonPairing, decodePairingMessage } from './NikonPairing';
 
 /** 扫描到的一台 BLE 相机。 */
 export interface BleCameraDevice {
@@ -11,6 +13,14 @@ export interface BleCameraDevice {
 /** 尼康智能设备模式的 GATT 服务（LSS / DE00 族）。 */
 export const NIKON_BLE_SERVICE = '0000de00-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_BLE_SERVICE_ALT = '0000de01-3dd4-4255-8d62-6dc7b9bd5561';
+/** 配对认证特征（indicate，17 字节握手帧）。 */
+export const NIKON_CHAR_PAIRING = '00002000-3dd4-4255-8d62-6dc7b9bd5561';
+
+interface PendingChar {
+  uuid: string;
+  resolve: (v: Uint8Array) => void;
+  timer: number;
+}
 
 /**
  * 判断广播名是不是尼康相机。
@@ -100,6 +110,7 @@ export class BleCameraLink {
   private gatt: ble.GattClientDevice | null = null;
   private readonly onLog: (msg: string) => void;
   private readonly onState: (connected: boolean) => void;
+  private pendingChar: PendingChar | null = null;
   connected: boolean = false;
 
   constructor(onLog: (msg: string) => void,
@@ -199,11 +210,28 @@ export class BleCameraLink {
               }
               this.connected = true;
               this.onState(true);
-              finish(true);
+              // 服务发现要等 MTU 协商完；2 秒兜底，避免相机不回 BLEMtuChange
+              // 时把连接判成失败。
+              setTimeout(() => { finish(true); }, 2000);
             } else if (state.state === constant.ProfileConnectionState.STATE_DISCONNECTED) {
               this.connected = false;
               this.onState(false);
               finish(false);
+            }
+          });
+          gatt.on('BLEMtuChange', (mtu: number) => {
+            this.onLog(`BLE MTU: ${mtu}`);
+            finish(true);
+          });
+          gatt.on('BLECharacteristicChange', (data: ble.BLECharacteristic) => {
+            const uuid = (data.characteristicUuid ?? '').toLowerCase();
+            const value = new Uint8Array(data.characteristicValue);
+            this.onLog(`BLE 通知 ${uuid} (${value.length}B)`);
+            const pending = this.pendingChar;
+            if (pending !== null && pending.uuid === uuid) {
+              this.pendingChar = null;
+              clearTimeout(pending.timer);
+              pending.resolve(value);
             }
           });
           gatt.connect();
@@ -229,24 +257,127 @@ export class BleCameraLink {
 
   /** 列出服务与特征 UUID，用于确认相机 GATT 结构。 */
   async listServices(): Promise<string[]> {
-    const gatt = this.gatt;
-    if (gatt === null) return [];
-    try {
-      const services = await gatt.getServices();
-      const lines: string[] = [];
-      for (const service of services) {
-        const chars = service.characteristics ?? [];
-        lines.push(`${service.serviceUuid} (${chars.length} 个特征)`);
-        for (const ch of chars) {
-          lines.push(`  ${ch.characteristicUuid}`);
+    // 服务发现是异步的：刚连上/刚协商完 MTU 时 getServices 可能返回空，
+    // 这里重试三次（间隔 600ms），拿到非空结果为止。
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const gatt = this.gatt;
+      if (gatt === null) return [];
+      try {
+        const services = await gatt.getServices();
+        if (services.length > 0) {
+          const lines: string[] = [];
+          for (const service of services) {
+            const chars = service.characteristics ?? [];
+            lines.push(`${service.serviceUuid} (${chars.length} 个特征)`);
+            for (const ch of chars) {
+              lines.push(`  ${ch.characteristicUuid}`);
+            }
+          }
+          this.onLog(`BLE 服务: ${lines.length} 行`);
+          return lines;
         }
+      } catch (err) {
+        this.onLog(`BLE 取服务失败(${attempt + 1}/3): ${(err as BusinessError).message}`);
       }
-      this.onLog(`BLE 服务: ${lines.length} 行`);
-      return lines;
-    } catch (err) {
-      this.onLog(`BLE 取服务失败: ${(err as BusinessError).message}`);
-      return [];
+      await new Promise<void>((resolve: () => void) => {
+        setTimeout(resolve, 600);
+      });
     }
+    this.onLog('BLE 服务枚举为空（3 次重试均无结果）');
+    return [];
+  }
+
+  /** 打开某个特征的 indicate（0x2000 配对用 indicate，不是 notify）。 */
+  async enableIndication(charUuid: string): Promise<void> {
+    const gatt = this.gatt;
+    if (gatt === null) throw new Error('BLE 未连接');
+    const char: ble.BLECharacteristic = {
+      serviceUuid: NIKON_BLE_SERVICE,
+      characteristicUuid: charUuid,
+      characteristicValue: new Uint8Array(0),
+      descriptors: []
+    };
+    await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
+      gatt.setCharacteristicChangeIndication(char, true, (err: BusinessError) => {
+        if (err) {
+          reject(new Error(`indicate ${err.code}: ${err.message}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  /** 写一个特征值（带响应）。 */
+  async writeCharacteristic(charUuid: string, value: Uint8Array): Promise<void> {
+    const gatt = this.gatt;
+    if (gatt === null) throw new Error('BLE 未连接');
+    const char: ble.BLECharacteristic = {
+      serviceUuid: NIKON_BLE_SERVICE,
+      characteristicUuid: charUuid,
+      characteristicValue: value,
+      descriptors: []
+    };
+    await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
+      gatt.writeCharacteristicValue(char, ble.GattWriteType.WRITE, (err: BusinessError) => {
+        if (err) {
+          reject(new Error(`write ${err.code}: ${err.message}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  /** 等某个特征的下一次通知/指示。 */
+  waitCharacteristic(charUuid: string, timeoutMs: number): Promise<Uint8Array> {
+    return new Promise<Uint8Array>((resolve: (v: Uint8Array) => void,
+                                    reject: (e: Error) => void) => {
+      const key = charUuid.toLowerCase();
+      const timer = setTimeout(() => {
+        const pending = this.pendingChar;
+        if (pending !== null && pending.uuid === key) {
+          this.pendingChar = null;
+        }
+        reject(new Error('等待特征通知超时'));
+      }, timeoutMs);
+      this.pendingChar = { uuid: key, resolve: resolve, timer: timer };
+    });
+  }
+
+  /**
+   * 四步配对（0x2000，indicate）。
+   *
+   * 先跑 Blowfish 标准向量自测，再用尼康定键 CBC-MAC 走 stage1 → 2 → 3 → 4。
+   * 成功后相机把本客户端记为已配对主机，stage4 的字节 9–16 是相机序列号。
+   */
+  async pair(): Promise<string | null> {
+    const blowfish = new NikonBlowfish(this.onLog);
+    if (!await blowfish.selfTest()) {
+      this.onLog('配对: Blowfish 自测失败，终止');
+      return null;
+    }
+    const pairing = new NikonPairing(blowfish, this.onLog);
+    const stage1 = pairing.createStage1();
+    await this.enableIndication(NIKON_CHAR_PAIRING);
+    const stage2Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, 15000);
+    await this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw);
+    this.onLog('配对: stage1 已发送');
+    const stage2raw = await stage2Promise;
+    const stage2 = decodePairingMessage(stage2raw);
+    this.onLog(`配对: stage2 stage=${stage2.stage} len=${stage2raw.length}`);
+    const result = await pairing.verifyStage2AndBuildStage3(stage1, stage2);
+    if (result === null) {
+      return null;
+    }
+    const stage4Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, 15000);
+    await this.writeCharacteristic(NIKON_CHAR_PAIRING, result.message.raw);
+    this.onLog('配对: stage3 已发送');
+    const stage4raw = await stage4Promise;
+    const stage4 = decodePairingMessage(stage4raw);
+    const serial = pairing.extractSerial(stage4);
+    this.onLog(`配对完成: 相机序列号 ${serial}`);
+    return serial;
   }
 
   async disconnect(): Promise<void> {
