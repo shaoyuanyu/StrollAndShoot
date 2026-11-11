@@ -779,9 +779,7 @@ export struct CameraPage {
             .draggable(false)
             .opacity(this.svc.connected ? 1 : 0.72)
             .animation({ duration: 260, curve: Curve.EaseOut })
-          if (this.isDarkTheme()) {
-            this.StandeeReflection()
-          }
+          this.StandeeReflection()
         }
         .width('100%')
         .padding({ top: 12, bottom: 4 })
@@ -790,20 +788,26 @@ export struct CameraPage {
       .radialGradient({
         center: ['50%', '46%'],
         radius: 210,
-        colors: [[$r('app.color.hero_glow'), 0], ['#00000000', 1]]
+        // 同上：外圈用页面底色的透明版，避免径向渐变中段发灰
+        colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.bg_page_fade'), 1]]
       })
     }
   }
 
-  /**
-   * 当前生效的深/浅色。
-   *
-   * 倒影只在深色下画：产品图自带的投影是「一大片软阴影」，镜像后在浅色底上会
-   * 变成一块带硬边的灰色矩形——用户直接说「有明显视觉污渍」。深色下同一块阴影
-   * 融进黑底，反而正是倒影该有的样子。
-   */
+  /** 当前生效的深/浅色（跟随 `setColorMode()` 之后的实际配置）。 */
   private isDarkTheme(): boolean {
     return WindowUtils.isDarkMode(this.getUIContext().getHostContext());
+  }
+
+  /**
+   * 倒影强度。
+   *
+   * 两个主题都画倒影（一致性），但底色越亮、同样的不透明度看起来越「脏」：
+   * 深色底给 0.26，浅色底压到 0.16。断开时再乘 0.7，和主图的 0.72 呼应。
+   */
+  private reflectionOpacity(): number {
+    const base = this.isDarkTheme() ? 0.26 : 0.16;
+    return this.svc.connected ? base : base * 0.7;
   }
 
   /**
@@ -830,13 +834,21 @@ export struct CameraPage {
         // 产品图只有 780px 宽，铺到这个尺寸要放大 1.3 倍，放大后压缩块的边角会
         // 透出来；倒影本来就该「隐隐约约」，加一点模糊最省事也最像反光。
         .blur(2)
-        .opacity(this.svc.connected ? 0.26 : 0.18)
+        .opacity(this.reflectionOpacity())
       Column()
         .width('100%')
         .height('100%')
+        // 起手两档必须用 `bg_page_fade`（页面底色的「全透明版」），不能用
+        // '#00000000'：线性渐变是按「非预乘」插值的，从透明黑渐变到不透明浅色
+        // 会在中段经过一段灰——浅色下就是一条全宽灰带（深色下恰好是黑，看不出来，
+        // 所以只在浅色暴露）。只有 RGB 保持一致、只让 alpha 变，才是纯淡出。
         .linearGradient({
           angle: 180,
-          colors: [['#00000000', 0], ['#00000000', 0.34], [$r('app.color.bg_page'), 1]]
+          colors: [
+            [$r('app.color.bg_page_fade'), 0],
+            [$r('app.color.bg_page_fade'), 0.34],
+            [$r('app.color.bg_page'), 1]
+          ]
         })
     }
     .width('100%')
