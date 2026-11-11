@@ -24,6 +24,8 @@ export struct CameraPage {
   @Event onConnectBle: (deviceId: string, deviceName: string) => void =
     (_id: string, _name: string) => {};
   @Event onDisconnectBle: () => void = () => {};
+  /** 用户主动把相机切到 Wi-Fi（BLE 与 Wi-Fi 互斥，交接有代价，所以由用户点）。 */
+  @Event onConnectWireless: () => void = () => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -436,6 +438,24 @@ export struct CameraPage {
           }
         }
         .width('100%')
+
+        // 蓝牙已就绪、无线还没起：这是「相机现在在蓝牙模式」的正常状态。
+        // 给一个明确的交接按钮，用户点一下才把相机推到 Wi-Fi（互斥，不自动做）。
+        if (this.blePaired() && !this.wifiConnected() && !this.svc.wifiAutoConnecting) {
+          Button($r('app.string.camera_conn_open_wifi'))
+            .width('100%')
+            .height(44)
+            .fontSize(FontSize.Body)
+            .borderRadius(pillRadius(44))
+            .backgroundColor($r('app.color.primary'))
+            .fontColor($r('app.color.text_on_primary'))
+            .onClick(() => { this.onConnectWireless(); })
+          Text($r('app.string.camera_conn_open_wifi_hint'))
+            .fontSize(FontSize.Micro)
+            .lineHeight(16)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
 
         // Wi-Fi：已连接显示地址，未连接给地址输入与发现入口
         if (this.wifiConnected()) {

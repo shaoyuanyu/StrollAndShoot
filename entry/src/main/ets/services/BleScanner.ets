@@ -654,6 +654,17 @@ export class BleCameraLink {
   }
 
   /**
+   * 把相机推到 Wi-Fi 模式（`0x2005 = 0x01`）。
+   *
+   * BLE 与 Wi-Fi 互斥（Z50II 实测）：这一笔之后相机会把 BLE 关掉，链路随即
+   * 断开。调用方必须预期接下来要靠 mDNS/网段找它，而不是继续走 GATT。
+   */
+  async wakeCameraWifi(): Promise<void> {
+    await this.writeEstablishment(0x01);
+    this.onLog('0x2005=0x01 已写（把相机推到 Wi-Fi 模式）');
+  }
+
+  /**
    * 关掉相机无线（`0x2005 = 0x80`）。
    *
    * 与 `0x01` 是对称的反义操作（ZPill 的 `closeCameraWifi` 同款）。以前只写

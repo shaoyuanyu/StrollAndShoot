@@ -204,6 +204,17 @@ export class CameraService {
   private readonly wifiBackoffMs: number[] = [2000, 3000, 5000, 8000, 12000, 20000, 30000];
   /** 用户显式断开时置位，避免自动重连把刚断开的相机又接回来。 */
   private wifiAutoReconnectArmed: boolean = false;
+  /**
+   * 最近一次「把相机从 BLE 模式推到 Wi-Fi 模式」的时间。
+   *
+   * Z50II 实测：BLE 与 Wi-Fi **互斥**，写 `0x2005=0x01` 之后相机把 BLE 关掉，
+   * Wi-Fi 空闲约 40 秒才回到 BLE。以前 resume 路径每连一次都补写这一笔，
+   * 于是「连上 → 推进 Wi-Fi → 相机回 BLE → 再连上 → 再推进」无限乒乓，
+   * 相机永远在两个模式之间被踢。所以交接必须节流、且只在真要传照片时做。
+   */
+  private lastHandoverAt: number = 0;
+  /** 交接冷却：这段时间内再连 BLE 只做待机，不推相机进 Wi-Fi。 */
+  private readonly handoverCooldownMs: number = 90000;
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
   @Trace bleScanning: boolean = false;
@@ -1427,6 +1438,7 @@ export class CameraService {
     WifiLinkStore.getInstance().save(target, port, this.cameraName);
     this.wifiAutoReconnectArmed = true;
     this.wifiHint = '';
+    this.suspendBleForWifi();
 
     // 相机在「连接向导」里等主机注册时，会先开 15740 让我们连上，再等
     // 0x952B/0x935A 确认；不确认就 10 秒后自行收线，且 Wi-Fi 配置不落盘。
@@ -1670,7 +1682,13 @@ export class CameraService {
   }
 
   /** 连接一台 BLE 相机并列出 GATT 服务（验证 BLE 通道用）。 */
-  async connectBle(deviceId: string, deviceName: string = ''): Promise<boolean> {
+  /**
+   * @param handOver 连上 BLE 之后要不要把相机推到 Wi-Fi 模式（写 `0x2005=0x01`）。
+   *   用户主动选相机时为 true；App 冷启动的自动连接为 false —— 只做 BLE 待机，
+   *   把「切无线」留给用户明确要照片的那一刻。
+   */
+  async connectBle(deviceId: string, deviceName: string = '',
+                   handOver: boolean = true): Promise<boolean> {
     if (this.bleConnecting) {
       this.log.add('BLE 正在连接中，忽略重复点击');
       return false;
@@ -1706,10 +1724,19 @@ export class CameraService {
       this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
       // 服务枚举完直接走两段式配对（相机需停在「开始配对」页）。
       // 广播名要传给配对层：经典蓝牙绑定时靠它匹配相机。
-      // 无线会话已经在用的时候不写 0x2005：那一笔可能让相机重启 Wi-Fi，
-      // 把正在传照片的 PTP 会话一起掐断（BLE 掉线重连时就会踩到）。
-      const wakeWifi = !(this.connected && this.wireless);
-      const serial = await this.bleLink.pair(deviceName, wakeWifi);
+      // 三个条件缺一不可：
+      // 1. 这次调用真的要交接（用户主动选相机，不是冷启动/自动重连）；
+      // 2. 无线会话没在跑（跑了再推一次会把正在传的 PTP 掐断）；
+      // 3. 不在冷却期内（BLE/Wi-Fi 互斥，来回推会让相机在两个模式间乒乓）。
+      const wantHandover = handOver && !(this.connected && this.wireless);
+      const canHandover = wantHandover && this.handoverAllowed();
+      if (wantHandover && !canHandover) {
+        this.log.add('BLE 待机：交接冷却中，这次不把相机推到 Wi-Fi 模式');
+      }
+      const serial = await this.bleLink.pair(deviceName, canHandover);
+      if (canHandover) {
+        this.lastHandoverAt = Date.now();
+      }
       if (serial === null) {
         this.bleSerial = '';
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');
@@ -1725,12 +1752,8 @@ export class CameraService {
         this.bleReconnecting = false;
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
-        // 相机睡醒之后无线也得重新唤起，否则照片那半条永远是断的。
-        if (!this.connected) {
-          this.autoLinkWifi('ble-reconnected').catch((err: Error) => {
-            this.log.add(`重连后自动无线失败: ${err.message}`);
-          });
-        }
+        // 重连只恢复待机（校时/GPS）。**不要**在这里补写 0x2005：
+        // 相机刚从 Wi-Fi 回落才连得上，再推一次就又把它踢走（乒乓）。
       };
       this.bleLink.onReconnecting = (reconnecting: boolean) => {
         this.bleReconnecting = reconnecting;
@@ -1740,11 +1763,12 @@ export class CameraService {
       // 首笔要等 2.5 秒（ZPill 的 writeGate）：相机刚收口时注入会话还没醒，
       // 立刻写会被拒收甚至被踢链。
       this.startBleKeepalive(2500);
-      // 蓝牙是「无线」的前置：配对一落定就接着把 Wi-Fi 那半条接上。
-      // 否则用户看到的是「蓝牙已连接 + 无线未连接」，还得自己去点扫描。
-      this.autoLinkWifi('ble-paired').catch((err: Error) => {
-        this.log.add(`自动无线启动失败: ${err.message}`);
-      });
+      if (canHandover) {
+        // 已经把相机推到 Wi-Fi 模式：接着找它。
+        this.autoLinkWifi('ble-paired').catch((err: Error) => {
+          this.log.add(`自动无线启动失败: ${err.message}`);
+        });
+      }
       return true;
     } finally {
       this.bleConnecting = false;
@@ -1802,8 +1826,8 @@ export class CameraService {
       await this.autoLinkWifi('cold-start-no-ble', false);
       return false;
     }
-    this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）`);
-    if (await this.connectBle(store.deviceId, store.cameraName)) {
+    this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）（仅待机，不切无线）`);
+    if (await this.connectBle(store.deviceId, store.cameraName, false)) {
       return true;
     }
     // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
@@ -1811,7 +1835,7 @@ export class CameraService {
     this.log.add('BLE 直连未成，按设备号重扫相机');
     const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
     for (const dev of devices) {
-      if (await this.connectBle(dev.deviceId, dev.name)) {
+      if (await this.connectBle(dev.deviceId, dev.name, false)) {
         return true;
       }
     }
@@ -1855,6 +1879,95 @@ export class CameraService {
     this.bleReconnecting = false;
     this.bleServices = [];
     this.bleSerial = '';
+  }
+
+  /**
+   * 用户明确要照片：把相机切到 Wi-Fi 并连上。
+   *
+   * BLE 与 Wi-Fi 互斥，所以这是一个**有代价**的动作：相机切过去之后蓝牙就没了。
+   * 因此只由用户主动触发（相机页的「连接相机」），不由冷启动自动做。
+   */
+  async connectWirelessNow(): Promise<boolean> {
+    if (this.connected && this.wireless) return true;
+    if (this.wifiAutoConnecting) return false;
+    if (this.bleConnected && this.bleLink !== null) {
+      if (!this.handoverAllowed()) {
+        this.log.add('交接冷却中：相机刚被推过 Wi-Fi，稍后再试');
+        return false;
+      }
+      try {
+        await this.bleLink.wakeCameraWifi();
+        this.lastHandoverAt = Date.now();
+      } catch (err) {
+        this.log.add(`0x2005 写入失败: ${(err as Error).message}`);
+        return false;
+      }
+      // 写完之后 BLE 可能立刻断（相机去起 Wi-Fi 了），这里不等它。
+      this.bleLink.stopKeepalive();
+      return await this.autoLinkWifi('user-handover');
+    }
+    const store = BleIdentityStore.getInstance();
+    if (store.hasIdentity() && store.deviceId.length > 0) {
+      return await this.connectBle(store.deviceId, store.cameraName, true);
+    }
+    this.log.add('还没有配对过的相机，先搜索蓝牙相机');
+    return false;
+  }
+
+  /** 交接冷却是否已过（BLE/Wi-Fi 互斥，不能连着推）。 */
+  private handoverAllowed(): boolean {
+    return Date.now() - this.lastHandoverAt > this.handoverCooldownMs;
+  }
+
+  /**
+   * Wi-Fi 会话起来了：BLE 侧进入「静默」。
+   *
+   * 相机 BLE 与 Wi-Fi 互斥（Z50II 实测），Wi-Fi 一开 BLE 就没了。此时保活
+   * 写必然失败、自动重连只会把相机从 Wi-Fi 拽回来再推回去。所以停保活、
+   * 关自动重连，把这个窗口完整让给 Wi-Fi。
+   */
+  private suspendBleForWifi(): void {
+    if (this.bleLink === null) return;
+    this.bleLink.stopKeepalive();
+    this.bleLink.disableAutoReconnect();
+    this.bleReconnecting = false;
+    this.log.add('BLE 已让位给 Wi-Fi（相机两个无线模式互斥，期间不再重连/保活）');
+  }
+
+  /**
+   * Wi-Fi 会话结束：尝试把相机接回 BLE 待机。
+   *
+   * 不写 `0x2005`（那是「推到 Wi-Fi」），只用保存的地址/重扫连一次待机链路，
+   * 连上就恢复校时与 GPS 注入。连不上不重试到底 —— 相机可能还在 Wi-Fi
+   * 回落过程中，下一次用户动作会再触发。
+   */
+  private resumeBleAfterWifi(): void {
+    if (this.bleConnected || this.bleConnecting) return;
+    const store = BleIdentityStore.getInstance();
+    if (!store.hasIdentity() || store.deviceId.length === 0) return;
+    this.log.add('无线会话结束，等相机从 Wi-Fi 回落后接回 BLE 待机');
+    // 相机的 Wi-Fi 空闲回落要几十秒（Z50II 实测约 40 秒），一次连不上很
+    // 正常。按退避试四轮，都失败就交给下一次用户动作，不无限空转。
+    const delays: number[] = [6000, 15000, 30000, 60000];
+    const attempt = (index: number): void => {
+      if (index >= delays.length) {
+        this.log.add('BLE 仍未回落，放弃本轮（相机可能还停在 Wi-Fi 模式）');
+        return;
+      }
+      setTimeout(() => {
+        if (this.bleConnected || this.bleConnecting) return;
+        this.connectBle(store.deviceId, store.cameraName, false).then((ok: boolean) => {
+          if (!ok) {
+            this.log.add(`BLE 第 ${index + 1} 次回落尝试未成`);
+            attempt(index + 1);
+          }
+        }).catch((err: Error) => {
+          this.log.add(`接回 BLE 失败: ${err.message}`);
+          attempt(index + 1);
+        });
+      }, delays[index]);
+    };
+    attempt(0);
   }
 
   /** 取消排队中的无线自动重连。 */
@@ -3665,6 +3778,7 @@ export class CameraService {
 
   async disconnect(): Promise<void> {
     // 用户主动断开：撤掉自动重连，避免刚断开就被自己接回来。
+    const wasWireless = this.wireless;
     this.wifiAutoReconnectArmed = false;
     this.cancelWifiReconnect();
     await this.session.closeSessionAndPipe();
@@ -3713,6 +3827,10 @@ export class CameraService {
     this.thumbCache.close();
     this.statusText = L10n.tr('camera_status_disconnected');
     this.log.add('已断开连接');
+    if (wasWireless) {
+      // 无线会话结束 = BLE 应该能回来了（相机从 Wi-Fi 回落到蓝牙模式）。
+      this.resumeBleAfterWifi();
+    }
   }
 
   /**

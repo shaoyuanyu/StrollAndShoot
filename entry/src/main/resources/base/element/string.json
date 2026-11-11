@@ -145,6 +145,14 @@
       "value": "已连接"
     },
     {
+      "name": "camera_conn_open_wifi",
+      "value": "连接相机（切到 Wi-Fi）"
+    },
+    {
+      "name": "camera_conn_open_wifi_hint",
+      "value": "相机同一时间只能开蓝牙或 Wi-Fi。点这里会把相机的无线切到 Wi-Fi 传照片，期间蓝牙会断开；断开无线后会自动接回蓝牙。"
+    },
+    {
       "name": "camera_conn_disconnected",
       "value": "未连接"
     },

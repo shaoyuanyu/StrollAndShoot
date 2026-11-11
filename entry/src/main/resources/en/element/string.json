@@ -145,6 +145,14 @@
       "value": "Connected"
     },
     {
+      "name": "camera_conn_open_wifi",
+      "value": "Connect camera (switch to Wi-Fi)"
+    },
+    {
+      "name": "camera_conn_open_wifi_hint",
+      "value": "The camera can run Bluetooth or Wi-Fi, not both. This switches it to Wi-Fi for photo transfer; Bluetooth drops during the transfer and comes back when you disconnect."
+    },
+    {
       "name": "camera_conn_disconnected",
       "value": "Not connected"
     },

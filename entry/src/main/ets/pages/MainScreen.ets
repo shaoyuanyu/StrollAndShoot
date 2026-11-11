@@ -749,6 +749,9 @@ export struct MainScreen {
             },
             onDisconnectBle: () => {
               this.svc.disconnectBle();
+            },
+            onConnectWireless: () => {
+              this.svc.connectWirelessNow();
             }
           })
         }
