@@ -187,6 +187,15 @@ export class CameraService {
   @Trace wifiHint: string = '';
   /** 本机网络一句话快照（地址 / SSID / 热点），诊断与 UI 提示都用。 */
   @Trace networkSummary: string = '';
+  /**
+   * 蓝牙回不来时的提示。
+   *
+   * 相机 BLE 与 Wi-Fi 互斥，而且**没有**从 Wi-Fi 侧关掉无线再回蓝牙的命令
+   * （`0x2005=0x80` 只能走 BLE，那时 BLE 已经没了）。正常情况下相机会按自己
+   * 的 Wi-Fi 空闲超时回落，App 只是等；等不到就把结论摆出来，别让用户对着
+   * 一个永远转圈的「重连中」猜。
+   */
+  @Trace bleHint: string = '';
   private nsdScanner: NsdScanner | null = null;
   private subnetScanner: SubnetScanner | null = null;
   private wifiScanTimer: number = -1;
@@ -1743,6 +1752,7 @@ export class CameraService {
         return false;
       }
       this.bleSerial = serial;
+      this.bleHint = '';
       this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
 
       // 断链自动重连：相机会休眠，链路断了自己爬起来（用保存的身份复用握手）。
@@ -1952,6 +1962,7 @@ export class CameraService {
     const attempt = (index: number): void => {
       if (index >= delays.length) {
         this.log.add('BLE 仍未回落，放弃本轮（相机可能还停在 Wi-Fi 模式）');
+        this.bleHint = '相机还在 Wi-Fi 模式，蓝牙没有回来。若长时间不回，需要在相机上退出无线连接（或关机再开）。';
         return;
       }
       setTimeout(() => {

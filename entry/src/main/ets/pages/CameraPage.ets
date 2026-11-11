@@ -439,6 +439,14 @@ export struct CameraPage {
         }
         .width('100%')
 
+        if (this.svc.bleHint !== '') {
+          Text(this.svc.bleHint)
+            .fontSize(FontSize.Micro)
+            .lineHeight(16)
+            .fontColor($r('app.color.status_error'))
+            .width('100%')
+        }
+
         // 蓝牙已就绪、无线还没起：这是「相机现在在蓝牙模式」的正常状态。
         // 给一个明确的交接按钮，用户点一下才把相机推到 Wi-Fi（互斥，不自动做）。
         if (this.blePaired() && !this.wifiConnected() && !this.svc.wifiAutoConnecting) {
