@@ -16,6 +16,7 @@ import { PtpSession, PtpPriority, PtpEndpointKind, setPtpLog, setPtpQuietOps, Pt
 import { PtpScheduler } from './PtpScheduler';
 import { WifiPtpSession } from './WifiPtpSession';
 import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
+import { SubnetScanner } from './SubnetScanner';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -169,6 +170,7 @@ export class CameraService {
   /** mDNS 浏览是否进行中。 */
   @Trace wifiScanning: boolean = false;
   private nsdScanner: NsdScanner | null = null;
+  private subnetScanner: SubnetScanner | null = null;
   private wifiScanTimer: number = -1;
   /** 存储是否可读（GetStorageIDs 成功）。 */
   @Trace usable: boolean = false;
@@ -1454,10 +1456,7 @@ export class CameraService {
     if (this.nsdScanner === null) {
       this.nsdScanner = new NsdScanner(ctx,
         (camera: WifiCameraInfo) => {
-          if (!this.wifiCameras.some((c: WifiCameraInfo) => c.name === camera.name)) {
-            this.wifiCameras = this.wifiCameras.concat([camera]);
-            this.log.add(`mDNS 发现相机: ${camera.name} @ ${camera.host}:${camera.port}`);
-          }
+          this.mergeWifiCamera(camera, 'mDNS');
         },
         (name: string) => {
           this.wifiCameras = this.wifiCameras.filter((c: WifiCameraInfo) => c.name !== name);
@@ -1468,20 +1467,46 @@ export class CameraService {
       await this.nsdScanner.start();
     } catch (err) {
       this.log.add(`mDNS 启动失败: ${(err as Error).message}`);
-      this.wifiScanning = false;
-      return;
     }
-    if (this.wifiScanTimer >= 0) clearTimeout(this.wifiScanTimer);
-    this.wifiScanTimer = setTimeout(() => {
-      this.wifiScanTimer = -1;
-      this.wifiScanning = false;
-    }, durationMs);
+
+    // mDNS 被客户端隔离挡掉时一个都收不到，同时跑一遍 /24 端口扫描兜底。
+    if (this.subnetScanner === null) {
+      this.subnetScanner = new SubnetScanner((msg: string) => { this.log.add(msg); });
+    }
+    const mdnsWindow = new Promise<void>((resolve: () => void) => {
+      if (this.wifiScanTimer >= 0) clearTimeout(this.wifiScanTimer);
+      this.wifiScanTimer = setTimeout(() => {
+        this.wifiScanTimer = -1;
+        resolve();
+      }, durationMs);
+    });
+    const subnetWork = this.subnetScanner.scan().then((found: WifiCameraInfo[]) => {
+      for (const camera of found) {
+        this.mergeWifiCamera(camera, '网段扫描');
+      }
+    }).catch((err: Error) => {
+      this.log.add(`网段扫描失败: ${err.message}`);
+    });
+    await Promise.all([mdnsWindow, subnetWork]);
+    this.wifiScanning = false;
   }
 
-  /** 停止 mDNS 浏览并清掉计时器。 */
+  private mergeWifiCamera(camera: WifiCameraInfo, source: string): void {
+    if (this.wifiCameras.some((c: WifiCameraInfo) =>
+      c.name === camera.name || c.host === camera.host)) {
+      return;
+    }
+    this.wifiCameras = this.wifiCameras.concat([camera]);
+    this.log.add(`${source} 发现相机: ${camera.name} @ ${camera.host}:${camera.port}`);
+  }
+
+  /** 停止 mDNS 浏览、取消网段扫描并清掉计时器。 */
   stopWifiScan(): void {
     if (this.nsdScanner !== null) {
       this.nsdScanner.stop();
+    }
+    if (this.subnetScanner !== null) {
+      this.subnetScanner.cancel();
     }
     if (this.wifiScanTimer >= 0) {
       clearTimeout(this.wifiScanTimer);

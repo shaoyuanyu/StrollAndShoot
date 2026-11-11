@@ -321,6 +321,15 @@ USB 之外的第二条链路：相机与手机在同一网络时，走 TCP 15740
 - `CameraService.scanWifiCameras(8000)` 浏览 8 秒，结果进 `wifiCameras`；相机页的「搜索附近的相机」把它们列出来，点一下直接连，不用手填 IP。
 - 解析失败（2204006 超时）属正常，下轮广播会再报；`serviceLost` 会从列表移除。
 
+**/24 网段扫描兜底（1.33.0）**
+
+mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以「搜索附近的相机」会**同时**跑一遍 `services/SubnetScanner.ets`：
+
+- 取本机所有 IPv4 接口地址，各展开所在 /24 的 1..254（跳过本机、回环、169.254），候选上限 512；
+- 并发 12 个 TCP connect（700ms 超时），**只连不发送任何字节**——相机是单连接服务器，乱发 Init 会踢掉正在配对的会话；
+- 端口开放的主机作为候选并入 `wifiCameras`，用户点选后再走正式 PTP/IP。
+- 结果按 host 去重，mDNS 和网段扫描谁先发现都只留一条。
+
 **多网卡绑定（1.32.0）**
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
