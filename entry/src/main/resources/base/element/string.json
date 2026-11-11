@@ -125,10 +125,6 @@
       "value": "USB 连接"
     },
     {
-      "name": "camera_conn_usb_hint",
-      "value": "用 USB 数据线连接相机，并选择 PTP 传输模式。"
-    },
-    {
       "name": "camera_conn_wireless",
       "value": "无线连接"
     },
@@ -1222,27 +1218,99 @@
     },
     {
       "name": "camera_mode_ap",
-      "value": "WIFI AP"
+      "value": "Wi-Fi AP"
     },
     {
       "name": "camera_mode_sta",
-      "value": "WIFI STA"
+      "value": "Wi-Fi STA"
     },
     {
-      "name": "camera_guide_usb",
-      "value": "用数据线连接相机，相机上把 USB 传输模式设为 PTP。连接后照片最多、最稳，也不受无线干扰。"
+      "name": "camera_mode_desc_usb",
+      "value": "数据线直连，传输最快、最稳。"
     },
     {
-      "name": "camera_guide_ble",
-      "value": "蓝牙只用于配对、校时与位置信息注入，不传照片。相机上：网络菜单 → 连接至智能设备 → 配对（Bluetooth）→ 开始配对，然后回到这里点「搜索相机」。"
+      "name": "camera_mode_desc_ble",
+      "value": "只做配对、校时与位置注入，不传照片。"
     },
     {
-      "name": "camera_guide_ap",
-      "value": "相机自己开热点，手机连上去传照片，全程不需要你输密码。相机上：网络菜单 → 连接至智能设备 → Wi-Fi 连接（AP mode）→ 建立 Wi-Fi 连接，停在这个屏幕即可。退出时相机会自己回到蓝牙待机。"
+      "name": "camera_mode_desc_ap",
+      "value": "相机自己开热点，手机连上去就能传照片，不用输密码。"
     },
     {
-      "name": "camera_guide_sta",
-      "value": "相机加入手机所在网络，手机保持联网。相机上：网络菜单 → 连接至智能设备 → Wi-Fi 连接（STA mode）→ 创建配置文件 → 搜索 Wi-Fi 网络 → 选热点并输入密码。注意：STA 模式下 App 无法让相机退回蓝牙，需要时得在相机菜单里退出。"
+      "name": "camera_mode_desc_sta",
+      "value": "相机加入手机所在的 Wi-Fi，手机可以保持联网。"
+    },
+    {
+      "name": "camera_guide_usb_1",
+      "value": "用数据线把相机接到手机"
+    },
+    {
+      "name": "camera_guide_usb_2",
+      "value": "相机上把 USB 传输模式设为 PTP"
+    },
+    {
+      "name": "camera_guide_usb_3",
+      "value": "点右上角「搜索相机」"
+    },
+    {
+      "name": "camera_guide_ble_1",
+      "value": "相机「网络菜单 → 连接至智能设备 → 配对（Bluetooth）」开始配对"
+    },
+    {
+      "name": "camera_guide_ble_2",
+      "value": "点右上角「搜索相机」"
+    },
+    {
+      "name": "camera_guide_ble_3",
+      "value": "配对完成后相机会出现在这里"
+    },
+    {
+      "name": "camera_guide_ap_1",
+      "value": "相机「网络菜单 → 连接至智能设备 → Wi-Fi 连接（AP mode）」"
+    },
+    {
+      "name": "camera_guide_ap_2",
+      "value": "点「建立 Wi-Fi 连接」，让相机停在这个画面"
+    },
+    {
+      "name": "camera_guide_ap_3",
+      "value": "点右上角「搜索相机」，手机会自动连上相机热点"
+    },
+    {
+      "name": "camera_guide_ap_note",
+      "value": "退出照片浏览后，相机会自己回到蓝牙待机。"
+    },
+    {
+      "name": "camera_guide_sta_1",
+      "value": "手机先连上要用的 Wi-Fi"
+    },
+    {
+      "name": "camera_guide_sta_2",
+      "value": "相机「网络菜单 → 连接至智能设备 → Wi-Fi 连接（STA mode）」，创建配置文件并加入同一网络"
+    },
+    {
+      "name": "camera_guide_sta_3",
+      "value": "点「搜索附近的相机」，或直接填相机 IP"
+    },
+    {
+      "name": "camera_guide_sta_note",
+      "value": "STA 模式下 App 无法让相机退回蓝牙，需要时得在相机菜单里退出。"
+    },
+    {
+      "name": "camera_state_ble_ready",
+      "value": "蓝牙已就绪"
+    },
+    {
+      "name": "camera_state_ble_paired",
+      "value": "已配对"
+    },
+    {
+      "name": "camera_conn_wifi_host",
+      "value": "相机 Wi-Fi %1$s:%2$s"
+    },
+    {
+      "name": "camera_guide_ble_note",
+      "value": "蓝牙链路不传照片，要取照片请切到「Wi-Fi AP」。"
     }
   ]
 }

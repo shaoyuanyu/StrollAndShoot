@@ -99,51 +99,89 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 主操作（未连接 → 「搜索相机」，已连接 → 「快速扫描」，扫描中 → 「扫描中」）在**标题栏**右侧的玻璃胶囊里（`MainScreen.NormalTitleRow` 的 `visualTab === 1` 分支，不是 `currentTab`）：内容区的 `Button` 拿不到材质，标题栏里的才能。胶囊不设 `backgroundColor` / `materialColor` 时材质取 Button 主题色，文字用 `text_on_primary`。
 - 内容区是 24vp 圆角白卡、内边距 16vp：**连接卡**、设备信息卡（9 行 56vp）、操作卡（全量扫描 + 红色断开连接）。
-#### 连接卡：四选一胶囊 + 模式专属内容（1.43.0）
+#### 版面：链路选择在上，状态卡只讲当前链路（1.43.1）
 
-相机页顶部是 `CapsuleSegmentButtonV2` 四选一：**USB / 蓝牙 / WIFI AP / WIFI STA**，默认「蓝牙」，选择落盘（`CameraLinkModeStore`）。
+1. **四选一胶囊**（`CapsuleSegmentButtonV2`）：USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA，默认「蓝牙」，选择落盘（`CameraLinkModeStore`）。它**裸放在滚动内容顶部**，不塞进卡片——它是页面级开关，不是卡片里的字段。
+2. **状态卡**：状态头（点 + 一句话 + 张数）+ 模式专属控件 + 三步引导，三块之间用 hairline 分隔。
+3. 已连接时追加设备信息卡与操作卡。
 
-为什么从"App 自动决定"改成"用户选"：自动切换在真机上先后被证伪 —— BLE 与 Wi-Fi 互斥（Wi-Fi 期间相机不发蓝牙）、`0x9435(0)` 回 OK 但无效、STA 模式关会话三分钟后相机仍挂在热点上。既然做不到"无缝"，就别假装无缝：把模式摊开让用户选，所见即所得。
+为什么从「App 自动决定」改成「用户选」：自动切换在真机上先后被证伪 —— BLE 与 Wi-Fi 互斥（Wi-Fi 期间相机不发蓝牙）、`0x9435(0)` 回 OK 但无效、STA 模式关会话三分钟后相机仍挂在热点上。既然做不到「无缝」，就别假装无缝：把模式摊开让用户选，所见即所得。
 
-- 每种模式只显示自己的内容：USB 模式没有蓝牙/无线块；BLE 模式没有 IP 输入与「搜索附近的相机」；只有 STA 模式才出现 IP 输入与 mDNS 扫描入口。
-- 无线块标题随模式变（`wirelessBlockTitle()`），BLE 模式下不出现「Wi-Fi」字样。
-- 每模式一段引导（`guideText()` 读 `camera_guide_usb/_ble/_ap/_sta`），步骤对齐 SnapBridge 官方帮助的相机菜单路径。
-- 标题栏那颗按钮统一叫「搜索相机」（USB 且已连上时是「快速扫描」），一律走 `svc.searchByMode()`，按钮位置不随模式变化。
-- AP 模式额外给「查看照片」主色按钮 + 分步进度；STA 模式保留 IP 输入与 mDNS 列表。
+##### 胶囊必须自定义配色
 
-#### 连接卡：两种模式，一张卡（1.41.0）
+官方胶囊分段按钮**在内容区拿不到沉浸光感**（《组件适配沉浸光感》：SegmentButtonV2 的 `backgroundSystemMaterial` 只在 Navigation/NavDestination 标题栏或底部 TabBar 生效）。用默认样式会得到「灰底轨道 + 系统蓝选中块」，比卡片里所有控件都重，还会跟标题栏的主操作抢注意力。只保留官方组件的结构与动效，配色统一到 App 已有的一套：
 
-功能上只有两种连接方式，UI 必须按这两种讲：
-
-| 模式 | 说明 |
+| 参数 | 取值 |
 |---|---|
-| **USB 连接** | 数据线 + PTP 传输 |
-| **无线连接** | 蓝牙配对 + Wi-Fi STA 上的 PTP/IP |
+| `buttonBackgroundColor` | `filter_chip_bg`（与卡片内嵌块同色） |
+| `itemSelectedBackgroundColor` | `primary_soft` |
+| `itemSelectedFontColor` / `itemFontColor` | `primary` / `text_secondary` |
+| `itemFontSize` / `itemSelectedFontSize` | `FontSize.Caption`（14fp 时四段英文会挤） |
+| `itemFontWeight` / `itemSelectedFontWeight` | `Regular` / `Medium` |
+| `itemMinHeight` | 40vp（点按热区） |
 
-历史上 USB 状态、Wi-Fi 卡、蓝牙卡是三张各自为政的卡片，会出现「上面写未连接相机、下面写已连接」的自相矛盾（2026-11-11 用户实测反馈）。现在合并成一张 `ConnectionCard`：
+`ColorMetrics.resourceColor(...)` 与 `LengthMetrics` 会报 `Function may throw exceptions` 告警，与 `WindowShot` 同类，可接受。模式名不再硬编码，`MODE_ITEMS` 的 `text` 直接取 `camera_mode_*` 资源，和块标题同源。
 
-- 顶部一句话状态（`headerText()`）：`statusText` 只在**已连接或正在扫描**时采用；否则依次看 `bleConnecting` / `wifiAutoConnecting` / `wifiReconnecting`，把链条上正在做的那一步讲出来；都没有才显示「未连接」。`statusText` 的初值是「就绪」，未连接时直接显示它会让人以为已经连上。
-- 两个内嵌模式块（`Radius.Inner` + `filter_chip_bg`），各自一个状态点 + 模式名 + 右侧状态。未连接的点用 `text_tertiary` **灰色**，不要用琥珀色的 `status_disconnected`——两个模式并排时橙色会读成告警。
-- **USB 块**：只讲 USB。`usbConnected = connected && !wireless`。
-- **无线块**：`wifiConnected = connected && wireless`，右侧状态走 `wirelessStatusText()` 四态：已连接 / 「正在连接无线…」/「无线重连中…」/「等待无线」（蓝牙已配对、无线还没通）。**最后那一态用告警色**：它不是「正在做」，是真没连上。块内第一行是蓝牙状态（`bleStatusText()` 四态：正在连接 / 重连中 / 已连接·机身名 / 未连接），已连接时右侧给红色「断开蓝牙」；下面是 Wi-Fi 部分——已连接显示 `host:port` + 断开，未连接显示 IP 输入 + 主色「连接」+「搜索附近的相机」+「搜索蓝牙相机」（蓝牙未连接时才出现），再下面是 `WirelessGuide()`。
-- `WirelessGuide()` 三行小字：`networkSummary`（本机地址 / Wi-Fi SSID / 热点）、`wifiHint`（扫不到的原因）、STA 的一次性配置引导（**手机先开热点 → 相机菜单选这个热点**）。前两行为空时不渲染。分不清「我网络不对」和「相机没进 Wi-Fi 模式」是这条链路上最常见的卡点，所以把两行原样摊开。
-- 扫描进度、相机名、`lastScanError` 都收在连接卡顶部，不再有独立的空态卡。
-- 圆点颜色：扫描中蓝、`connected && usable` 绿、`connected && !usable` 红、未连接灰。
-- 扫描失败还会由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast（`getUIContext().getPromptAction().showToast`），文案来自 `svc.lastScanError`。
+##### 状态头只此一处
+
+`headline()` 按模式各给一句完整的话，全页只有这一处讲「连没连上」：
+
+| 模式 | 状态头 |
+|---|---|
+| USB | 扫描中 → `statusText`；已连 → 「已连接」；否则「未连接」 |
+| 蓝牙 | 正在连接 / 重连中 / 「已连接 · 机身名」/ 配对失败 / 正在搜索 / 未连接 |
+| Wi-Fi AP、Wi-Fi STA | 已连 → 「已连接」；交接中 → 「查看照片」；连无线中 / 重连中；**蓝牙已配对 → 「蓝牙已就绪」**；否则「未连接」 |
+
+- AP / STA 的状态头**不显示蓝牙的瞬时状态**（「正在连接蓝牙相机…」交给下方的「蓝牙」前置行），否则同一句话在一张卡里出现两遍。
+- 圆点颜色与文案同源（`headlineColor()` 按模式分支）：AP/STA 下蓝牙在连、无线还没起来时状态头写「未连接」，点就不能是蓝的。
+- 未连接的点用 `text_tertiary` 灰色，不用琥珀色 `status_disconnected`——两种状态并排时橙色会读成告警。
+
+##### 每个模式渲染什么
+
+| 模式 | 卡内专属控件 | 不出现 |
+|---|---|---|
+| USB | 无（主操作在标题栏） | 蓝牙行、IP 输入、本机网络、任何 Wi-Fi 字样 |
+| 蓝牙 | 「取消连接 / 断开蓝牙」（贴在状态头右侧）、发现的蓝牙相机列表 | IP 输入、本机网络、mDNS |
+| Wi-Fi AP | 「蓝牙」前置行、已配对时的「查看照片」主色按钮 + 分步进度、已连时的地址 + 断开 | **本机网络**（AP 连的是相机热点，手机当前连哪个 Wi-Fi 无关）、IP 输入 |
+| Wi-Fi STA | 「蓝牙」前置行、IP 输入 + 连接、搜索附近的相机、mDNS 列表、本机网络 + 诊断 | — |
+
+- 主操作仍是标题栏那颗胶囊，一律走 `svc.searchByMode()`，位置与文案不随模式变化（USB 且已连上时显示「快速扫描」）。卡内不再放同名按钮，避免一屏两处主色。
+- 「蓝牙」前置行（`BlePrereqRow`）只给 AP / STA 用；BLE 模式的状态头本身就是蓝牙状态，不再重复一行「蓝牙 已配对」。
+
+##### 引导是三步编号
+
+`modeDesc()` 一句话 + `StepRow(0..2)` 三条编号步骤 + 可选 `guideNote()`。相机菜单路径对齐 SnapBridge 官方帮助。
+
+- 资源按 `camera_guide_<mode>_1..3` + `camera_guide_<mode>_note` 拆分，不再是一整段 `camera_guide_<mode>`。改成编号列表是为了能扫读；一整段 5 行灰字在真机上没人看。
+- 步骤里写的按钮名要与界面一致（「搜索相机」「查看照片」「搜索附近的相机」），不要写「上面那个按钮」。
+- 只有 USB 没有 note。BLE 的 note 是「蓝牙链路不传照片」这一条必须讲清的事实；AP 的 note 讲退出后自动回蓝牙；STA 的 note 讲 App 无法让相机退回蓝牙。
+
+##### 错误与网络快照按模式隔离
+
+- `CameraService.setLinkMode()` 切换模式时清空 `lastScanError` / `bleHint` / `wifiHint` / `networkSummary` / `wirelessStage`：这些都属于上一模式。以前切到 USB 还挂着「蓝牙连接相机失败」、AP 模式还显示手机当前 Wi-Fi。
+- `lastScanError` 只在状态卡顶部显示一次；`wifiHint` / `networkSummary` 只在 STA 分支渲染。
+- 冷启动的 `autoConnectBle()` 是后台行为，`connectBle(..., silent: true)` 失败只记日志、不写 `lastScanError`、不弹 toast；用户点「搜索相机」触发的连接仍然报错（`autoConnectBle(false)`）。
+- 冷启动时 `linkMode === USB` 不自动连蓝牙——用户选的是走线，不该再去占相机的蓝牙链路。
+- 进 STA 模式（含冷启动恢复 STA）先调 `refreshNetworkSnapshot()` 摸一遍本机网络，「本机网络」一行立刻可见，不用等用户点搜索。
+- 扫描失败仍由 `MainScreen` 的 `@Monitor('svc.scanErrorVersion')` 弹一次 toast。
+
+##### 层级与圆角
+
+- 卡内**不再套一层实底块**。设置页是「页面底 → 卡片」两级，相机页以前多一层 `filter_chip_bg` 灰块，深色下发闷；现在是「卡片 → hairline 分隔」。
+- 卡片 24vp、内边距 16vp；行高 56vp；状态头 16fp Medium、正文 15fp、步骤与说明 12fp、note 10fp。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏。
-- `ModeHeader(title, sub, on, status, statusColor)` 有 5 个值参数。`@Builder` 的值参数本身不订阅刷新，但这里每次都是 `build()` 重新求值，所以安全；**不要**把这个 builder 挪到不随状态重建的位置。
 
 #### 无线连接的其余规则
 
 - 「搜索附近的相机」走 mDNS `_ptp._tcp`，浏览 8 秒，发现的相机按 `机身名 + IP` 列出，点一下直接连。搜索期间显示「正在搜索附近的相机...」且不可重复触发。
 - 配对是**自动**的：`connectWifi` 拿到验证码后 `MainScreen.onConnectWifi` 直接调 `completeWifiPairing`，配对卡一般一闪而过。保留 `PairingCard` 与「完成配对」按钮只作兜底。验证码在 Z50II 相机上不显示，所以卡片文案写「若相机显示同一组数字可顺便核对」。
-- **交接由用户点一下**（1.42.0）：相机同一时间只能开蓝牙或 Wi-Fi，所以「切到 Wi-Fi」是一次有代价的动作，不能偷偷做。蓝牙已配对、无线未连接时，无线块给一颗主色按钮「**查看照片**」，下面一行小字说明「期间蓝牙会断开，退出后自动回到蓝牙待机」。冷启动只做 BLE 待机（校时 + GPS 注入），不自动切。
+- **交接由用户点一下**（1.42.0）：相机同一时间只能开蓝牙或 Wi-Fi，所以「切到 Wi-Fi」是一次有代价的动作，不能偷偷做。蓝牙已配对、无线未连接时，无线块给一颗主色按钮「**查看照片**」，下面一行小字说明「期间蓝牙会断开，退出后自动回到蓝牙待机」。冷启动只做 BLE 待机（校时 + GPS 注入），不自动切（USB 模式下连 BLE 待机也不做）。
 - 按下之后**显示分步进度**（`LoadingProgress` + `svc.wirelessStage`）：「正在连接相机（蓝牙）」→「正在唤醒相机无线」→「正在连接相机热点」→「正在连接照相机」。这几步每步都可能停住，必须让用户看见停在哪，否则会像 1.41.x 那样被连点三次。
 - 退出时先显示「正在退出相机热点」再「正在等相机切回蓝牙」，实测约 40 秒；3 分钟不回来才给红色提示「相机仍停在 Wi-Fi 模式」。
 - 「搜索附近的相机」（纯 mDNS/网段）保留，用于相机**已经**在 Wi-Fi 模式的场景；它不需要蓝牙。
-- 相机侧前提：必须停在「连接向导」页（显示 `Z50_2_xxxx`），显示 IP/掩码的页面连不上；STA 模式还要先让相机入网（见 `WirelessGuide()`）。
+- 相机侧前提：必须停在「连接向导」页（显示 `Z50_2_xxxx`），显示 IP/掩码的页面连不上；STA 模式还要先让相机入网（见状态卡的三步引导）。
 - 已连接且走 Wi-Fi 时，设备信息卡的「连接」一行显示 `Wi-Fi · <host>`。
-- 蓝牙卡的独立形态已取消（1.40.0），节都在无线块里；配对与保活实现见 [SERVICES.md](SERVICES.md)，自动接续见同文「无线链路的自动接续」。
+- 蓝牙卡的独立形态已取消（1.40.0），状态都收在状态卡里；配对与保活实现见 [SERVICES.md](SERVICES.md)，自动接续见同文「无线链路的自动接续」。
 
 扫描阶段、缓存与快速扫描的细节见 [SERVICES.md](SERVICES.md)。
 

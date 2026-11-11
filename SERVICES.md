@@ -536,6 +536,26 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 ——用户可能只想要相册，不需要蓝牙保活/地理标记。`allowScan=false` 表示只用
 记住的地址，不在冷启动时空跑一轮 254 个地址的扫描。
 
+冷启动还要看用户选的是哪种链路：`linkMode === USB` 时**根本不调**
+`autoConnectBle()`（见 `MainScreen.aboutToAppear`）。用户选的是走线，不该再去
+占相机的蓝牙链路。
+
+*后台失败要静默*
+
+`connectBle(deviceId, name, handOver, silent)`：`silent = true` 时失败只写日志，
+不写 `lastScanError`、不触发 toast。冷启动的 `autoConnectBle(silent = true)`
+全部走静默路径；用户主动点「搜索相机」的那次是 `autoConnectBle(false)`，失败要
+说出来。以前每次开机都会红着一行「蓝牙连接相机失败」并弹一次 toast，相机不在
+手边时尤其像故障。
+
+*切换链路模式要清场*
+
+`setLinkMode(mode)` 除了落盘，还会清空 `lastScanError` / `bleHint` / `wifiHint` /
+`networkSummary` / `wirelessStage`——这些都描述上一模式的现场，留着会串味
+（切到 USB 还挂着蓝牙失败、AP 模式还显示手机当前 Wi-Fi）。进入 STA 时顺带调
+`refreshNetworkSnapshot()` 摸一遍本机网络，「本机网络」一行立刻可见；
+`initLinkMode()` 恢复的是 STA 时同样补一次。
+
 `autoLinkWifi()` 的顺序刻意是「记得的地址 → mDNS/网段扫描」：相机地址几乎不
 变，先直连能把冷启动压到一两秒；直连失败才扫。连上之后 `finishAutoLink()`
 直接 `scanForCamera()`，让「蓝牙连上 → 无线连上 → 相册出来」是一条连续的链路。

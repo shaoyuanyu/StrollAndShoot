@@ -1727,8 +1727,15 @@ export class CameraService {
    *   用户主动选相机时为 true；App 冷启动的自动连接为 false —— 只做 BLE 待机，
    *   把「切无线」留给用户明确要照片的那一刻。
    */
+  /**
+   * 连 BLE 并走完配对。
+   *
+   * [handOver] 决定配对收口时是否把相机推到 Wi-Fi；[silent] 决定失败时要不要
+   * 往页面写红色错误 + 弹 toast。冷启动的自动连接是后台行为，用户没点任何东西，
+   * 失败只记日志——以前每次开机都红着一行「蓝牙连接相机失败」。
+   */
   async connectBle(deviceId: string, deviceName: string = '',
-                   handOver: boolean = true): Promise<boolean> {
+                   handOver: boolean = true, silent: boolean = false): Promise<boolean> {
     if (this.bleConnecting) {
       this.log.add('BLE 正在连接中，忽略重复点击');
       return false;
@@ -1753,7 +1760,11 @@ export class CameraService {
       const ok = await this.bleLink.connect(deviceId);
       if (!ok) {
         this.bleServices = [];
-        this.reportScanFailure(L10n.tr('camera_status_ble_connect_failed'));
+        if (silent) {
+          this.log.add('BLE 自动连接失败（静默，不打扰页面）');
+        } else {
+          this.reportScanFailure(L10n.tr('camera_status_ble_connect_failed'));
+        }
         return false;
       }
       this.bleConnected = true;
@@ -1858,7 +1869,7 @@ export class CameraService {
    * 相机休眠时 BLE 仍可连，握手阶段的 stage1 重发负责把它唤醒；连不上就
    * 置空交给用户的显式操作，不在前台反复刷扫描。
    */
-  async autoConnectBle(): Promise<boolean> {
+  async autoConnectBle(silent: boolean = true): Promise<boolean> {
     if (this.bleConnected || this.bleConnecting) return this.bleConnected;
     const store = BleIdentityStore.getInstance();
     if (!store.hasIdentity() || store.deviceId.length === 0) {
@@ -1868,7 +1879,7 @@ export class CameraService {
       return false;
     }
     this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）（仅待机，不切无线）`);
-    if (await this.connectBle(store.deviceId, store.cameraName, false)) {
+    if (await this.connectBle(store.deviceId, store.cameraName, false, silent)) {
       return true;
     }
     // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
@@ -1876,7 +1887,7 @@ export class CameraService {
     this.log.add('BLE 直连未成，按设备号重扫相机');
     const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
     for (const dev of devices) {
-      if (await this.connectBle(dev.deviceId, dev.name, false)) {
+      if (await this.connectBle(dev.deviceId, dev.name, false, silent)) {
         return true;
       }
     }
@@ -1922,9 +1933,25 @@ export class CameraService {
     this.bleSerial = '';
   }
 
+  /** 只取网络快照，不做搜索；进 STA 模式时用。 */
+  private async refreshNetworkSnapshot(): Promise<void> {
+    try {
+      const nets = await collectLocalNetworks();
+      this.networkSummary = nets.summary;
+      this.wifiHint = networkHint(nets);
+      this.log.add(`本机网络: ${nets.summary}`);
+    } catch (_e) {
+      // 拿不到网络信息不影响页面，后续搜索时会再试一次
+    }
+  }
+
   /** 启动时把落盘的模式读回来。 */
   initLinkMode(): void {
     this.linkMode = CameraLinkModeStore.getInstance().mode;
+    // 上次停在 STA：进页面就该看到本机网络，而不是等用户点「搜索」
+    if (this.linkMode === CameraLinkMode.STA) {
+      this.refreshNetworkSnapshot().catch((_e: Error) => { /* 快照失败不影响主流程 */ });
+    }
   }
 
   /** 用户切换模式。切模式不做自动连接，等用户点「搜索相机」。 */
@@ -1934,6 +1961,18 @@ export class CameraService {
     this.log.add(`链路模式切到 ${label}`);
     this.linkMode = mode;
     CameraLinkModeStore.getInstance().set(mode);
+    // 上一轮的失败原因、网络快照都属于上一模式，留着会让人以为当前模式也失败了
+    // （以前切到 USB 还挂着「蓝牙连接失败」，AP 模式下还显示手机当前 Wi-Fi）。
+    this.lastScanError = '';
+    this.bleHint = '';
+    this.wifiHint = '';
+    this.networkSummary = '';
+    this.wirelessStage = '';
+    // STA 一进模式就先摸一遍本机网络：用户要拿它跟相机那边连的热点对比，
+    // 等点了「搜索」才出现太晚。
+    if (mode === CameraLinkMode.STA) {
+      this.refreshNetworkSnapshot().catch((_e: Error) => { /* 快照失败不影响主流程 */ });
+    }
   }
 
   /**
@@ -1949,7 +1988,8 @@ export class CameraService {
         await this.scanForCamera(false, true);
         break;
       case CameraLinkMode.BLE:
-        if (!await this.autoConnectBle()) {
+        // 用户按的按钮，失败要说出来
+        if (!await this.autoConnectBle(false)) {
           await this.scanBleCameras();
         }
         break;

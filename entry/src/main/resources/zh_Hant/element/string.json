@@ -125,10 +125,6 @@
       "value": "USB 連線"
     },
     {
-      "name": "camera_conn_usb_hint",
-      "value": "用 USB 傳輸線連接相機，並選擇 PTP 傳輸模式。"
-    },
-    {
       "name": "camera_conn_wireless",
       "value": "無線連線"
     },
@@ -1222,27 +1218,99 @@
     },
     {
       "name": "camera_mode_ap",
-      "value": "WIFI AP"
+      "value": "Wi-Fi AP"
     },
     {
       "name": "camera_mode_sta",
-      "value": "WIFI STA"
+      "value": "Wi-Fi STA"
     },
     {
-      "name": "camera_guide_usb",
-      "value": "用傳輸線連接相機，相機上把 USB 傳輸模式設為 PTP。連接後照片最多、最穩定，也不受無線干擾。"
+      "name": "camera_mode_desc_usb",
+      "value": "傳輸線直連，傳輸最快、最穩定。"
     },
     {
-      "name": "camera_guide_ble",
-      "value": "藍牙只用於配對、校時與位置資訊注入，不傳照片。相機上：網路選單 → 連接至智慧型裝置 → 配對（Bluetooth）→ 開始配對，然後回到這裡點「搜尋相機」。"
+      "name": "camera_mode_desc_ble",
+      "value": "只做配對、校時與位置資訊注入，不傳照片。"
     },
     {
-      "name": "camera_guide_ap",
-      "value": "相機自己開熱點，手機連上去傳照片，全程不需要你輸入密碼。相機上：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線（AP mode）→ 建立 Wi-Fi 連線，停在這個畫面即可。退出時相機會自己回到藍牙待機。"
+      "name": "camera_mode_desc_ap",
+      "value": "相機自己開熱點，手機連上去就能傳照片，不用輸入密碼。"
     },
     {
-      "name": "camera_guide_sta",
-      "value": "相機加入手機所在網路，手機保持連網。相機上：網路選單 → 連接至智慧型裝置 → Wi-Fi 連線（STA mode）→ 建立設定檔 → 搜尋 Wi-Fi 網路 → 選熱點並輸入密碼。注意：STA 模式下 App 無法讓相機退回藍牙，需要時得在相機選單裡退出。"
+      "name": "camera_mode_desc_sta",
+      "value": "相機加入手機所在的 Wi-Fi，手機可以保持連網。"
+    },
+    {
+      "name": "camera_guide_usb_1",
+      "value": "用傳輸線把相機接到手機"
+    },
+    {
+      "name": "camera_guide_usb_2",
+      "value": "相機上把 USB 傳輸模式設為 PTP"
+    },
+    {
+      "name": "camera_guide_usb_3",
+      "value": "點右上角「搜尋相機」"
+    },
+    {
+      "name": "camera_guide_ble_1",
+      "value": "相機「網路選單 → 連接至智慧型裝置 → 配對（Bluetooth）」開始配對"
+    },
+    {
+      "name": "camera_guide_ble_2",
+      "value": "點右上角「搜尋相機」"
+    },
+    {
+      "name": "camera_guide_ble_3",
+      "value": "配對完成後相機會出現在這裡"
+    },
+    {
+      "name": "camera_guide_ap_1",
+      "value": "相機「網路選單 → 連接至智慧型裝置 → Wi-Fi 連線（AP mode）」"
+    },
+    {
+      "name": "camera_guide_ap_2",
+      "value": "點「建立 Wi-Fi 連線」，讓相機停在這個畫面"
+    },
+    {
+      "name": "camera_guide_ap_3",
+      "value": "點右上角「搜尋相機」，手機會自動連上相機熱點"
+    },
+    {
+      "name": "camera_guide_ap_note",
+      "value": "離開照片瀏覽後，相機會自己回到藍牙待機。"
+    },
+    {
+      "name": "camera_guide_sta_1",
+      "value": "手機先連上要用的 Wi-Fi"
+    },
+    {
+      "name": "camera_guide_sta_2",
+      "value": "相機「網路選單 → 連接至智慧型裝置 → Wi-Fi 連線（STA mode）」，建立設定檔並加入同一網路"
+    },
+    {
+      "name": "camera_guide_sta_3",
+      "value": "點「搜尋附近的相機」，或直接填相機 IP"
+    },
+    {
+      "name": "camera_guide_sta_note",
+      "value": "STA 模式下 App 無法讓相機退回藍牙，需要時得在相機選單裡退出。"
+    },
+    {
+      "name": "camera_state_ble_ready",
+      "value": "藍牙已就緒"
+    },
+    {
+      "name": "camera_state_ble_paired",
+      "value": "已配對"
+    },
+    {
+      "name": "camera_conn_wifi_host",
+      "value": "相機 Wi-Fi %1$s:%2$s"
+    },
+    {
+      "name": "camera_guide_ble_note",
+      "value": "藍牙鏈路不傳照片，要取照片請切到「Wi-Fi AP」。"
     }
   ]
 }

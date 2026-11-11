@@ -125,10 +125,6 @@
       "value": "USB"
     },
     {
-      "name": "camera_conn_usb_hint",
-      "value": "Connect the camera with a USB cable and choose PTP transfer mode."
-    },
-    {
       "name": "camera_conn_wireless",
       "value": "Wireless"
     },
@@ -1229,20 +1225,92 @@
       "value": "Wi-Fi STA"
     },
     {
-      "name": "camera_guide_usb",
-      "value": "Connect the camera with a USB cable and set its USB mode to PTP. This is the fastest and most stable path for photos."
+      "name": "camera_mode_desc_usb",
+      "value": "Direct cable connection — fastest and most reliable."
     },
     {
-      "name": "camera_guide_ble",
-      "value": "Bluetooth is for pairing, clock sync and location injection only — it does not transfer photos. On the camera: Network menu → Connect to smart device → Pair (Bluetooth) → Start pairing, then tap Search camera here."
+      "name": "camera_mode_desc_ble",
+      "value": "Pairing, clock sync and location tagging only. No photos."
     },
     {
-      "name": "camera_guide_ap",
-      "value": "The camera runs its own hotspot and the phone joins it automatically — no password typing. On the camera: Network menu → Connect to smart device → Wi-Fi connection (AP mode) → Establish Wi-Fi connection and stay on that screen. The camera returns to Bluetooth standby after you exit."
+      "name": "camera_mode_desc_ap",
+      "value": "The camera runs its own hotspot. The phone joins it, so no password is needed."
     },
     {
-      "name": "camera_guide_sta",
-      "value": "The camera joins the phone's network, so the phone keeps internet access. On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode) → Create profile → Search for Wi-Fi network → pick the hotspot and enter the password. Note: in STA mode the app cannot send the camera back to Bluetooth; you must exit it on the camera."
+      "name": "camera_mode_desc_sta",
+      "value": "The camera joins the phone Wi-Fi network, so the phone stays online."
+    },
+    {
+      "name": "camera_guide_usb_1",
+      "value": "Connect the camera to the phone with a USB cable"
+    },
+    {
+      "name": "camera_guide_usb_2",
+      "value": "Set the camera's USB mode to PTP"
+    },
+    {
+      "name": "camera_guide_usb_3",
+      "value": "Tap Find Camera in the top right"
+    },
+    {
+      "name": "camera_guide_ble_1",
+      "value": "On the camera: Network menu → Connect to smart device → Pair (Bluetooth) → Start pairing"
+    },
+    {
+      "name": "camera_guide_ble_2",
+      "value": "Tap Find Camera in the top right"
+    },
+    {
+      "name": "camera_guide_ble_3",
+      "value": "The camera shows up here once pairing finishes"
+    },
+    {
+      "name": "camera_guide_ap_1",
+      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (AP mode)"
+    },
+    {
+      "name": "camera_guide_ap_2",
+      "value": "Tap Establish Wi-Fi connection and leave the camera on that screen"
+    },
+    {
+      "name": "camera_guide_ap_3",
+      "value": "Tap Find Camera; the phone joins the camera hotspot automatically"
+    },
+    {
+      "name": "camera_guide_ap_note",
+      "value": "The camera returns to Bluetooth standby after you leave photo browsing."
+    },
+    {
+      "name": "camera_guide_sta_1",
+      "value": "Connect the phone to the Wi-Fi network you want to use"
+    },
+    {
+      "name": "camera_guide_sta_2",
+      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode); create a profile for the same network"
+    },
+    {
+      "name": "camera_guide_sta_3",
+      "value": "Tap Search for nearby cameras, or enter the camera IP directly"
+    },
+    {
+      "name": "camera_guide_sta_note",
+      "value": "In STA mode the app cannot send the camera back to Bluetooth. Exit it from the camera menu if needed."
+    },
+    {
+      "name": "camera_state_ble_ready",
+      "value": "Bluetooth ready"
+    },
+    {
+      "name": "camera_state_ble_paired",
+      "value": "Paired"
+    },
+    {
+      "name": "camera_conn_wifi_host",
+      "value": "Camera Wi-Fi %1$s:%2$s"
+    },
+    {
+      "name": "camera_guide_ble_note",
+      "value": "Bluetooth never carries photos. Switch to Wi-Fi AP to import them."
     }
   ]
 }

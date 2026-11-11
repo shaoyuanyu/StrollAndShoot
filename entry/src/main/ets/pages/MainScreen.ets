@@ -98,8 +98,12 @@ export struct MainScreen {
     HandednessService.getInstance().start();
     // 冷启动就把已配对的相机接上：相机休眠时 BLE 仍连得上，握手里的
     // stage1 重发负责唤醒，用户不用手动点「搜索相机」。
+    // USB 模式是明确的「走线」，此时不该再去占相机的蓝牙（BLE 与 Wi-Fi 互斥，
+    // 蓝牙链路也会让相机以为有主机在连）。
     this.svc.initLinkMode();
-    setTimeout(() => { this.svc.autoConnectBle(); }, 800);
+    if (this.svc.linkMode !== CameraLinkMode.USB) {
+      setTimeout(() => { this.svc.autoConnectBle(); }, 800);
+    }
     // 由通知冷启动时，UsbAttachWatcher 可能在 MainScreen 创建前就递增了版本；
     // @Monitor 不会为初始值触发，这里补一次。
     if (this.usbWatcher.attachVersion > 0) {
@@ -744,9 +748,6 @@ export struct MainScreen {
             },
             onScanWifi: () => {
               this.svc.scanWifiCameras();
-            },
-            onScanBle: () => {
-              this.svc.scanBleCameras();
             },
             onConnectBle: (deviceId: string, deviceName: string) => {
               this.svc.connectBle(deviceId, deviceName);
