@@ -1706,7 +1706,10 @@ export class CameraService {
       this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
       // 服务枚举完直接走两段式配对（相机需停在「开始配对」页）。
       // 广播名要传给配对层：经典蓝牙绑定时靠它匹配相机。
-      const serial = await this.bleLink.pair(deviceName);
+      // 无线会话已经在用的时候不写 0x2005：那一笔可能让相机重启 Wi-Fi，
+      // 把正在传照片的 PTP 会话一起掐断（BLE 掉线重连时就会踩到）。
+      const wakeWifi = !(this.connected && this.wireless);
+      const serial = await this.bleLink.pair(deviceName, wakeWifi);
       if (serial === null) {
         this.bleSerial = '';
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');

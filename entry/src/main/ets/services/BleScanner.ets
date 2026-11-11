@@ -795,12 +795,17 @@ export class BleCameraLink {
    * stage1 会被 `Remote device has an error` 秒拒）。
    * 没有身份 → 两段式首配（段 1 握手 + 经典蓝牙绑定 + 段 2 复用握手）。
    */
-  async pair(cameraName: string = ''): Promise<string | null> {
+  /**
+   * @param wakeWifi 握手完成后要不要写 `0x2005=0x01` 唤起相机无线。
+   *   无线会话已经活着的时候必须传 false：这一笔可能让相机重启 Wi-Fi，
+   *   把正在用的 PTP 会话一起打断（BLE 掉线重连时就会碰到）。
+   */
+  async pair(cameraName: string = '', wakeWifi: boolean = true): Promise<string | null> {
     this.cancelled = false;
     try {
       const store = BleIdentityStore.getInstance();
       if (store.hasIdentity()) {
-        return await this.resumePairing(store);
+        return await this.resumePairing(store, wakeWifi);
       }
       return await this.pairFresh(cameraName, store);
     } catch (err) {
@@ -810,7 +815,8 @@ export class BleCameraLink {
   }
 
   /** 已配对相机的重连：用保存的身份复用握手，不再打扰相机的配对页。 */
-  private async resumePairing(store: BleIdentityStore): Promise<string | null> {
+  private async resumePairing(store: BleIdentityStore,
+                              wakeWifi: boolean = true): Promise<string | null> {
     this.onLog(`配对: 已有身份（serial ${store.serial}），走复用握手`);
     const blowfish = new NikonBlowfish(this.onLog);
     if (!await blowfish.selfTest()) {
@@ -830,12 +836,16 @@ export class BleCameraLink {
     await this.writeControllerName();
     // 复用握手也要唤起相机无线。以前只有首配写这一笔，于是相机休眠/重开之后
     // 走 resume 的路径上相机无线一直是关着的：BLE 全绿、PTP 永远连不上。
-    try {
-      await BleCameraLink.sleep(200);
-      await this.writeEstablishment(0x01);
-      this.onLog('配对: 0x2005=0x01 已写（复用握手后唤起相机无线）');
-    } catch (err) {
-      this.onLog(`配对: 0x2005 写入失败: ${(err as Error).message}`);
+    if (wakeWifi) {
+      try {
+        await BleCameraLink.sleep(200);
+        await this.writeEstablishment(0x01);
+        this.onLog('配对: 0x2005=0x01 已写（复用握手后唤起相机无线）');
+      } catch (err) {
+        this.onLog(`配对: 0x2005 写入失败: ${(err as Error).message}`);
+      }
+    } else {
+      this.onLog('配对: 无线会话还活着，跳过 0x2005（避免相机重启 Wi-Fi）');
     }
     // 相机有没有真正收下，看 0x2004 给不给内容。
     await BleCameraLink.sleep(300);
