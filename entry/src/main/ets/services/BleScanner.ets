@@ -15,6 +15,20 @@ export const NIKON_BLE_SERVICE = '0000de00-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_BLE_SERVICE_ALT = '0000de01-3dd4-4255-8d62-6dc7b9bd5561';
 /** 配对认证特征（indicate，17 字节握手帧）。 */
 export const NIKON_CHAR_PAIRING = '00002000-3dd4-4255-8d62-6dc7b9bd5561';
+/** 标准 CCCD：开通知/指示必须带上它，否则 setCharacteristicChangeIndication 报 401。 */
+const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
+
+function cccdDescriptor(charUuid: string, indicate: boolean): ble.BLEDescriptor {
+  const value = new Uint8Array(2);
+  value[0] = indicate ? 0x02 : 0x01;
+  value[1] = 0x00;
+  return {
+    serviceUuid: NIKON_BLE_SERVICE,
+    characteristicUuid: charUuid,
+    descriptorUuid: CCCD_UUID,
+    descriptorValue: value.buffer as ArrayBuffer
+  };
+}
 
 interface PendingChar {
   uuid: string;
@@ -294,8 +308,8 @@ export class BleCameraLink {
     const char: ble.BLECharacteristic = {
       serviceUuid: NIKON_BLE_SERVICE,
       characteristicUuid: charUuid,
-      characteristicValue: new Uint8Array(0),
-      descriptors: []
+      characteristicValue: new Uint8Array(0).buffer as ArrayBuffer,
+      descriptors: [cccdDescriptor(charUuid, true)]
     };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
       let settled = false;
@@ -324,7 +338,7 @@ export class BleCameraLink {
     const char: ble.BLECharacteristic = {
       serviceUuid: NIKON_BLE_SERVICE,
       characteristicUuid: charUuid,
-      characteristicValue: value,
+      characteristicValue: value.slice().buffer as ArrayBuffer,
       descriptors: []
     };
     await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
