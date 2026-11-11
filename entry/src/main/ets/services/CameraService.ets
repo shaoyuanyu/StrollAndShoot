@@ -232,6 +232,12 @@ export class CameraService {
    * 直接引发 BLE/Wi-Fi 乒乓。90 秒是拍脑袋的，按官方口径改掉。
    */
   private readonly handoverCooldownMs: number = 180000;
+  /** Wi-Fi 会话期间「相机是否还在 BLE 广播」的探针计时器。 */
+  private bleProbeTimer: number = -1;
+  private bleProbeIndex: number = 0;
+  private readonly bleProbeDelays: number[] = [5000, 20000, 30000];
+  /** 退出无线后密集重扫 BLE 的计时器。 */
+  private bleRecoveryTimer: number = -1;
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
   @Trace bleScanning: boolean = false;
@@ -1456,6 +1462,7 @@ export class CameraService {
     this.wifiAutoReconnectArmed = true;
     this.wifiHint = '';
     this.suspendBleForWifi();
+    this.startBleVisibilityProbe();
 
     // 相机在「连接向导」里等主机注册时，会先开 15740 让我们连上，再等
     // 0x952B/0x935A 确认；不确认就 10 秒后自行收线，且 Wi-Fi 配置不落盘。
@@ -1932,6 +1939,134 @@ export class CameraService {
     return false;
   }
 
+  /**
+   * 探针：Wi-Fi 会话期间，相机到底还发不发 BLE 广播？
+   *
+   * 三种后果完全不同：
+   * - 还在广播 → 相机两个射频能共存，`0x2005=0x80` 可以**秒退**，按需切换成立；
+   * - 完全不广播 → 只能靠相机自己的 Wi-Fi 待机超时回落到蓝牙；
+   * - 间歇广播 → 得抓窗口。
+   *
+   * 只扫不连，最多三轮（5s / 20s / 30s），命中即止。
+   */
+  private startBleVisibilityProbe(): void {
+    this.stopBleVisibilityProbe();
+    const store = BleIdentityStore.getInstance();
+    if (!store.hasIdentity()) return;
+    this.bleProbeIndex = 0;
+    this.scheduleBleProbe(store.identityDevice);
+  }
+
+  private scheduleBleProbe(nikonDeviceId: number): void {
+    if (this.bleProbeIndex >= this.bleProbeDelays.length) {
+      this.log.add('探针: 三轮都没看到 BLE 广播 —— 相机在 Wi-Fi 期间不发蓝牙');
+      return;
+    }
+    const delay = this.bleProbeDelays[this.bleProbeIndex];
+    this.bleProbeIndex++;
+    this.bleProbeTimer = setTimeout(() => {
+      this.bleProbeTimer = -1;
+      this.scanForNikonDeviceId(nikonDeviceId, 3000).then((devices: BleCameraDevice[]) => {
+        if (devices.length > 0) {
+          this.log.add(`探针: Wi-Fi 会话期间相机仍在 BLE 广播（${devices[0].deviceId}）`
+            + ' —— 可用 0x2005=0x80 主动退出');
+          return;
+        }
+        this.log.add('探针: 本轮没看到 BLE 广播');
+        this.scheduleBleProbe(nikonDeviceId);
+      }).catch((err: Error) => {
+        this.log.add(`探针扫描失败: ${err.message}`);
+      });
+    }, delay);
+  }
+
+  private stopBleVisibilityProbe(): void {
+    if (this.bleProbeTimer >= 0) {
+      clearTimeout(this.bleProbeTimer);
+      this.bleProbeTimer = -1;
+    }
+    this.bleProbeIndex = this.bleProbeDelays.length;
+  }
+
+  /**
+   * 主动退出 Wi-Fi 并接回 BLE —— **不等相机超时**。
+   *
+   * 按代价从低到高试三条路：
+   * 1. BLE 还连着 → 直接写 `0x2005=0x80`；
+   * 2. 相机在 Wi-Fi 会话期间仍在广播 → 连上去写 `0x80`，秒退；
+   * 3. 都没有 → 发一笔 `0x9435(0)` 让相机退出「应用模式」，关会话，然后
+   *    每 6 秒重扫一次（最多 3 分钟）直到相机回来。
+   *
+   * 第 3 条才是"等"，但它是兜底而不是唯一手段；前面两条能命中就立即切换。
+   */
+  async exitWirelessToBle(): Promise<void> {
+    this.wifiAutoReconnectArmed = false;
+    this.cancelWifiReconnect();
+    this.stopBleVisibilityProbe();
+    const started = Date.now();
+    const store = BleIdentityStore.getInstance();
+
+    if (this.bleConnected && this.bleLink !== null) {
+      await this.bleLink.closeCameraWifi();
+      this.bleHint = '';
+      this.log.add(`退出无线: BLE 仍在，已写 0x2005=0x80（${Date.now() - started}ms）`);
+      return;
+    }
+
+    if (store.hasIdentity()) {
+      const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
+      if (devices.length > 0) {
+        this.log.add('退出无线: 相机仍在发 BLE 广播，直接接管并写 0x80');
+        if (await this.connectBle(devices[0].deviceId, devices[0].name, false)) {
+          if (this.bleLink !== null) {
+            await this.bleLink.closeCameraWifi();
+          }
+          this.bleHint = '';
+          this.log.add(`退出无线: 0x80 已发（${Date.now() - started}ms）`);
+          return;
+        }
+      }
+    }
+
+    if (this.wifiSession !== null) {
+      await this.wifiSession.leaveApplicationMode();
+    }
+    this.log.add(`退出无线: 相机没有 BLE 广播（${Date.now() - started}ms），`
+      + '关会话后开始密集重扫');
+    this.startBleRecoveryScan(store);
+  }
+
+  /** 退出无线后的兜底：每 6 秒重扫一次 BLE，最多 3 分钟。 */
+  private startBleRecoveryScan(store: BleIdentityStore): void {
+    if (this.bleRecoveryTimer >= 0) {
+      clearTimeout(this.bleRecoveryTimer);
+      this.bleRecoveryTimer = -1;
+    }
+    const deadline = Date.now() + 180000;
+    const tick = (): void => {
+      this.bleRecoveryTimer = -1;
+      if (this.bleConnected || this.bleConnecting) return;
+      if (Date.now() > deadline) {
+        this.log.add('退出无线: 3 分钟内相机没有回到 BLE');
+        this.bleHint = '相机仍停在 Wi-Fi 模式。可检查相机的「Wi-Fi 待机时间」设定，或关机再开。';
+        return;
+      }
+      this.scanForNikonDeviceId(store.identityDevice, 4000).then(async (devices: BleCameraDevice[]) => {
+        if (devices.length > 0) {
+          this.log.add(`退出无线: 相机回到 BLE（${devices[0].deviceId}）`);
+          if (await this.connectBle(devices[0].deviceId, devices[0].name, false)) {
+            return;
+          }
+        }
+        if (this.bleConnected || this.bleConnecting) return;
+        this.bleRecoveryTimer = setTimeout(tick, 6000);
+      }).catch(() => {
+        this.bleRecoveryTimer = setTimeout(tick, 6000);
+      });
+    };
+    this.bleRecoveryTimer = setTimeout(tick, 2000);
+  }
+
   /** 交接冷却是否已过（BLE/Wi-Fi 互斥，不能连着推）。 */
   private handoverAllowed(): boolean {
     return Date.now() - this.lastHandoverAt > this.handoverCooldownMs;
@@ -1950,43 +2085,6 @@ export class CameraService {
     this.bleLink.disableAutoReconnect();
     this.bleReconnecting = false;
     this.log.add('BLE 已让位给 Wi-Fi（相机两个无线模式互斥，期间不再重连/保活）');
-  }
-
-  /**
-   * Wi-Fi 会话结束：尝试把相机接回 BLE 待机。
-   *
-   * 不写 `0x2005`（那是「推到 Wi-Fi」），只用保存的地址/重扫连一次待机链路，
-   * 连上就恢复校时与 GPS 注入。连不上不重试到底 —— 相机可能还在 Wi-Fi
-   * 回落过程中，下一次用户动作会再触发。
-   */
-  private resumeBleAfterWifi(): void {
-    if (this.bleConnected || this.bleConnecting) return;
-    const store = BleIdentityStore.getInstance();
-    if (!store.hasIdentity() || store.deviceId.length === 0) return;
-    this.log.add('无线会话结束，等相机从 Wi-Fi 回落后接回 BLE 待机');
-    // 相机的 Wi-Fi 空闲回落要几十秒（Z50II 实测约 40 秒），一次连不上很
-    // 正常。按退避试四轮，都失败就交给下一次用户动作，不无限空转。
-    const delays: number[] = [6000, 15000, 30000, 60000];
-    const attempt = (index: number): void => {
-      if (index >= delays.length) {
-        this.log.add('BLE 仍未回落，放弃本轮（相机可能还停在 Wi-Fi 模式）');
-        this.bleHint = '相机还在 Wi-Fi 模式，蓝牙没有回来。若长时间不回，需要在相机上退出无线连接（或关机再开）。';
-        return;
-      }
-      setTimeout(() => {
-        if (this.bleConnected || this.bleConnecting) return;
-        this.connectBle(store.deviceId, store.cameraName, false).then((ok: boolean) => {
-          if (!ok) {
-            this.log.add(`BLE 第 ${index + 1} 次回落尝试未成`);
-            attempt(index + 1);
-          }
-        }).catch((err: Error) => {
-          this.log.add(`接回 BLE 失败: ${err.message}`);
-          attempt(index + 1);
-        });
-      }, delays[index]);
-    };
-    attempt(0);
   }
 
   /** 取消排队中的无线自动重连。 */
@@ -3798,6 +3896,10 @@ export class CameraService {
   async disconnect(): Promise<void> {
     // 用户主动断开：撤掉自动重连，避免刚断开就被自己接回来。
     const wasWireless = this.wireless;
+    if (wasWireless) {
+      // 先把「退出无线」的动作跑完：能秒退就秒退，退不了才排密集重扫。
+      await this.exitWirelessToBle();
+    }
     this.wifiAutoReconnectArmed = false;
     this.cancelWifiReconnect();
     await this.session.closeSessionAndPipe();
@@ -3847,8 +3949,8 @@ export class CameraService {
     this.statusText = L10n.tr('camera_status_disconnected');
     this.log.add('已断开连接');
     if (wasWireless) {
-      // 无线会话结束 = BLE 应该能回来了（相机从 Wi-Fi 回落到蓝牙模式）。
-      this.resumeBleAfterWifi();
+      // BLE 的回接已经由 exitWirelessToBle() 里的密集重扫接手，这里不再排。
+      this.stopBleVisibilityProbe();
     }
   }
 

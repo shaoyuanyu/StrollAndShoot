@@ -289,6 +289,26 @@ export class WifiPtpSession implements PtpTransport {
     }
   }
 
+  /**
+   * 探针：让相机退出「应用模式」。
+   *
+   * `0x9435 ChangeApplicationMode` 进去（p1=1）是已知的（不进则遥控写会被
+   * 拒 0x200F）；**退出**没人试过。这里发 p1=0，看相机是否就此结束 Wi-Fi
+   * 会话、回落到蓝牙。返回相机应答码，0x2001 = OK，其它值也原样记录。
+   *
+   * 失败不抛：这是尽力而为的收尾动作，不能因为它挡住后续断链。
+   */
+  async leaveApplicationMode(): Promise<number> {
+    try {
+      const r = await this.exec(0x9435, [0], false, 'ChangeApplicationMode(0)');
+      this.log(`[Wi-Fi] 探针 0x9435(0) → 0x${r.code.toString(16)}`);
+      return r.code;
+    } catch (err) {
+      this.log(`[Wi-Fi] 探针 0x9435(0) 失败: ${(err as Error).message}`);
+      return -1;
+    }
+  }
+
   async closeSessionAndPipe(_priority?: PtpPriority): Promise<void> {
     const link = this.link;
     if (!link) {
