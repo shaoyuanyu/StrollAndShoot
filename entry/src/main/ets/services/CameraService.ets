@@ -19,6 +19,7 @@ import { WifiPtpSession } from './WifiPtpSession';
 import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
 import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
+import { BleIdentityStore } from './BleIdentityStore';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -1622,39 +1623,107 @@ export class CameraService {
       if (serial === null) {
         this.bleSerial = '';
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');
-        return true;
+        return false;
       }
       this.bleSerial = serial;
       this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
 
+      // 断链自动重连：相机会休眠，链路断了自己爬起来（用保存的身份复用握手）。
+      this.bleLink.onReconnected = (serial: string) => {
+        this.bleSerial = serial;
+        this.bleConnected = true;
+        this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
+        this.startBleKeepalive(0);
+      };
+      this.bleLink.enableAutoReconnect();
       // 配对成功后才允许写 0x2006/0x2007：先校时，再按 45s 保活（顺带持续校时）。
       // 首笔要等 2.5 秒（ZPill 的 writeGate）：相机刚收口时注入会话还没醒，
       // 立刻写会被拒收甚至被踢链。
-      const offsetMinutes = -new Date().getTimezoneOffset();
-      try {
-        await new Promise<void>((resolve: () => void) => {
-          setTimeout(resolve, 2500);
-        });
-        await this.bleLink.writeTime(offsetMinutes);
-        this.bleLink.startKeepalive(45000, offsetMinutes, () => {
-          const fix = GpsRecorder.getInstance().lastFix;
-          if (fix === null) return null;
-          return {
-            latitude: fix.latitude,
-            longitude: fix.longitude,
-            altitude: fix.altitude,
-            satellites: 0,
-            utc: new Date()
-          };
-        });
-        this.log.add(`BLE 校时已写入（offset ${offsetMinutes}min），保活 45s 已启动`);
-      } catch (err) {
-        this.log.add(`BLE 校时失败: ${(err as Error).message}`);
-      }
+      this.startBleKeepalive(2500);
       return true;
     } finally {
       this.bleConnecting = false;
     }
+  }
+
+  /**
+   * 原地起保活（首次连接延迟首写门，自动重连时立刻恢复）。
+   */
+  private startBleKeepalive(delayMs: number): void {
+    const offsetMinutes = -new Date().getTimezoneOffset();
+    const apply = (): void => {
+      if (this.bleLink === null) return;
+      try {
+        this.bleLink.writeTime(offsetMinutes).then(() => {
+          if (this.bleLink === null) return;
+          this.bleLink.startKeepalive(45000, offsetMinutes, () => {
+            const fix = GpsRecorder.getInstance().lastFix;
+            if (fix === null) return null;
+            return {
+              latitude: fix.latitude,
+              longitude: fix.longitude,
+              altitude: fix.altitude,
+              satellites: 0,
+              utc: new Date()
+            };
+          });
+          this.log.add(`BLE 校时已写入（offset ${offsetMinutes}min），保活 45s 已启动`);
+        }).catch((err: Error) => {
+          this.log.add(`BLE 校时失败: ${err.message}`);
+        });
+      } catch (err) {
+        this.log.add(`BLE 保活启动失败: ${(err as Error).message}`);
+      }
+    };
+    if (delayMs <= 0) {
+      apply();
+      return;
+    }
+    setTimeout(apply, delayMs);
+  }
+
+  /**
+   * App 启动 / 回前台时自动接上已配对的相机。
+   *
+   * 相机休眠时 BLE 仍可连，握手阶段的 stage1 重发负责把它唤醒；连不上就
+   * 置空交给用户的显式操作，不在前台反复刷扫描。
+   */
+  async autoConnectBle(): Promise<boolean> {
+    if (this.bleConnected || this.bleConnecting) return this.bleConnected;
+    const store = BleIdentityStore.getInstance();
+    if (!store.hasIdentity()) return false;
+    if (store.deviceId.length === 0) return false;
+    this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）`);
+    if (store.deviceId.length > 0 && await this.connectBle(store.deviceId, store.cameraName)) {
+      return true;
+    }
+    // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
+    // 重扫一次（休眠相机的广播没有名字，只能靠厂商数据认）。
+    this.log.add('BLE 直连未成，按设备号重扫相机');
+    const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
+    for (const dev of devices) {
+      if (await this.connectBle(dev.deviceId, dev.name)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 按尼康 deviceId 扫一段时间的相机（会自己停）。 */
+  private async scanForNikonDeviceId(nikonDeviceId: number,
+                                     durationMs: number): Promise<BleCameraDevice[]> {
+    return new Promise<BleCameraDevice[]>((resolve: (v: BleCameraDevice[]) => void) => {
+      const found: BleCameraDevice[] = [];
+      const scanner = new BleScanner(
+        (dev: BleCameraDevice) => { found.push(dev); },
+        (msg: string) => this.log.add(msg),
+        nikonDeviceId);
+      scanner.start();
+      setTimeout(() => {
+        scanner.stop();
+        resolve(found);
+      }, durationMs);
+    });
   }
 
   /** 断开 BLE。 */

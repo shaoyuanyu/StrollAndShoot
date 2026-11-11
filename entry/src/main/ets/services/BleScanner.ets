@@ -10,7 +10,12 @@ export interface BleCameraDevice {
   deviceId: string;
   name: string;
   rssi: number;
+  /** 广播厂商数据（公司 ID 0x0399）里的尼康 deviceId，没带就是 0。 */
+  nikonDeviceId: number;
 }
+
+/** 尼康在 BLE 厂商数据里用的公司 ID。 */
+const NIKON_COMPANY_ID = 0x0399;
 
 /** 尼康智能设备模式的 GATT 服务（LSS / DE00 族）。 */
 export const NIKON_BLE_SERVICE = '0000de00-3dd4-4255-8d62-6dc7b9bd5561';
@@ -79,22 +84,44 @@ export class BleScanner {
   private scanning: boolean = false;
   private readonly seen: Set<string> = new Set();
 
+  /**
+   * 只收这个尼康 deviceId 的相机（0 = 不限，按名字筛）。
+   *
+   * 相机休眠后广播里往往**没有名字**，只剩厂商数据，所以重连不能只靠
+   * `looksLikeNikon(name)` —— 那会一个都扫不到。
+   */
+  private readonly filterDeviceId: number;
+
   private readonly handleFind = (results: Array<ble.ScanResult>): void => {
     for (const result of results) {
       const id = result.deviceId;
       if (this.seen.has(id)) continue;
       const name = result.deviceName ?? '';
-      if (!looksLikeNikon(name)) continue;
+      const nikonDeviceId = BleScanner.parseNikonDeviceId(result.manufacturerDataMap);
+      const nameHit = looksLikeNikon(name);
+      const idHit = this.filterDeviceId !== 0 && nikonDeviceId === this.filterDeviceId;
+      if (!nameHit && !idHit) continue;
       this.seen.add(id);
-      this.onLog(`BLE 发现: ${name} (${id}) rssi=${result.rssi}`);
-      this.onFound({ deviceId: id, name: name, rssi: result.rssi });
+      this.onLog(`BLE 发现: ${name === '' ? '(无名)' : name} (${id}) rssi=${result.rssi}`
+        + (nikonDeviceId !== 0 ? ` deviceId=${nikonDeviceId}` : ''));
+      this.onFound({ deviceId: id, name: name, rssi: result.rssi, nikonDeviceId: nikonDeviceId });
     }
   };
 
   constructor(onFound: (device: BleCameraDevice) => void,
-              onLog: (msg: string) => void) {
+              onLog: (msg: string) => void,
+              filterDeviceId: number = 0) {
     this.onFound = onFound;
     this.onLog = onLog;
+    this.filterDeviceId = filterDeviceId;
+  }
+
+  /** 从厂商数据解析尼康 deviceId（小端 u32；解析不出来返回 0）。 */
+  static parseNikonDeviceId(map: Map<number, Uint8Array> | undefined): number {
+    if (map === undefined || map === null) return 0;
+    const raw = map.get(NIKON_COMPANY_ID);
+    if (raw === undefined || raw === null || raw.length < 4) return 0;
+    return (raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)) >>> 0;
   }
 
   start(): void {
@@ -153,6 +180,14 @@ export class BleCameraLink {
   private identityDevice: number = 0;
   private identityNonce: number = 0;
   private identitySerial: string = '';
+  /** 断链自动重连开关（用户主动断开时要关掉，否则会自己爬起来）。 */
+  private autoReconnect: boolean = false;
+  private reconnecting: boolean = false;
+  private reconnectTimer: number = -1;
+  private backoffIndex: number = 0;
+  private readonly backoffMs: number[] = [2000, 3000, 5000, 8000, 12000, 20000, 30000];
+  /** 重连成功后的回调（上层用它恢复校时与保活）。 */
+  onReconnected: (serial: string) => void = (_s: string) => {};
 
   constructor(onLog: (msg: string) => void,
               onState: (connected: boolean) => void = (_c: boolean) => {}) {
@@ -332,9 +367,14 @@ export class BleCameraLink {
               // 时把连接判成失败。
               setTimeout(() => { finish(true); }, 2000);
             } else if (state.state === constant.ProfileConnectionState.STATE_DISCONNECTED) {
+              const wasConnected = this.connected;
               this.connected = false;
               this.onState(false);
               finish(false);
+              // 只对「曾经连上过」的断链排重连；初始连接失败有自己的路径。
+              if (wasConnected && !this.reconnecting) {
+                this.scheduleReconnect();
+              }
             }
           });
           gatt.on('BLEMtuChange', (mtu: number) => {
@@ -909,7 +949,20 @@ export class BleCameraLink {
     const stage2Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, 15000);
     await this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw);
     this.onLog('配对: stage1 已发送');
-    const stage2raw = await stage2Promise;
+    // 相机半睡时 GATT 服务器不回 stage2，约 12 秒后被踢链。每 2 秒重发一次
+    // stage1（重复的握手起始帧是安全的），既给服务器持续唤醒刺激，也不至于
+    // 让这次连接白等。
+    const stage1Retry = setInterval(() => {
+      this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw).catch((_e: Error) => {
+        // 链路已断就交给上层重连
+      });
+    }, 2000);
+    let stage2raw: Uint8Array;
+    try {
+      stage2raw = await stage2Promise;
+    } finally {
+      clearInterval(stage1Retry);
+    }
     const stage2 = decodePairingMessage(stage2raw);
     this.onLog(`配对: stage2 stage=${stage2.stage}`);
     const result = await pairing.verifyStage2AndBuildStage3(stage1, stage2);
@@ -933,9 +986,11 @@ export class BleCameraLink {
     }
     this.onLog('配对: 直连失败，重新扫描相机');
     const found: BleCameraDevice[] = [];
+    // 相机休眠后广播里没有名字，必须按厂商数据里的尼康 deviceId 认。
     const scanner = new BleScanner(
       (dev: BleCameraDevice) => { found.push(dev); },
-      (msg: string) => this.onLog(msg));
+      (msg: string) => this.onLog(msg),
+      this.identityDevice);
     scanner.start();
     await BleCameraLink.sleep(8000);
     scanner.stop();
@@ -952,8 +1007,123 @@ export class BleCameraLink {
     return false;
   }
 
-  async disconnect(): Promise<void> {
+  /** 开启断链自动重连（相机会休眠，链路断了自己爬起来）。 */
+  enableAutoReconnect(): void {
+    this.autoReconnect = true;
+    this.backoffIndex = 0;
+  }
+
+  /** 关闭自动重连并取消在途重试（用户主动断开时调）。 */
+  disableAutoReconnect(): void {
+    this.autoReconnect = false;
+    this.reconnecting = false;
+    if (this.reconnectTimer >= 0) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = -1;
+    }
+  }
+
+  /** 断链沿：按退避排一次重连。 */
+  private scheduleReconnect(): void {
+    if (!this.autoReconnect || this.reconnecting || this.reconnectTimer >= 0) return;
+    const delay = this.backoffMs[Math.min(this.backoffIndex, this.backoffMs.length - 1)];
+    this.backoffIndex++;
+    this.onLog(`${Math.round(delay / 1000)} 秒后自动重连（第 ${this.backoffIndex} 次）`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = -1;
+      void this.tryAutoReconnect();
+    }, delay);
+  }
+
+  /**
+   * 自动重连：直连优先，失败重扫，连上后用保存的身份复用握手。
+   *
+   * 相机休眠时链路是「连得上但 GATT 不回包」的状态，所以握手里的 stage1
+   * 重发（每 2 秒）就是唤醒手段。
+   */
+  private async tryAutoReconnect(): Promise<void> {
+    if (!this.autoReconnect || this.reconnecting) return;
+    const store = BleIdentityStore.getInstance();
+    if (!store.hasIdentity()) return;
+    this.reconnecting = true;
+    this.onLog('BLE 自动重连中…');
+    try {
+      await this.disconnectInner();
+      if (this.deviceId.length > 0 && !await this.connectGatt(this.deviceId)) {
+        await this.recoverByScan(store.identityDevice);
+      } else if (this.deviceId.length === 0) {
+        await this.recoverByScan(store.identityDevice);
+      }
+      if (!this.connected) {
+        throw new Error('没有可用的链路');
+      }
+      const blowfish = new NikonBlowfish(this.onLog);
+      const pairing = new NikonPairing(blowfish, this.onLog);
+      const stage1 = pairing.createStage1(store.identityDevice, store.identityNonce);
+      const serial = await this.handshake(pairing, stage1, true);
+      if (serial === null) {
+        throw new Error('复用握手未通过');
+      }
+      await this.writeControllerName();
+      this.paired = true;
+      this.backoffIndex = 0;
+      this.onLog(`BLE 自动重连成功（序列号 ${serial}）`);
+      this.onReconnected(serial);
+    } catch (err) {
+      this.onLog(`BLE 自动重连失败: ${(err as Error).message}`);
+      this.scheduleReconnect();
+    } finally {
+      this.reconnecting = false;
+    }
+  }
+
+  /** 扫描找相机（休眠相机广播无名字，按尼康 deviceId 认）。 */
+  private async recoverByScan(nikonDeviceId: number): Promise<void> {
+    const found: BleCameraDevice[] = [];
+    const scanner = new BleScanner(
+      (dev: BleCameraDevice) => { found.push(dev); },
+      (msg: string) => this.onLog(msg),
+      nikonDeviceId);
+    scanner.start();
+    await BleCameraLink.sleep(6000);
+    scanner.stop();
+    for (const dev of found) {
+      if (await this.connectGatt(dev.deviceId)) {
+        this.deviceId = dev.deviceId;
+        if (this.cameraName.length === 0) {
+          this.cameraName = dev.name;
+        }
+        return;
+      }
+    }
+    this.onLog('自动重连: 扫描没有找到相机');
+  }
+
+  /** 清链路但保留自动重连开关（重连流程内部用）。 */
+  private async disconnectInner(): Promise<void> {
     this.stopKeepalive();
+    const gatt = this.gatt;
+    const wasConnected = this.connected;
+    this.gatt = null;
+    this.connected = false;
+    if (wasConnected) {
+      this.onState(false);
+    }
+    if (gatt === null) return;
+    try {
+      gatt.disconnect();
+    } catch (_e) {
+      // 已断开
+    }
+    try {
+      gatt.close();
+    } catch (_e) {
+      // 已关闭
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    this.disableAutoReconnect();
     this.paired = false;
     const gatt = this.gatt;
     const wasConnected = this.connected;

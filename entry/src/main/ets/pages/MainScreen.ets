@@ -95,6 +95,9 @@ export struct MainScreen {
     // 智感握姿：订阅握持手，下载浮岛贴到拇指易触及的一侧。
     // 机型不支持时服务内部会静默降级为固定右侧。
     HandednessService.getInstance().start();
+    // 冷启动就把已配对的相机接上：相机休眠时 BLE 仍连得上，握手里的
+    // stage1 重发负责唤醒，用户不用手动点「搜索相机」。
+    setTimeout(() => { this.svc.autoConnectBle(); }, 800);
     // 由通知冷启动时，UsbAttachWatcher 可能在 MainScreen 创建前就递增了版本；
     // @Monitor 不会为初始值触发，这里补一次。
     if (this.usbWatcher.attachVersion > 0) {
