@@ -5,6 +5,7 @@ import { taskpool } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { abilityAccessCtrl } from '@kit.AbilityKit';
 import { wantAgent, type WantAgent } from '@kit.AbilityKit';
 import { dataSharePredicates } from '@kit.ArkData';
 import usbManager from '@ohos.usbManager';
@@ -17,6 +18,7 @@ import { PtpScheduler } from './PtpScheduler';
 import { WifiPtpSession } from './WifiPtpSession';
 import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
+import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
@@ -172,6 +174,14 @@ export class CameraService {
   private nsdScanner: NsdScanner | null = null;
   private subnetScanner: SubnetScanner | null = null;
   private wifiScanTimer: number = -1;
+  /** BLE 扫描到的相机（实验功能）。 */
+  @Trace bleCameras: BleCameraDevice[] = [];
+  @Trace bleScanning: boolean = false;
+  /** 已连接相机的 GATT 服务列表（调试用）。 */
+  @Trace bleServices: string[] = [];
+  private bleScanner: BleScanner | null = null;
+  private bleLink: BleCameraLink | null = null;
+  private bleScanTimer: number = -1;
   /** 存储是否可读（GetStorageIDs 成功）。 */
   @Trace usable: boolean = false;
   /** 最近一次扫描失败的原因，供 toast 与状态卡显示。 */
@@ -1513,6 +1523,82 @@ export class CameraService {
       this.wifiScanTimer = -1;
     }
     this.wifiScanning = false;
+  }
+
+  /** 申请蓝牙权限（ACCESS_BLUETOOTH 是 user_grant，首次会弹系统框）。 */
+  private async ensureBlePermission(): Promise<boolean> {
+    const ctx = this.context;
+    if (ctx === null) return false;
+    try {
+      const at = abilityAccessCtrl.createAtManager();
+      const result = await at.requestPermissionsFromUser(ctx, ['ohos.permission.ACCESS_BLUETOOTH']);
+      return result.authResults.length > 0 && result.authResults[0] === 0;
+    } catch (err) {
+      this.log.add(`BLE 权限申请失败: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /** 搜索 BLE 相机（实验）。只发现，不配对。 */
+  async scanBleCameras(durationMs: number = 8000): Promise<void> {
+    if (this.bleScanning) return;
+    if (!await this.ensureBlePermission()) {
+      this.reportScanFailure(L10n.tr('camera_status_ble_permission'));
+      return;
+    }
+    this.bleScanning = true;
+    this.bleCameras = [];
+    if (this.bleScanner === null) {
+      this.bleScanner = new BleScanner(
+        (device: BleCameraDevice) => {
+          if (!this.bleCameras.some((d: BleCameraDevice) => d.deviceId === device.deviceId)) {
+            this.bleCameras = this.bleCameras.concat([device]);
+          }
+        },
+        (msg: string) => { this.log.add(msg); });
+    }
+    this.bleScanner.start();
+    if (this.bleScanTimer >= 0) clearTimeout(this.bleScanTimer);
+    this.bleScanTimer = setTimeout(() => {
+      this.bleScanTimer = -1;
+      if (this.bleScanner !== null) this.bleScanner.stop();
+      this.bleScanning = false;
+    }, durationMs);
+  }
+
+  /** 停止 BLE 扫描。 */
+  stopBleScan(): void {
+    if (this.bleScanner !== null) this.bleScanner.stop();
+    if (this.bleScanTimer >= 0) {
+      clearTimeout(this.bleScanTimer);
+      this.bleScanTimer = -1;
+    }
+    this.bleScanning = false;
+  }
+
+  /** 连接一台 BLE 相机并列出 GATT 服务（验证 BLE 通道用）。 */
+  async connectBle(deviceId: string): Promise<boolean> {
+    this.stopBleScan();
+    if (this.bleLink === null) {
+      this.bleLink = new BleCameraLink((msg: string) => { this.log.add(msg); });
+    }
+    const ok = await this.bleLink.connect(deviceId);
+    if (!ok) {
+      this.bleServices = [];
+      this.reportScanFailure(L10n.tr('camera_status_ble_connect_failed'));
+      return false;
+    }
+    this.bleServices = await this.bleLink.listServices();
+    this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
+    return true;
+  }
+
+  /** 断开 BLE。 */
+  async disconnectBle(): Promise<void> {
+    if (this.bleLink !== null) {
+      await this.bleLink.disconnect();
+    }
+    this.bleServices = [];
   }
 
   private makeWifiSession(): WifiPtpSession {

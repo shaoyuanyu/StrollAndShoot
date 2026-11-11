@@ -133,6 +133,39 @@
       "value": "Search for nearby cameras"
     },
     {
+      "name": "camera_ble_title",
+      "value": "Bluetooth (experimental)"
+    },
+    {
+      "name": "camera_ble_hint",
+      "value": "Bluetooth is used for pairing, clock sync and location; photos still go over Wi-Fi."
+    },
+    {
+      "name": "camera_ble_scan",
+      "value": "Search for Bluetooth cameras"
+    },
+    {
+      "name": "camera_ble_scanning",
+      "value": "Searching for Bluetooth cameras…"
+    },
+    {
+      "name": "camera_ble_services",
+      "value": "Connected, %1$d GATT service lines"
+    },
+    {
+      "name": "camera_status_ble_permission",
+      "value": "Bluetooth permission is required to search for cameras"
+    },
+    {
+      "name": "camera_status_ble_connect_failed",
+      "value": "Failed to connect to the camera over Bluetooth"
+    },
+    {
+      "name": "bluetooth_permission_reason",
+      "value": "Used to find and connect to the camera over Bluetooth"
+    },
+
+    {
       "name": "camera_wifi_scanning",
       "value": "Searching for nearby cameras…"
     },

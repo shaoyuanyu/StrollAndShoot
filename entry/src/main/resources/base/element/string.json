@@ -133,6 +133,39 @@
       "value": "搜索附近的相机"
     },
     {
+      "name": "camera_ble_title",
+      "value": "蓝牙（实验）"
+    },
+    {
+      "name": "camera_ble_hint",
+      "value": "蓝牙用于配对、校时与定位；照片仍走 Wi-Fi。"
+    },
+    {
+      "name": "camera_ble_scan",
+      "value": "搜索蓝牙相机"
+    },
+    {
+      "name": "camera_ble_scanning",
+      "value": "正在搜索蓝牙相机..."
+    },
+    {
+      "name": "camera_ble_services",
+      "value": "已连接，枚举到 %1$d 行 GATT 服务"
+    },
+    {
+      "name": "camera_status_ble_permission",
+      "value": "需要蓝牙权限才能搜索相机"
+    },
+    {
+      "name": "camera_status_ble_connect_failed",
+      "value": "蓝牙连接相机失败"
+    },
+    {
+      "name": "bluetooth_permission_reason",
+      "value": "用于搜索并连接相机的蓝牙服务"
+    },
+
+    {
       "name": "camera_wifi_scanning",
       "value": "正在搜索附近的相机..."
     },

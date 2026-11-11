@@ -334,6 +334,15 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以�
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
 
+**BLE 第一阶段：扫描与 GATT 枚举（1.34.0）**
+
+`services/BleScanner.ets` 只做「发现 + 连上 + 列服务」，配对算法还没接：
+
+- `BleScanner` 用 `ble.startBLEScan([], ...)` 空过滤扫描，收到结果后按**广播名**筛（`Z50_2_8079350`、`Z_f_8014411` 这类以 `Z` 开头、含下划线的名字）。不能只按服务 UUID 过滤：相机在等待配对时广播里不带 `0x0399`，按服务过滤会一个都扫不到（ZPill 实测）。
+- `BleCameraLink` 用 `ble.createGattClientDevice` 连接，`getServices()` 列出服务/特征，用来确认服务是 `de00` 族。
+- 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
+- 阶段目标：确认 BLE 广播可见、GATT 结构正确；下一步才做 Blowfish 四步配对（`0x2000`）与 `0x2006`/`0x2007` 保活定位。
+
 **当前边界（重要）**
 
 - 只支持 STA/热点这种「手机与相机同网」的路径；AP 模式（手机连相机热点）没做。

@@ -2,6 +2,7 @@ import { CameraService } from '../services/CameraService';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
+import type { BleCameraDevice } from '../services/BleScanner';
 
 /**
  * 相机页。
@@ -19,6 +20,8 @@ export struct CameraPage {
   @Event onConnectWifi: (host: string) => void = (_h: string) => {};
   @Event onCompletePairing: () => void = () => {};
   @Event onScanWifi: () => void = () => {};
+  @Event onScanBle: () => void = () => {};
+  @Event onConnectBle: (deviceId: string) => void = (_id: string) => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -368,6 +371,79 @@ export struct CameraPage {
     .borderRadius(Radius.Card)
   }
 
+  /**
+   * 蓝牙（实验）卡。
+   *
+   * 第一阶段只做「扫描 + 连上 + 枚举 GATT 服务」，用来确认相机 BLE 广播可见、
+   * 服务是 de00 族。配对（Blowfish 四步握手）与保活/校时/定位是后续步骤。
+   */
+  @Builder
+  BleCard() {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        Text($r('app.string.camera_ble_title'))
+          .fontSize(FontSize.CardTitle)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+        Blank()
+        if (this.svc.bleServices.length > 0) {
+          Text($r('app.string.camera_ble_services', this.svc.bleServices.length))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.status_connected'))
+        }
+      }
+      .width('100%')
+
+      Text($r('app.string.camera_ble_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+
+      Text(this.svc.bleScanning
+        ? $r('app.string.camera_ble_scanning')
+        : $r('app.string.camera_ble_scan'))
+        .fontSize(FontSize.Caption)
+        .fontColor($r('app.color.primary'))
+        .width('100%')
+        .onClick(() => {
+          if (!this.svc.bleScanning) {
+            this.onScanBle();
+          }
+        })
+
+      if (this.svc.bleCameras.length > 0) {
+        Column() {
+          ForEach(this.svc.bleCameras, (cam: BleCameraDevice) => {
+            Row({ space: 8 }) {
+              Text(cam.name)
+                .fontSize(FontSize.Body)
+                .fontColor($r('app.color.text_primary'))
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(`${cam.rssi} dBm`)
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+              SymbolGlyph($r('sys.symbol.chevron_right'))
+                .fontSize(IconSize.Body)
+                .fontColor([$r('app.color.text_tertiary')])
+            }
+            .width('100%')
+            .padding({ top: 10, bottom: 10 })
+            .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+            .onClick(() => { this.onConnectBle(cam.deviceId); })
+          }, (cam: BleCameraDevice) => cam.deviceId)
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.bg_surface'))
+    .borderRadius(Radius.Card)
+  }
+
   build() {
     Scroll(this.scroller) {
       Column({ space: 16 }) {
@@ -380,6 +456,7 @@ export struct CameraPage {
           this.PairingCard()
         } else if (!this.svc.connected) {
           this.WirelessCard()
+          this.BleCard()
         }
         if (this.svc.connected) {
           this.DeviceCard()

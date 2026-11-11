@@ -133,6 +133,39 @@
       "value": "搜尋附近的相機"
     },
     {
+      "name": "camera_ble_title",
+      "value": "藍牙（實驗）"
+    },
+    {
+      "name": "camera_ble_hint",
+      "value": "藍牙用於配對、校時與定位；照片仍走 Wi-Fi。"
+    },
+    {
+      "name": "camera_ble_scan",
+      "value": "搜尋藍牙相機"
+    },
+    {
+      "name": "camera_ble_scanning",
+      "value": "正在搜尋藍牙相機..."
+    },
+    {
+      "name": "camera_ble_services",
+      "value": "已連線，列舉到 %1$d 行 GATT 服務"
+    },
+    {
+      "name": "camera_status_ble_permission",
+      "value": "需要藍牙權限才能搜尋相機"
+    },
+    {
+      "name": "camera_status_ble_connect_failed",
+      "value": "藍牙連線相機失敗"
+    },
+    {
+      "name": "bluetooth_permission_reason",
+      "value": "用於搜尋並連接相機的藍牙服務"
+    },
+
+    {
       "name": "camera_wifi_scanning",
       "value": "正在搜尋附近的相機..."
     },

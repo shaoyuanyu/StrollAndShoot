@@ -737,6 +737,12 @@ export struct MainScreen {
             },
             onScanWifi: () => {
               this.svc.scanWifiCameras();
+            },
+            onScanBle: () => {
+              this.svc.scanBleCameras();
+            },
+            onConnectBle: (deviceId: string) => {
+              this.svc.connectBle(deviceId);
             }
           })
         }
