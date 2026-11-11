@@ -3,9 +3,22 @@ import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
+import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeMedia } from '../utils/CameraStandee';
 import { CameraModelStore } from '../model/CameraModelStore';
+import { WindowUtils } from '../utils/WindowUtils';
+/**
+ * 四选一的四项。图标是「视觉语言」：文字要逐字读，图标扫一眼就知道是哪种链路
+ * （线 / 蓝牙符号 / Wi-Fi / 路由器），也顺带把四个选项在视觉上分开。
+ */
+const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
+  { text: $r('app.string.camera_mode_usb'), symbol: $r('sys.symbol.charg_cable') },
+  { text: $r('app.string.camera_mode_ble'), symbol: $r('sys.symbol.bluetooth') },
+  { text: $r('app.string.camera_mode_ap'), symbol: $r('sys.symbol.wifi') },
+  { text: $r('app.string.camera_mode_sta'), symbol: $r('sys.symbol.wifi_router') }
+]);
+
 /** 立牌统一高度（vp）：各机型宽高比不同，按高度对齐、宽度随比例。 */
 const STANDEE_HEIGHT = 172;
 /** 倒影高度：取机身下半截，再盖一层渐变淡出。 */
@@ -224,41 +237,35 @@ export struct CameraPage {
    *   设置页的选中态完全一致。
    */
   /**
-   * 四选一：四个**独立的胶囊**，不是一条分段控件。
+   * 四选一：官方胶囊分段按钮 + 每段一个图标。
    *
-   * 官方 `CapsuleSegmentButtonV2` 在内容区拿不到沉浸光感，而且它只能给「整条
-   * 轨道」上色、给不了「每一项」上色——四个选项因此连成一片，用户一眼扫过去
-   * 只看到四段文字，没有「这是四个互斥选项」的视觉语言。拆成四个按钮后，
-   * 间隔、各自的底色、选中反白都在说同一件事：四选一。
+   * 试过拆成四个独立 Button，用户反馈「更难看」，退回分段控件。分段控件原本的
+   * 问题是「四个选项连成一片、只有文字没有视觉语言」，所以这里给每项配一个
+   * 符号图标：线 / 蓝牙 / Wi-Fi / 路由器，扫一眼就能分辨，也顺带把四段分开。
+   *
+   * 配色沿用「凹槽 + 凸起」：轨道用 `bg_page`（比卡片暗一档），选中项主色实底、
+   * 图标与文字反白。注意内容区拿不到沉浸光感（官方限制），这里不用材质。
    */
   @Builder
   ModePicker() {
-    Row({ space: 6 }) {
-      this.ModeChip(0, $r('app.string.camera_mode_usb'))
-      this.ModeChip(1, $r('app.string.camera_mode_ble'))
-      this.ModeChip(2, $r('app.string.camera_mode_ap'))
-      this.ModeChip(3, $r('app.string.camera_mode_sta'))
-    }
-    .width('100%')
-  }
-
-  /** 单个链路选项。选中＝主色实底反白，未选中＝比卡片暗一档的实底。 */
-  @Builder
-  ModeChip(index: number, label: Resource) {
-    Button(label)
-      .layoutWeight(1)
-      .height(38)
-      .padding({ left: 2, right: 2 })
-      .fontSize(FontSize.Caption)
-      .fontWeight(this.svc.linkMode === index ? FontWeight.Medium : FontWeight.Regular)
-      .fontColor(this.svc.linkMode === index
-        ? $r('app.color.text_on_primary')
-        : $r('app.color.text_secondary'))
-      .backgroundColor(this.svc.linkMode === index
-        ? $r('app.color.primary')
-        : $r('app.color.bg_page'))
-      .borderRadius(pillRadius(38))
-      .onClick(() => { this.onSelectMode(index); })
+    CapsuleSegmentButtonV2({
+      items: MODE_ITEMS,
+      selectedIndex: this.svc.linkMode,
+      $selectedIndex: (index: number) => { this.onSelectMode(index); },
+      itemFontSize: LengthMetrics.fp(FontSize.Caption),
+      itemSelectedFontSize: LengthMetrics.fp(FontSize.Caption),
+      itemFontWeight: FontWeight.Regular,
+      itemSelectedFontWeight: FontWeight.Medium,
+      itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
+      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
+      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.primary')),
+      itemSymbolFontSize: LengthMetrics.fp(18),
+      itemSymbolFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
+      itemSelectedSymbolFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
+      itemMinHeight: LengthMetrics.vp(56),
+      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page'))
+    })
+      .width('100%')
   }
 
   /** 三步引导的一条：编号 + 一句话。 */
@@ -772,7 +779,9 @@ export struct CameraPage {
             .draggable(false)
             .opacity(this.svc.connected ? 1 : 0.72)
             .animation({ duration: 260, curve: Curve.EaseOut })
-          this.StandeeReflection()
+          if (this.isDarkTheme()) {
+            this.StandeeReflection()
+          }
         }
         .width('100%')
         .padding({ top: 12, bottom: 4 })
@@ -784,6 +793,17 @@ export struct CameraPage {
         colors: [[$r('app.color.hero_glow'), 0], ['#00000000', 1]]
       })
     }
+  }
+
+  /**
+   * 当前生效的深/浅色。
+   *
+   * 倒影只在深色下画：产品图自带的投影是「一大片软阴影」，镜像后在浅色底上会
+   * 变成一块带硬边的灰色矩形——用户直接说「有明显视觉污渍」。深色下同一块阴影
+   * 融进黑底，反而正是倒影该有的样子。
+   */
+  private isDarkTheme(): boolean {
+    return WindowUtils.isDarkMode(this.getUIContext().getHostContext());
   }
 
   /**

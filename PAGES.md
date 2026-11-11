@@ -125,7 +125,10 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
   半径 210vp）。黑机身压黑底会糊，光负责把轮廓托出来；径向渐变没有边界，不会
   画出方框。浅色下不需要——白池在浅灰底上会显出一个能看见圆弧的光圈；
 - 机身下方一层**倒影**，向下淡出到 `bg_page`。物体因此被「压」在页面上，这块
-  和下面的卡片连成一体。
+  和下面的卡片连成一体。**倒影只在深色下画**：产品图自带的投影是一大片软阴影，
+  镜像后在浅色底上会变成一块带硬边的灰色矩形（用户原话「明显视觉污渍」）；
+  深色下同一块阴影融进黑底，才是倒影该有的样子。判断用
+  `WindowUtils.isDarkMode()`，跟着 `setColorMode()` 后的实际配置走。
 
 倒影的两个必踩点：
 
@@ -137,8 +140,8 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 断开时只有图片与倒影变淡（0.72 / 0.18），其余不变。
 
 型号与序列号在标题栏：`tabTitle()` 在相机页认出机型时返回型号（`Z 50II`），
-`cameraSerialBadge()` 把序列号渲染成**型号右下角的角标**（10fp、三级色、与型号
-底部对齐）。认不出机型时两样都不显示。
+`cameraSerialBadge()` 把序列号渲染成**型号右下角的角标**（`FontSize.Nano` 9fp、
+三级色、与型号底部对齐）。认不出机型时两样都不显示。
 
 ##### 素材要按「机身」居中，不是按画布
 
@@ -154,25 +157,36 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 型号合计约 460 KB，同尺寸 PNG 2.8 MB）。图片由尼康所有，仅用于在个人应用内
 标明「连的是哪台机器」。
 
-#### 四选一：四个独立胶囊，不是一条分段控件（1.44.2）
+#### 四选一：胶囊分段控件 + 每段一个图标（1.44.3）
 
-一开始用官方 `CapsuleSegmentButtonV2`，用户反馈「过于扁平、四个选项界限模糊，
-一眼只看到四段文字」。根因是它只能给**整条轨道**上色、给不了**每一项**上色，
-四个选项天然连成一片。
+试过三个版本，最终形态是**官方 `CapsuleSegmentButtonV2` + 每项一个符号图标**：
 
-现在换成 `Row` 里 **4 个官方 `Button`**（`ModeChip`，间隔 6vp、等宽、高 38vp、
-胶囊圆角）：
+1. 默认分段控件（只有文字）→ 用户反馈「过于扁平、四个选项界限模糊」；
+2. 拆成 4 个独立 `Button` → 用户反馈「更难看」；
+3. 回到分段控件 + 图标 → 图标就是缺的那层视觉语言。
 
-| 状态 | 底色 | 文字 |
-|---|---|---|
-| 选中 | `primary` 实底 | `text_on_primary`、Medium |
-| 未选中 | `bg_page`（比卡片暗一档） | `text_secondary`、Regular |
+| 项 | 图标 |
+|---|---|
+| USB | `sys.symbol.charg_cable` |
+| 蓝牙 | `sys.symbol.bluetooth` |
+| Wi-Fi AP | `sys.symbol.wifi` |
+| Wi-Fi STA | `sys.symbol.wifi_router` |
 
-于是「间隔 + 各自底色 + 选中反白」三件事同时在说「这是四个互斥选项」。字号用
-`FontSize.Caption`（14fp 时四段英文会挤），左右内边距压到 2vp 保证等宽不截断。
+图标通过 `SegmentButtonV2ItemOptions.symbol` 传，配 `itemSymbolFontSize` 18fp、
+`itemSymbolFontColor` / `itemSelectedSymbolFontColor` 跟随文字色。
 
-`ModeChip(index, label)` 的两个入参都是常量，选中态在读 `this.svc.linkMode` 时
-订阅刷新——注意别把选中态做成入参（`@Builder` 值参数不刷新）。
+配色仍是「凹槽 + 凸起」：
+
+| 参数 | 取值 |
+|---|---|
+| `buttonBackgroundColor` | `bg_page`（比卡片暗一档） |
+| `itemSelectedBackgroundColor` | `primary` 实底 |
+| `itemSelectedFontColor` / `itemSelectedSymbolFontColor` | `text_on_primary` |
+| `itemFontSize` / `itemSelectedFontSize` | `FontSize.Caption` |
+| `itemMinHeight` | 56vp（图标在文字上方，比纯文字高） |
+
+内容区拿不到沉浸光感（官方限制），这里不用材质。`ColorMetrics` / `LengthMetrics`
+会报 `Function may throw exceptions` 告警，与 `WindowShot` 同类，可接受。
 
 #### 状态头只此一处
 

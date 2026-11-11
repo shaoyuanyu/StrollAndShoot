@@ -26,6 +26,8 @@ export class FontSize {
   static readonly Caption: number = 12;
   /** 页签文字、最小标签。 */
   static readonly Micro: number = 10;
+  /** 角标（标题栏型号右下角的序列号这类「铭牌」信息）。 */
+  static readonly Nano: number = 9;
 }
 
 export class IconSize {

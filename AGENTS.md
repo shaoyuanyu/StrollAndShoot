@@ -787,7 +787,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 | 类别 | 取值 |
 |---|---|
-| 字号 `FontSize` | Display 28 / Title 22 / PageTitle 20 / CardTitle 16 / Body 15 / Section 13 / Caption 12 / Micro 10 |
+| 字号 `FontSize` | Display 28 / Title 22 / PageTitle 20 / CardTitle 16 / Body 15 / Section 13 / Caption 12 / Micro 10 / Nano 9（角标） |
 | 图标 `IconSize` | Small 12 / Body 16 / Nav 20 / Large 24 / Empty 44 |
 | 圆角 `Radius` | Card 24 / Inner 18 / Chip 12 / Thumb 4 / Line 1 |
 | 行高 `RowHeight` | Single 56 / Double 64 |

@@ -505,7 +505,7 @@ export struct MainScreen {
           .flexShrink(1)
         if (this.cameraSerialBadge() !== '') {
           Text(this.cameraSerialBadge())
-            .fontSize(FontSize.Micro)
+            .fontSize(FontSize.Nano)
             .fontColor($r('app.color.text_tertiary'))
             .padding({ bottom: 5 })
             .flexShrink(0)
