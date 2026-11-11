@@ -18,6 +18,10 @@ export const NIKON_BLE_SERVICE_ALT = '0000de01-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_CHAR_PAIRING = '00002000-3dd4-4255-8d62-6dc7b9bd5561';
 /** 标准 CCCD：开通知/指示必须带上它，否则 setCharacteristicChangeIndication 报 401。 */
 const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
+/** LSS 控制点：2B 位域 (Connection<<8)|(Location<<4)|Time，相机 notify 请求。 */
+export const NIKON_CHAR_CONTROL = '00002008-3dd4-4255-8d62-6dc7b9bd5561';
+/** 电池：连接后读一次做「唤醒 poke」，相机半睡时不回 stage2。 */
+export const NIKON_CHAR_BATTERY = '00002a19-3dd4-4255-8d62-6dc7b9bd5561';
 /** 控制器名（32B ASCII 零填充，配对收口用）。 */
 export const NIKON_CHAR_NAME = '00002002-3dd4-4255-8d62-6dc7b9bd5561';
 /** 校时（10B，兼保活心跳）。 */
@@ -133,6 +137,8 @@ export class BleCameraLink {
   private readonly onState: (connected: boolean) => void;
   private pendingChar: PendingChar | null = null;
   private keepaliveTimer: number = -1;
+  /** 配对握手是否已完成（只有完成后才应答 0x2008）。 */
+  private paired: boolean = false;
   connected: boolean = false;
 
   constructor(onLog: (msg: string) => void,
@@ -249,6 +255,9 @@ export class BleCameraLink {
             const uuid = (data.characteristicUuid ?? '').toLowerCase();
             const value = new Uint8Array(data.characteristicValue);
             this.onLog(`BLE 通知 ${uuid} (${value.length}B)`);
+            if (uuid === NIKON_CHAR_CONTROL) {
+              this.handleControlPoint(value);
+            }
             const pending = this.pendingChar;
             if (pending !== null && pending.uuid === uuid) {
               this.pendingChar = null;
@@ -307,6 +316,82 @@ export class BleCameraLink {
     }
     this.onLog('BLE 服务枚举为空（3 次重试均无结果）');
     return [];
+  }
+
+  /** 开启某个特征的 notify（0x2008 用 notify，不是 indicate）。 */
+  async enableNotification(charUuid: string): Promise<void> {
+    const gatt = this.gatt;
+    if (gatt === null) throw new Error('BLE 未连接');
+    const char: ble.BLECharacteristic = {
+      serviceUuid: NIKON_BLE_SERVICE,
+      characteristicUuid: charUuid,
+      characteristicValue: new Uint8Array(0).buffer as ArrayBuffer,
+      descriptors: [cccdDescriptor(charUuid, false)]
+    };
+    await new Promise<void>((resolve: () => void, reject: (e: Error) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error('notify 开启超时'));
+      }, 5000);
+      gatt.setCharacteristicChangeNotification(char, true, (err: BusinessError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (err) {
+          reject(new Error(`notify ${err.code}: ${err.message}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  /** 读一个特征值。 */
+  async readCharacteristic(charUuid: string): Promise<Uint8Array | null> {
+    const gatt = this.gatt;
+    if (gatt === null) return null;
+    const char: ble.BLECharacteristic = {
+      serviceUuid: NIKON_BLE_SERVICE,
+      characteristicUuid: charUuid,
+      characteristicValue: new Uint8Array(0).buffer as ArrayBuffer,
+      descriptors: []
+    };
+    const out = await gatt.readCharacteristicValue(char);
+    return new Uint8Array(out.characteristicValue);
+  }
+
+  /**
+   * 0x2008 位域：`(Connection<<8)|(Location<<4)|Time`。
+   *
+   * 相机在 notify 里「要时间/位置/连接」，app 供给后写回清位值确认。
+   * 只在配对完成后应答——配对事务内写 0x2008 会搅坏注册（ZPill 实测）。
+   */
+  private handleControlPoint(data: Uint8Array): void {
+    if (data.length !== 2) return;
+    const raw = data[0] | (data[1] << 8);
+    const time = data[0] & 0x0F;
+    const loc = (data[0] >> 4) & 0x0F;
+    const conn = data[1] & 0x0F;
+    this.onLog(`0x2008 ← 0x${raw.toString(16)} (Time=${time} Loc=${loc} Conn=${conn})`);
+    if (!this.paired) {
+      this.onLog('0x2008 配对未完成，暂不应答');
+      return;
+    }
+    let answer = raw;
+    if (time >= 1) answer &= ~0x000F;
+    if (loc >= 1) answer &= ~0x00F0;
+    if (conn >= 1) answer &= ~0x0100;
+    if (answer === raw) return;
+    const payload = new Uint8Array(2);
+    payload[0] = answer & 0xFF;
+    payload[1] = (answer >> 8) & 0xFF;
+    this.writeCharacteristic(NIKON_CHAR_CONTROL, payload).then(() => {
+      this.onLog(`0x2008 清位应答 0x${answer.toString(16)}`);
+    }).catch((err: Error) => {
+      this.onLog(`0x2008 应答失败: ${err.message}`);
+    });
   }
 
   /** 写一次相机时钟（0x2006）。 */
@@ -448,6 +533,19 @@ export class BleCameraLink {
       return null;
     }
     const pairing = new NikonPairing(blowfish, this.onLog);
+    // 先开 0x2008 通知并读一次电池把相机叫醒（半睡时 GATT 不回 stage2）。
+    try {
+      await this.enableNotification(NIKON_CHAR_CONTROL);
+      this.onLog('配对: 0x2008 notify 已开启');
+    } catch (err) {
+      this.onLog(`配对: 0x2008 notify 失败: ${(err as Error).message}`);
+    }
+    try {
+      const battery = await this.readCharacteristic(NIKON_CHAR_BATTERY);
+      this.onLog(`配对: 唤醒 poke 0x2a19 → ${battery === null ? 'null' : battery.length + 'B'}`);
+    } catch (_e) {
+      this.onLog('配对: 唤醒 poke 未回，继续握手');
+    }
     const stage1 = pairing.createStage1();
     this.onLog('配对: 开启 0x2000 indicate');
     await this.enableIndication(NIKON_CHAR_PAIRING);
@@ -478,12 +576,14 @@ export class BleCameraLink {
       namePayload[i] = name.charCodeAt(i) & 0xFF;
     }
     await this.writeCharacteristic(NIKON_CHAR_NAME, namePayload);
+    this.paired = true;
     this.onLog('配对完成: 0x2002 控制器名已写，相机侧配对完成');
     return serial;
   }
 
   async disconnect(): Promise<void> {
     this.stopKeepalive();
+    this.paired = false;
     const gatt = this.gatt;
     const wasConnected = this.connected;
     this.gatt = null;
