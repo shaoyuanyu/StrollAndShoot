@@ -77,16 +77,6 @@ const TEMP_ROW_INDEXES: number[] = [
 ];
 
 /**
- * 底边回弹的最大位移（vp）——只让**抽屉内容**弹这么多，整张卡不动。
- *
- * 原生 `EdgeEffect.Spring` 的振幅不可调：真机实测轻拉一屏的 1/4 就有 47vp、
- * 猛拉有 238vp，而卡片一旦跟着走，相机会被顶出屏幕（就是「第四段」的观感）。
- * 所以弹簧只当「越界量发生器」用，取它越界的那一小段、砍到 16vp 换算成内容位移：
- * 相机与抽屉纹丝不动，只有内容自己弹一下再顺着弹簧的衰减回到原位。
- */
-const CONTENT_BOUNCE_MAX = 16;
-
-/**
  * 相机页。
  *
  * **整页只有一套容器语言**：页面底色上是 24vp 圆角的白卡，卡与卡之间用分组小标题
@@ -1186,14 +1176,9 @@ export struct CameraPage {
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
-    // 只给「底边」开弹簧（`effectEdge: EffectEdge.END`，API 18 起）：顶边仍然是硬的，
-    // 顶部是抽屉的入场位，回弹只会把相机往下拽、露出页面底色。
-    //
-    // 弹簧在这里**只当越界量发生器**：回弹期间 `currentOffset()` 会越过
-    // `maxScrollY()`（真机实测猛拉 238vp、轻拉 47vp），`syncFromScroll()` 里
-    // 卡片按未 clamp 的偏移补偿，所以整张卡不动、相机一 vp 都不移；只有抽屉内容
-    // 取越界量的前 16vp 弹一下，再顺着弹簧自己的衰减曲线回到原位。
-    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.END })
+    // 两端都不给回弹：滚到底就是硬停。1.58.0 试过底边 Spring（振幅不可调，
+    // 原生给量 47~238vp，只截 16vp 喂给抽屉内容），手感对比用，现已关掉。
+    .edgeEffect(EdgeEffect.None)
     .align(Alignment.Top)
     // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
     // 第二段（stick-48 → stick）：抽屉相对相机上移 48，把倒影盖完；
@@ -1212,10 +1197,9 @@ export struct CameraPage {
    * 按当前滚动偏移同步三个位移。
    *
    * 三段的位移都是**滚动偏移的纯函数**，不依赖任何测量值：
-   * - 卡片位置 → `scrollOver`（未 clamp，**连回弹的越界量也照原样补偿**，
-   *   所以底边回弹期间相机一 vp 都不动）；
+   * - 卡片位置 → `scrollOver`（未 clamp，偏移越界也照原样补偿，相机钉死）；
    * - 抽屉上移 → `drawerLift`（stick 前的 48vp 区间）；
-   * - 抽屉内容 → `innerOffset`（第三段总量 + 一点点回弹）。
+   * - 抽屉内容 → `innerOffset`（clamp 在第三段总量上，滚到底不露白）。
    *
    * @param clampRange 内容高度刚变过时传 true：此时可滚范围已经变短，但滚动
    *   容器这一帧还停在旧偏移上，不夹一下会让整张卡被推下去（相机飞出屏幕）。
@@ -1230,19 +1214,15 @@ export struct CameraPage {
     }
 
     const stick = stickScrollVp();
-    // 未 clamp：底边回弹时偏移会越过 maxY，这里跟上它，卡片屏幕位置才恒定
+    // 未 clamp：偏移万一越过 maxY（内容变矮的那一帧），这里也跟上它
     const over = Math.max(0, y - stick);
     if (Math.abs(over - this.scrollOver) > 0.2) {
       this.scrollOver = over;
     }
 
-    // 抽屉内容 = 第三段（clamp 住，滚到底不露白）+ 底边回弹。
-    // 回弹量取原生弹簧越界的那一小段、再砍到 `CONTENT_BOUNCE_MAX`：整张卡不跟着
-    // 走（相机钉死），只有内容自己弹一下；原生弹簧的衰减曲线顺便就是回弹动画，
-    // 不需要自己写 animateTo。
+    // 抽屉内容 = 第三段总量，clamp 住，滚到底不露白
     const span = this.innerScrollSpan();
-    const bounce = Math.min(CONTENT_BOUNCE_MAX, Math.max(0, over - span));
-    const inner = Math.min(span, over) + bounce;
+    const inner = Math.min(span, over);
     if (Math.abs(inner - this.innerOffset) > 0.5) {
       this.innerOffset = inner;
     }
