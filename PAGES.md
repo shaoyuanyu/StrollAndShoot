@@ -342,6 +342,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 - 开关（GPS 记录、模拟相机）用 `Toggle(Switch)`，**不要设 `selectedColor`**，否则会覆盖系统预设的沉浸光感样式。
 - 导航类行带 `chevron_right`（定位记录管理、缩略图缓存）。删除定位记录统一放在「定位记录管理」页（多选批量删除，或全屏轨迹页「更多」里删当天），设置页不再提供「清除定位记录」入口，避免误触。
 - 调试日志面板仍是等宽字体、高 240vp，只在调试包里渲染。
+- 调试分区里的「模拟型号」（1.48.0）是**条件行**：只有「模拟相机设备」开关打开时才插入，`SettingSelectRow` + 一行 hint（「改完到「相机」页点一次「搜索相机」才生效。」）。它决定虚拟相机上报的机型，也就是标题型号与页首立牌；选项来自 `cameraStandeeKeys()`，第一项「未知型号」上报 `Virtual PTP Camera`。`SettingSelectRow` 为此加了可选的 `hint`，行高从固定 56vp 改成 `constraintSize({ minHeight: 56 })`——不带 hint 的行高度不变。
 - 调试区新增「模拟 GPS 轨迹」开关：以当前定位为起点生成相机图案，覆盖今天的地图/列表显示；真实 `gps_records.jsonl` 不变，关掉开关立即恢复。仅 debug 包可见。
 - 调试区新增「关闭磨砂玻璃」开关（2026-11-09，仅 debug 包）：打开后 `utils/GlassEffect.ets` 把所有 `.systemMaterial(...)` 换成官方 `uiMaterial.Material.empty`、`backgroundBlurStyle` 换成 `BlurStyle.NONE`、`linearGradientBlur` 半径归零。模拟器 GPU 不支持磨砂着色器，材质叠加时会画出乱花的多边形，打开它才能拿截图验收布局与交互；真机不需要。
 

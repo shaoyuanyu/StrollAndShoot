@@ -1327,6 +1327,18 @@
     {
       "name": "camera_group_actions",
       "value": "操作"
+    },
+    {
+      "name": "settings_mock_model",
+      "value": "模擬型號"
+    },
+    {
+      "name": "settings_mock_model_hint",
+      "value": "改完到「相機」頁點一次「搜尋相機」才生效。"
+    },
+    {
+      "name": "settings_mock_model_unknown",
+      "value": "未知型號"
     }
   ]
 }

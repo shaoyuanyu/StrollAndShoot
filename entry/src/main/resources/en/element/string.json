@@ -1327,6 +1327,18 @@
     {
       "name": "camera_group_actions",
       "value": "Actions"
+    },
+    {
+      "name": "settings_mock_model",
+      "value": "Mock model"
+    },
+    {
+      "name": "settings_mock_model_hint",
+      "value": "Tap “Find camera” on the Camera tab to apply."
+    },
+    {
+      "name": "settings_mock_model_unknown",
+      "value": "Unknown model"
     }
   ]
 }

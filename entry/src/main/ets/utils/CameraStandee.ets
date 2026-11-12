@@ -83,6 +83,17 @@ export function cameraStandeeMedia(key: string): Resource {
 }
 
 /**
+ * 所有带立牌的机型 key，按「旗舰 → 入门」排。
+ *
+ * 只给「调试包里的模拟型号下拉」用：下拉项由 `cameraStandeeLabel(key)` 生成，
+ * 因此下拉里每一款都必然有立牌，选完接上模拟相机就能看到对应机型的效果。
+ * **顺序与匹配用的 `ENTRIES` 无关**，不要拿它做匹配。
+ */
+export function cameraStandeeKeys(): string[] {
+  return ['z9', 'z8', 'z7ii', 'z6iii', 'z6ii', 'z5ii', 'z5iic', 'zf', 'z50ii', 'z30'];
+}
+
+/**
  * key → 素材的宽高比（画布像素宽 / 高）。
  *
  * 立牌的**盒子必须和素材同一个宽高比**。`Image` 的 `Contain` 是把整张画布居中塞进

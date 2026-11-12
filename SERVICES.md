@@ -553,9 +553,14 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 `CameraService.cameraModel` 只存一个 key（`z50ii` 这类，见
 `utils/CameraStandee.ets`），由 `@Monitor('cameraName', 'bleCameraName')` 识别
 并落盘到 `CameraModelStore`（PersistenceV2，key `camera_model`）。断开时这两个
-字段都会被清空，但这里不清 `cameraModel`：立牌要留着。
+字段都会被清空，但这里不清 `cameraModel`：立牌要留着（变暗）。
 `initCameraModel()` 在启动时把上次的 key 读回来；从没连过 PTP 也能认——BLE 首配
 时 `BleIdentityStore` 已经存了广播名（`Z50_2_8079350`）与序列号。
+
+**连着却认不出机型时要把立牌清掉**（1.48.0）：判断键是 `raw !== ''`，也就是
+「有连接的机型串但 `cameraStandeeKey()` 返回空」（Z fc / ZR 这类没有商品图的机器，
+或调试包选的「未知型号」）。继续摆上一台相机的图和型号名，比没有立牌更糟——那等于
+告诉用户「连的是那台」。断开时 raw 为空，走的是保留那条，页面不会塌一块。
 
 `camera_model` 里还存 `serial`，供标题栏型号右下角的角标用
 （`MainScreen.cameraSerialBadge()`）：

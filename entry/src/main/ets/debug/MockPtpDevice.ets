@@ -198,6 +198,26 @@ export class MockPtpDevice {
     return MockPtpDevice.isDebugBuild() && SettingsStore.getInstance().mockCameraEnabled;
   }
 
+  /**
+   * 虚拟相机上报的机型（设置页「模拟型号」里选的营销名）。
+   *
+   * 空串 = 认不出的机器：连接后 `cameraStandeeKey()` 返回 `''`，标题退回「相机」、
+   * 页面不出立牌，正好用来验收「没有商品图」的那条分支。厂商名跟着型号走，
+   * 免得出现「尼康的 Z 9 / 厂商 Mock」这种自相矛盾的设备信息。
+   */
+  static mockModel(): string {
+    return SettingsStore.getInstance().mockCameraModel;
+  }
+
+  static mockManufacturer(): string {
+    return MockPtpDevice.mockModel() !== '' ? 'NIKON CORPORATION' : 'Mock';
+  }
+
+  static mockProductName(): string {
+    const model = MockPtpDevice.mockModel();
+    return model !== '' ? model : 'Virtual PTP Camera';
+  }
+
   /** 虚拟相机的 USB 描述符，字段与真实设备一致，便于走同一套连接逻辑。 */
   static findCameras(): usbManager.USBDevice[] {
     const device: usbManager.USBDevice = {
@@ -205,8 +225,8 @@ export class MockPtpDevice {
       devAddress: 2,
       serial: 'MOCK-USB-0001',
       name: DEVICE_NAME,
-      manufacturerName: 'Mock',
-      productName: 'Virtual PTP Camera',
+      manufacturerName: MockPtpDevice.mockManufacturer(),
+      productName: MockPtpDevice.mockProductName(),
       version: '1.0',
       vendorId: 0x1209,
       productId: 0x0001,
@@ -221,8 +241,8 @@ export class MockPtpDevice {
 
   static deviceInfo(): DeviceInfo {
     const info: DeviceInfo = {
-      manufacturer: 'Mock',
-      model: 'Virtual PTP Camera',
+      manufacturer: MockPtpDevice.mockManufacturer(),
+      model: MockPtpDevice.mockProductName(),
       deviceVersion: '1.0',
       serialNumber: 'MOCK-0001',
       vendorExtensionID: 6

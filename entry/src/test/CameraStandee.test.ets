@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@ohos/hypium';
-import { cameraStandeeAspect, cameraStandeeKey, cameraStandeeLabel } from '../main/ets/utils/CameraStandee';
+import { cameraStandeeAspect, cameraStandeeKey, cameraStandeeKeys, cameraStandeeLabel } from '../main/ets/utils/CameraStandee';
 
 /**
  * 立牌型号匹配。
@@ -64,6 +64,21 @@ export default function cameraStandeeTest() {
      * 所以这张表必须覆盖所有带立牌的机型，且**兜底分支要和 `cameraStandeeMedia()`
      * 的兜底是同一个型号**（都是 Z 9），否则未知 key 会拿 Z 9 的图配别人的比例。
      */
+    /**
+     * 调试包「模拟型号」下拉的选项就是 `cameraStandeeLabel(key)`：选完把型号名
+     * 交给虚拟相机上报，`cameraStandeeKey()` 必须能认回同一个 key，否则选中
+     * Z 9 却不出立牌。这条保证「下拉里的每一项都真的能看到那台机器」。
+     */
+    it('立牌表的每个官方型号名都能认回自己', 0, () => {
+      const keys: string[] = cameraStandeeKeys();
+      expect(keys.length).assertEqual(10);
+      for (const key of keys) {
+        const label = cameraStandeeLabel(key);
+        expect(label !== '').assertTrue();
+        expect(cameraStandeeKey(label)).assertEqual(key);
+      }
+    });
+
     it('每个带立牌的机型都有宽高比，兜底与媒体兜底同为 Z 9', 0, () => {
       const keys: string[] = ['z9', 'z8', 'z7ii', 'z6iii', 'z6ii', 'z5ii', 'z5iic', 'zf', 'z50ii', 'z30'];
       for (const key of keys) {

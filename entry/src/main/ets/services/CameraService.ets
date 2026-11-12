@@ -1987,12 +1987,25 @@ export class CameraService {
    *
    * 断开时两个字段都会被清成 `''`，这里刻意不在那种情况下清 `cameraModel`：
    * 立牌要留着（变暗），否则每次断开页面都要塌一块。
+   *
+   * 但**连着却认不出机型**（Z fc / ZR 这类没有商品图的机器，或调试包选的
+   * 「未知型号」）必须把上一台的立牌清掉：继续摆另一台相机的图和型号名，等于
+   * 告诉用户「连的是那台」，比没有立牌更糟。判断边界是 `raw !== ''`——断开时
+   * raw 为空，走的是上面「保留」那条。
    */
   @Monitor('cameraName', 'bleCameraName')
   onCameraIdentified(): void {
     const raw = this.cameraName !== '' ? this.cameraName : this.bleCameraName;
     const key = cameraStandeeKey(raw);
-    if (key === '' || key === this.cameraModel) return;
+    if (key === '') {
+      if (raw !== '' && this.cameraModel !== '') {
+        this.cameraModel = '';
+        CameraModelStore.getInstance().set('');
+        this.log.add(`相机立牌: ${raw} → 认不出机型，清掉立牌`);
+      }
+      return;
+    }
+    if (key === this.cameraModel) return;
     this.cameraModel = key;
     CameraModelStore.getInstance().set(key);
     this.log.add(`相机立牌: ${raw} → ${key}`);

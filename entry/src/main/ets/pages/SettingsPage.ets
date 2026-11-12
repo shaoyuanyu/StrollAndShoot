@@ -6,6 +6,7 @@ import { LanguageStore } from '../model/LanguageStore';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
+import { cameraStandeeKeys, cameraStandeeLabel } from '../utils/CameraStandee';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { L10n } from '../utils/L10n';
@@ -60,6 +61,29 @@ const GPS_MODE_OPTIONS: SelectOption[] = [
  * 内部码保持 0=精确 / 1=日常 / 2=省电，新增 3=出行，避免旧配置文件迁移。
  */
 const GPS_MODE_UI_TO_CODE: number[] = [0, 3, 1, 2];
+
+/**
+ * 调试包「模拟型号」下拉的取值，与 `MOCK_MODEL_OPTIONS` 一一对应。
+ *
+ * 第一项是空串 = 认不出的机器（上报 `Virtual PTP Camera`）；其余直接取立牌表里的
+ * 官方型号名（`cameraStandeeLabel`），所以每个选项都一定有立牌，选中后接上模拟
+ * 相机就能看到那台机器的效果，也不会因为手写型号拼写不一致而落到「认不出」。
+ */
+const MOCK_MODEL_VALUES: string[] = (() => {
+  const values: string[] = [''];
+  for (const key of cameraStandeeKeys()) {
+    values.push(cameraStandeeLabel(key));
+  }
+  return values;
+})();
+
+const MOCK_MODEL_OPTIONS: SelectOption[] = (() => {
+  const options: SelectOption[] = [{ value: $r('app.string.settings_mock_model_unknown') }];
+  for (const key of cameraStandeeKeys()) {
+    options.push({ value: cameraStandeeLabel(key) });
+  }
+  return options;
+})();
 
 /** 日志条数：按行数选复数，与「清除 / 复制」按钮同一行。 */
 function logCountText(logText: string): string {
@@ -261,6 +285,21 @@ export struct SettingsPage {
     // 只切换"虚拟相机是否存在"，不直接灌数据：用户仍需在相机页点「搜索相机」，
     // 之后走的是与真机完全相同的连接与扫描流程。
     this.settings.mockCameraEnabled = enabled;
+    this.svc.onMockCameraToggled();
+  }
+
+  /** 模拟型号在 MOCK_MODEL_VALUES 里的下标；存的值不认识时回落到「未知型号」。 */
+  private mockModelIndex(): number {
+    const i = MOCK_MODEL_VALUES.indexOf(this.settings.mockCameraModel);
+    return i < 0 ? 0 : i;
+  }
+
+  onMockModelSelect(index: number): void {
+    const model = MOCK_MODEL_VALUES[index];
+    if (model === undefined || model === this.settings.mockCameraModel) return;
+    this.settings.mockCameraModel = model;
+    // 型号是设备身份的一部分（缓存标识也是 厂商_型号_序列号）：断开当前虚拟相机，
+    // 下次「搜索相机」才会按新型号重新握手、重新识别立牌。
     this.svc.onMockCameraToggled();
   }
 
@@ -508,6 +547,20 @@ export struct SettingsPage {
             }
             .width('100%')
 
+            // 型号只在模拟相机打开时才有意义：它决定虚拟相机上报的机型，也就是
+            // 标题里的型号、页首立牌用哪张图。关掉开关就整行收起。
+            if (this.settings.mockCameraEnabled) {
+              Divider().color($r('app.color.divider'))
+              SettingSelectRow({
+                label: $r('app.string.settings_mock_model'),
+                hint: $r('app.string.settings_mock_model_hint'),
+                options: MOCK_MODEL_OPTIONS,
+                selectedIndex: this.mockModelIndex(),
+                last: true,
+                onSelect: (index: number) => { this.onMockModelSelect(index); }
+              })
+            }
+
             Divider().color($r('app.color.divider'))
 
             // 模拟器的 GPU 不支持磨砂玻璃着色器，材质叠加时会画出乱花的多边形；
@@ -593,6 +646,8 @@ export struct SettingsPage {
 @ComponentV2
 struct SettingSelectRow {
   @Param label: ResourceStr = '';
+  /** 标题下的一行说明；空串时不占位，行高仍是 56vp。 */
+  @Param hint: ResourceStr = '';
   @Param options: SelectOption[] = [];
   @Param selectedIndex: number = 0;
   @Param last: boolean = false;
@@ -607,10 +662,22 @@ struct SettingSelectRow {
 
   build() {
     Row() {
-      Text(this.label)
-        .fontSize(FontSize.CardTitle)
-        .fontColor($r('app.color.text_primary'))
-        .layoutWeight(1)
+      Column({ space: 2 }) {
+        Text(this.label)
+          .fontSize(FontSize.CardTitle)
+          .fontColor($r('app.color.text_primary'))
+          .alignSelf(ItemAlign.Start)
+        if (this.hint !== '') {
+          Text(this.hint)
+            .fontSize(FontSize.Caption)
+            .lineHeight(16)
+            .fontColor($r('app.color.text_tertiary'))
+            .alignSelf(ItemAlign.Start)
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .padding({ right: 12 })
       Select(this.options)
         .selected(this.selectedIndex)
         .value(this.selectedLabel())
@@ -632,7 +699,9 @@ struct SettingSelectRow {
         .onSelect((index: number) => { this.onSelect(index); })
     }
     .width('100%')
-    .height(RowHeight.Single)
+    // 用最小高度而不是固定高度：带 hint 的行会自己长高（双行 64vp 左右），
+    // 不带的仍钉在 56vp，和单行设置项的节奏一致。
+    .constraintSize({ minHeight: RowHeight.Single })
     .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
   }
 }

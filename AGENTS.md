@@ -417,6 +417,7 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 `PtpHost.ets` 里 `PtpSession` 与 `MockPtpSession` 共用 `PtpTransport` 接口，`CameraService.session` 声明为该接口，`scanForCamera()` 开头用 `syncSessionMode()` 按调试开关选实现。于是：
 
 - 设置页最底部「调试（仅调试包可见）→ 模拟相机设备」打开开关；
+- 开关下面会出现「模拟型号」下拉（1.48.0）：决定虚拟相机上报的 `manufacturer` / `model`，也就是**标题里的型号与页首立牌用哪张图**。选项由 `cameraStandeeKeys()` + `cameraStandeeLabel()` 生成，所以每一项都必然有立牌；第一项「未知型号」上报 `Virtual PTP Camera`，用来验收「认不出机型、不出立牌、标题退回全局『相机』」的分支。改型号会断开当前会话，回「相机」页再点一次「搜索相机」才生效；
 - 到「相机」页点「搜索相机」，会走 **搜索 → 连接 → 取设备信息 → 首次连接询问是否启用缓存 → 遍历目录 → 取元数据 → 按行取缩略图** 的完整流程；
 - 画廊里看到的是扫描结果，不是直接塞进去的数组；第二次点「快速扫描」会命中磁盘缩略图缓存（`[CACHE_HIT]`）；
 - 预览器里的原图来自 `getObject()` 返回的真实 JPEG。
@@ -425,7 +426,8 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 
 - 是否调试包由 `bundleManager.getBundleInfoForSelfSync(...).appInfo.debug` 判定，release 包里设置项不渲染、`isEnabled()` 恒为 false。
 - 未签名的 HAP 装到模拟器上同样返回 true，所以模拟器上可以正常用。
-- 虚拟相机的身份是 `Mock_Virtual_PTP_Camera_MOCK-0001`，它的缩略图缓存会落到真实缓存目录里，可用于验证缓存与快速扫描。
+- 虚拟相机的身份是 `<厂商>_<型号>_MOCK-0001`（未知型号时是 `Mock_Virtual_PTP_Camera_MOCK-0001`），它的缩略图缓存会落到真实缓存目录里，可用于验证缓存与快速扫描。**切换模拟型号会换一份缓存标识**，各型号互不干扰。
+- 型号存在 `SettingsStore.mockCameraModel`（默认空串 = 未知型号），真实机型名一律取 `cameraStandeeLabel()`，不要手写（手写拼错会落到「认不出」分支）。
 - 开关状态持久化在 `SettingsStore.mockCameraEnabled`。改完开关或重装包后，需要重新到「相机」页点一次「搜索相机」。
 - 验证完记得关掉开关，否则会与真实相机状态混淆。
 
