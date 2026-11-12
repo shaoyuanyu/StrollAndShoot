@@ -33,6 +33,13 @@ const STANDEE_HEIGHT = 172;
 const REFLECTION_HEIGHT = 76;
 
 /**
+ * 封面底部的羽化高度（vp）。深色背板靠这一层在底部渐隐到卡片色，
+ * 不能省：省掉就是深色与白卡之间一刀切。取值要盖住倒影区的大半，
+ * 否则倒影还会在硬边上方"被截断"。
+ */
+const COVER_FADE = 96;
+
+/**
  * 相机页。
  *
  * **整页只有一套容器语言**：页面底色上是 24vp 圆角的白卡，卡与卡之间用分组小标题
@@ -745,26 +752,45 @@ export struct CameraPage {
    */
   @Builder
   CameraCover() {
-    Column() {
-      Image(cameraStandeeMedia(this.svc.cameraModel))
-        .width(this.standeeWidth())
-        .height(STANDEE_HEIGHT)
-        .objectFit(ImageFit.Contain)
-        .interpolation(ImageInterpolation.High)
-        .draggable(false)
-        .opacity(this.svc.connected ? 1 : 0.72)
-        .animation({ duration: 260, curve: Curve.EaseOut })
-      this.StandeeReflection()
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column() {
+        Image(cameraStandeeMedia(this.svc.cameraModel))
+          .width(this.standeeWidth())
+          .height(STANDEE_HEIGHT)
+          .objectFit(ImageFit.Contain)
+          .interpolation(ImageInterpolation.High)
+          .draggable(false)
+          .opacity(this.svc.connected ? 1 : 0.72)
+          .animation({ duration: 260, curve: Curve.EaseOut })
+        this.StandeeReflection()
+      }
+      .width('100%')
+      .padding({ top: 14 })
+      .backgroundColor($r('app.color.cover_bg'))
+      .radialGradient({
+        center: ['50%', '44%'],
+        radius: 210,
+        // 外圈用背板底色的透明版，避免径向渐变中段发灰
+        colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.cover_bg_fade'), 1]]
+      })
+
+      // 底边羽化（1.52.1）：深色背板如果一条直线切在倒影中间再接白卡，就是
+      // 「泾渭分明」。这里盖一层从透明到卡片色的渐变，深色在底部自己溶掉——
+      // 倒影正好在这一段里淡出，读起来像产品摄影的无缝背景纸。
+      // 用 `bg_surface_fade → bg_surface` 而不是写死白色：深色模式下两端都是
+      // 卡片色，这一层等于不存在，不需要按主题分支。
+      Column()
+        .width('100%')
+        .height(COVER_FADE)
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [$r('app.color.bg_surface_fade'), 0],
+            [$r('app.color.bg_surface'), 1]
+          ]
+        })
     }
     .width('100%')
-    .padding({ top: 14 })
-    .backgroundColor($r('app.color.cover_bg'))
-    .radialGradient({
-      center: ['50%', '44%'],
-      radius: 210,
-      // 外圈用背板底色的透明版，避免径向渐变中段发灰
-      colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.cover_bg_fade'), 1]]
-    })
   }
 
   /**
