@@ -1091,6 +1091,10 @@ export struct CameraPage {
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
+    // 关掉回弹：滚到头后继续拉，外层内容会被再拉出一截，但卡片的 offset 已经
+    // clamp 在 innerMax 不再跟随，相机会被整体顶出去、顶部间距被压成 0
+    // （现象上就是多出「第四段」）。没有回弹就没有这一段。
+    .edgeEffect(EdgeEffect.None)
     // 外层先滚（两段），滚到底再把手势交给抽屉内部
     .nestedScroll({
       scrollForward: NestedScrollMode.PARENT_FIRST,
