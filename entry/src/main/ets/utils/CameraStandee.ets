@@ -82,6 +82,33 @@ export function cameraStandeeMedia(key: string): Resource {
   }
 }
 
+/**
+ * key → 素材的宽高比（画布像素宽 / 高）。
+ *
+ * 立牌的**盒子必须和素材同一个宽高比**。`Image` 的 `Contain` 是把整张画布居中塞进
+ * 盒子里：盒子比画布「更高」时，上下各会留一条透明带，立牌底边和倒影顶边之间就
+ * 多出两倍透明带 → 肉眼一条白缝。1.46.0 就踩了这条：卡片宽度只有 333.7vp，
+ * 172vp 高对应的宽度是 347vp，画布改按宽度顶满、上下各留 3.3vp。
+ *
+ * 所以盒子的宽由「高度 × 这个比例」算出来（见 `CameraPage.standeeWidth()`），
+ * 不写死。**重新生成 webp 必须同步这张表**，否则缝隙会回来。
+ */
+export function cameraStandeeAspect(key: string): number {
+  switch (key) {
+    case 'z9': return 703 / 429;
+    case 'z8': return 729 / 371;
+    case 'z7ii': return 742 / 363;
+    case 'z6iii': return 753 / 361;
+    case 'z6ii': return 742 / 363;
+    case 'z5ii': return 756 / 365;
+    case 'z5iic': return 743 / 322;
+    case 'zf': return 715 / 354;
+    case 'z50ii': return 722 / 358;
+    case 'z30': return 702 / 284;
+    default: return 703 / 429;
+  }
+}
+
 /** key → 展示用的官方型号名（尼康的写法带空格：Z 50II、Z f）。 */
 export function cameraStandeeLabel(key: string): string {
   switch (key) {

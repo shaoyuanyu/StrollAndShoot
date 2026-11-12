@@ -5,7 +5,7 @@ import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
-import { cameraStandeeMedia } from '../utils/CameraStandee';
+import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { WindowUtils } from '../utils/WindowUtils';
 /**
  * 四选一的四项。图标是「视觉语言」：文字要逐字读，图标扫一眼就知道是哪种链路
@@ -18,7 +18,10 @@ const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
   { text: $r('app.string.camera_mode_sta'), symbol: $r('sys.symbol.wifi_router') }
 ]);
 
-/** 立牌统一高度（vp）：各机型宽高比不同，按高度对齐、宽度随比例。 */
+/**
+ * 立牌高度（vp）。宽度不写死，按素材宽高比算（见 `standeeWidth()`）：
+ * 盒子与画布同比例，`Contain` 才不会在上下留透明带，立牌底边和倒影才能严丝合缝。
+ */
 const STANDEE_HEIGHT = 172;
 /** 倒影高度：取机身下半截，再盖一层渐变淡出。 */
 const REFLECTION_HEIGHT = 76;
@@ -700,7 +703,7 @@ export struct CameraPage {
   CameraCover() {
     Column() {
       Image(cameraStandeeMedia(this.svc.cameraModel))
-        .width('100%')
+        .width(this.standeeWidth())
         .height(STANDEE_HEIGHT)
         .objectFit(ImageFit.Contain)
         .interpolation(ImageInterpolation.High)
@@ -717,6 +720,20 @@ export struct CameraPage {
       // 外圈用卡片底色的透明版，避免径向渐变中段发灰
       colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.bg_surface_fade'), 1]]
     })
+  }
+
+  /**
+   * 立牌盒子的宽度（vp）＝高度 × 素材宽高比。
+   *
+   * **不要写 `.width('100%')`**：卡片比素材比例窄时会变成按宽度顶满，`Contain`
+   * 于是把画布缩到 165vp 高、在 172vp 的盒子里上下各留 3.3vp 透明带；倒影盒子
+   * 又是同一张图，顶部再留 3.3vp —— 两条叠起来就是立牌底边和倒影之间那条
+   * 6.6vp 的白缝（1.46.0 用户一眼看出来）。盒子比卡片略宽没关系：多出来的
+   * 只是素材左右两侧的透明边，最大 45vp（Z 30），而素材本身左右各留了
+   * 40–67vp 透明余量，机身不会被裁到。
+   */
+  private standeeWidth(): number {
+    return STANDEE_HEIGHT * cameraStandeeAspect(this.svc.cameraModel);
   }
 
   /** 当前生效的深/浅色（跟随 `setColorMode()` 之后的实际配置）。 */
@@ -751,7 +768,7 @@ export struct CameraPage {
   StandeeReflection() {
     Stack({ alignContent: Alignment.Top }) {
       Image(cameraStandeeMedia(this.svc.cameraModel))
-        .width('100%')
+        .width(this.standeeWidth())
         .height(STANDEE_HEIGHT)
         .objectFit(ImageFit.Contain)
         .interpolation(ImageInterpolation.High)

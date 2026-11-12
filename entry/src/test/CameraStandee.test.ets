@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@ohos/hypium';
-import { cameraStandeeKey, cameraStandeeLabel } from '../main/ets/utils/CameraStandee';
+import { cameraStandeeAspect, cameraStandeeKey, cameraStandeeLabel } from '../main/ets/utils/CameraStandee';
 
 /**
  * 立牌型号匹配。
@@ -56,6 +56,23 @@ export default function cameraStandeeTest() {
       expect(cameraStandeeLabel('z50ii')).assertEqual('Z 50II');
       expect(cameraStandeeLabel('zf')).assertEqual('Z f');
       expect(cameraStandeeLabel('z9')).assertEqual('Z 9');
+    });
+
+    /**
+     * 立牌盒子按「高度 × 宽高比」算宽度（见 `CameraPage.standeeWidth()`），盒子与
+     * 画布比例不一致时，`Contain` 会在上下留透明带，立牌和倒影之间就会露出白缝。
+     * 所以这张表必须覆盖所有带立牌的机型，且**兜底分支要和 `cameraStandeeMedia()`
+     * 的兜底是同一个型号**（都是 Z 9），否则未知 key 会拿 Z 9 的图配别人的比例。
+     */
+    it('每个带立牌的机型都有宽高比，兜底与媒体兜底同为 Z 9', 0, () => {
+      const keys: string[] = ['z9', 'z8', 'z7ii', 'z6iii', 'z6ii', 'z5ii', 'z5iic', 'zf', 'z50ii', 'z30'];
+      for (const key of keys) {
+        const aspect = cameraStandeeAspect(key);
+        expect(aspect > 1.4 && aspect < 2.6).assertTrue();
+      }
+      // 未知 key：媒体兜底给 camera_z9，比例兜底也必须是 Z 9 的 703/429
+      expect(cameraStandeeAspect('unknown')).assertEqual(cameraStandeeAspect('z9'));
+      expect(cameraStandeeAspect('z50ii')).assertEqual(722 / 358);
     });
   });
 }
