@@ -542,7 +542,7 @@ export struct MainScreen {
           .fontFamily(this.titleFontFamily())
           // 相机页标题栏完全透明：滚到相机图上之后反色成白字，否则黑字压在
           // 深色机身上读不出来。0.55 是标题完全落到图片上的位置。
-          .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55
+          .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55 && this.cameraProgress > 0
             ? Color.White
             : $r('app.color.text_primary'))
           .maxLines(1)
@@ -551,7 +551,7 @@ export struct MainScreen {
         if (this.cameraSerialBadge() !== '') {
           Text(this.cameraSerialBadge())
             .fontSize(FontSize.Nano)
-            .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55
+            .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55 && this.cameraProgress > 0
               ? '#CCFFFFFF'
               : $r('app.color.text_tertiary'))
             .padding({ bottom: 5 })

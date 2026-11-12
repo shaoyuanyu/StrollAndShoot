@@ -56,12 +56,14 @@ const DRAWER_MAX_LIFT = REFLECTION_HEIGHT;
 const COVER_ROUND = Radius.Card;
 /** 立牌上沿在卡片内的位置（相机区上内边距）。 */
 const COVER_TOP_PAD = 14;
+/** 滚到头时立牌上沿与屏幕顶之间留的呼吸间距（vp）。 */
+const COVER_TOP_GAP = 12;
 /**
  * 「立牌刚好顶到屏幕顶」需要滚过的距离：页面顶部内边距 + 立牌上沿。
  * 滚到这里时相机完整可见、上沿贴着屏幕顶，再往下就没有内容可滚了。
  */
 function stickScrollVp(): number {
-  return titleBarTotalVp() + 8 + COVER_TOP_PAD;
+  return titleBarTotalVp() + 8 + COVER_TOP_PAD - COVER_TOP_GAP;
 }
 
 /**
@@ -672,7 +674,7 @@ export struct CameraPage {
     // 可滚总量 = 立牌顶到屏幕顶所需的距离。抽屉的 48vp 位移在滚到头之前
     // 就已完成（见 onScroll），所以不再额外加 DRAWER_MAX_LIFT——否则滚到底时
     // 相机会被推出屏幕。卡片 = 一屏 + 立牌上沿，正好滚这么多。
-    return screenVp + COVER_TOP_PAD;
+    return screenVp + COVER_TOP_PAD - COVER_TOP_GAP;
   }
 
   /**
@@ -764,7 +766,7 @@ export struct CameraPage {
 
         // TEMP: 第三段验证用的假内容，确认后删除
         Column({ space: 8 }) {
-          ForEach([0, 1, 2, 3, 4, 5], (i: number) => {
+          ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], (i: number) => {
             Row() {
               Text(`占位内容 ${i + 1}`)
                 .fontSize(FontSize.Caption)
@@ -803,7 +805,9 @@ export struct CameraPage {
       // 底部多留 DRAWER_MAX_LIFT：卡片高度按「抽屉已经拉到底」算，
       // 静止时这段缓冲正好被卡片裁掉，上移后才会露出来。
       .padding({ left: 16, right: 16, top: 16, bottom: 16 + DRAWER_MAX_LIFT })
-      .layoutWeight(1)
+      // 用最小高度而不是 layoutWeight：内容少时铺满一屏，内容多时由内容自己
+      // 撑高卡片，页面才能继续滚（第三段）。
+      .constraintSize({ minHeight: this.drawerMinHeight() - COVER_HEIGHT })
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
@@ -1071,8 +1075,14 @@ export struct CameraPage {
         this.drawerLift = lift;
       }
       // 标题反色进度：滚到立牌顶到屏幕顶时走满
-      const progress = Math.max(0, Math.min(1, y / stickScrollVp()));
-      if (Math.abs(progress - this.scrollState.cameraProgress) > 0.02) {
+      // 0~1 = 相机还在屏幕上（标题压在图上升级为白）；-1 = 已经滚过相机、
+      // 背景变成白色内容区，标题要退回黑字。
+      // 滚过立牌顶之后相机还会在屏幕上停留一段（相机区 206vp），
+      // 这 150vp 内标题仍然压在图上升级为白，再往下相机滚走才退回黑字。
+      const progress = y <= stickScrollVp() + 150
+        ? Math.max(0, Math.min(1, y / stickScrollVp()))
+        : -1;
+      if (Math.abs(progress - this.scrollState.cameraProgress) > 0.002) {
         this.scrollState.cameraProgress = progress;
         this.onScrollProgress(progress);
       }
