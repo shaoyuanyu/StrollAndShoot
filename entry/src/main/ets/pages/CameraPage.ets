@@ -42,10 +42,24 @@ const COVER_FADE = 76;
 
 /**
  * 相机区总高（vp）：上内边距 + 立牌 + 倒影。抽屉从这一条线开始。
- * 抽屉最多上拉到「倒影完全被盖住」，也就是 `DRAWER_MAX_LIFT`。
  */
 const COVER_HEIGHT = 14 + STANDEE_HEIGHT + REFLECTION_HEIGHT;
-const DRAWER_MAX_LIFT = REFLECTION_HEIGHT;
+
+/**
+ * 贴顶（第三段）时，立牌底边与抽屉顶边之间保留的深色边距（vp）。
+ *
+ * 上下都没有空间之后，机身直接顶在白面边上会显得「被按住」；留一小条深色，
+ * 立牌才像落在台面上。这一段原本是「被抽屉盖住的倒影」，现在改成**抽屉只上拉到
+ * 机身底边下方 `COVER_BOTTOM_GAP`**，剩下的倒影由 `reflectionOpacity()` 在第二段
+ * 里淡到 0——所以贴顶时既没有倒影、又不贴边。
+ */
+const COVER_BOTTOM_GAP = 4;
+
+/**
+ * 抽屉在第二段最多上拉多少 vp：刚好把机身下方的倒影收掉，**少走
+ * `COVER_BOTTOM_GAP`**，给机身留一条深色边距。
+ */
+const DRAWER_MAX_LIFT = REFLECTION_HEIGHT - COVER_BOTTOM_GAP;
 /**
  * 相机区底色要比内容区多铺一个圆角高度。
  *
@@ -134,18 +148,26 @@ const STANDEE_SHADOW_WIDTH_RATIO = 0.72;
 /** 深色面板底部落在抽屉上的投影高度（vp），跟着抽屉顶边走。 */
 const PANEL_SHADOW_HEIGHT = 24;
 /**
- * 相机卡的左右页边距（vp，1.62.2）。
+ * 白色抽屉**静止时**的左右外边距（vp）。
  *
- * **故意比标题栏的 16 小 8vp**：上滑到第二、三段时标题与「搜索相机」都压在卡上，
- * 卡片边距和标题栏内边距相等的话，卡片左边线会和标题文字的左边缘连成一条竖线、
- * 右边线正好切在胶囊按钮边上，看着像对齐失误而不是设计。卡片外扩之后标题在卡面上
- * 有 8vp 的呼吸位；同时抽屉内容区左右各多 8vp。（1.62.1 先试过 12，用户仍觉得
- * 拉开的距离不够。）
+ * 演变：16（与标题栏内边距相同，上滑后卡片边线和标题文字左边缘连成一条竖线，
+ * 用户反馈"严丝合缝"）→ 12 → 8 → 0（通栏，用户觉得"完全贴上不太好看"）→ **4**：
+ * 几乎通栏，但两侧仍留一线页面底色，抽屉顶边的 24 圆角因此能落下来、边界看得见。
  *
- * 卡片内部（抽屉）仍用 16 的内边距 —— 那是卡片内容的标准内缩，跟着页边距一起缩
- * 会让文字贴到圆角边上。
+ * 第二段里它和立牌面板**一起收到 0**（`sheetSideMargin()`）：两者按同一个
+ * `1 − 进度` 收，抽屉面永远不小于面板，面板下半截始终被抽屉盖住——只要有任何一个
+ * 时刻面板比抽屉宽，面板的深色就会从抽屉边缝里漏出来（试过用补缝条去盖，
+ * 补缝条和抽屉白面的接缝会露出 1~2px 的深色竖线，比漏色还显眼）。
  */
-const CARD_SIDE_MARGIN = 8;
+const CARD_SIDE_MARGIN = 4;
+/**
+ * 立牌面板的左右缩进（vp）：**抽屉通栏、面板缩进**，两者不再同宽。
+ *
+ * 面板是一张独立的卡（24 圆角 + 投影 + 裁剪），抽屉是通栏的白面；面板缩进
+ * 8vp 让它在抽屉上方「浮着」，抽屉顶边的圆角弧压在它下沿上。改这一个数就能
+ * 把面板收窄/放宽，抽屉不受影响。
+ */
+const PANEL_SIDE_MARGIN = 8;
 
 /**
  * 相机页。
@@ -214,6 +236,8 @@ export struct CameraPage {
   @Local scrollOver: number = 0;
   /** 抽屉内容的自然高度（在内层 Scroll 里测，不受父级高度约束）。 */
   @Local drawerContentH: number = 0;
+  /** `panelGrowScale()` 的缓存（窗口宽度不变，算一次即可，别在滚动帧里反复换算）。 */
+  private panelGrowScaleValue: number = 0;
   /**
    * 顶边下拉量（0..TOP_PULL_MAX）：倒影被拉长多少、抽屉就下移多少。
    *
@@ -779,6 +803,49 @@ export struct CameraPage {
     return this.cardHeight() - COVER_HEIGHT + DRAWER_MAX_LIFT;
   }
 
+  /**
+   * 第二段的进度（0..1）：`drawerLift` 从 0 走到 `DRAWER_MAX_LIFT` 的那 42vp。
+   *
+   * 只有这一段（相机已经贴住屏幕顶、抽屉还在往上收）才让立牌面板横过来撑满、
+   * 倒影淡出、白面收到通栏；第一段（整页上移）与下拉回弹都不动这些。
+   */
+  private stage2Progress(): number {
+    return Math.max(0, Math.min(1, this.drawerLift / DRAWER_MAX_LIFT));
+  }
+
+  /**
+   * 面板横向撑满所需的缩放比 = 屏幕宽 /（屏幕宽 − 2×`PANEL_SIDE_MARGIN`）。
+   *
+   * 365.7vp 的机器上 = 365.7 / 349.7 ≈ 1.046。面板宽 349.7 乘它正好 365.7，
+   * 两侧的 8vp 缝隙刚好补平；素材、径向光、倒影都是面板的子节点，一起等比
+   * 放大 4.6%——变宽后多出来的留白被相机自己吃掉，看起来是「相机走近了一点」
+   * 而不是「画框变宽了」。
+   */
+  private panelGrowScale(): number {
+    if (this.panelGrowScaleValue > 0) return this.panelGrowScaleValue;
+    const w = WindowUtils.windowWidthPx > 0
+      ? this.getUIContext().px2vp(WindowUtils.windowWidthPx) : 0;
+    if (w > 2 * PANEL_SIDE_MARGIN) {
+      this.panelGrowScaleValue = w / (w - 2 * PANEL_SIDE_MARGIN);
+    }
+    return this.panelGrowScaleValue > 0 ? this.panelGrowScaleValue : 1;
+  }
+
+  /** 当前缩放：静止 1，第二段结束时 `panelGrowScale()`。 */
+  private panelScale(): number {
+    return 1 + (this.panelGrowScale() - 1) * this.stage2Progress();
+  }
+
+  /**
+   * 白面当前的左右外边距：静止 `CARD_SIDE_MARGIN`，第二段结束时 0（通栏）。
+   *
+   * 与面板的缩放**按同一个进度**收，所以抽屉面永远不小于面板：面板下半截被它
+   * 完整盖住，不会从边缝里漏出深色；两者同时到 0，贴顶那一帧整个画面左右齐边。
+   */
+  private sheetSideMargin(): number {
+    return CARD_SIDE_MARGIN * (1 - this.stage2Progress());
+  }
+
   /** 抽屉里真正能看见内容的高度（扣掉上下 16 的内边距）。 */
   private visibleContentH(): number {
     return this.drawerBoxHeight() - 32;
@@ -817,193 +884,224 @@ export struct CameraPage {
    * `标题栏 + 8 - stick`，相机于是钉在屏幕顶部、上方只留 `COVER_TOP_GAP`。
    */
   private cardContentY(): number {
-    // 顶边下拉时整张卡再往下走一小段（`cardPullShift`），卡面因此也有回弹
+    // 顶边下拉时面板再往下走一小段（`cardPullShift`），卡面因此也有回弹
     return titleBarTotalVp() + 8 + this.scrollOver + this.cardPullShift();
   }
 
   /**
-   * 相机卡 = 固定的相机区 + 一张**跟随页面滚动**上移的白色抽屉。
+   * 白抽屉在内容坐标系里的 y = 面板顶 + 抽屉顶边在面板坐标系里的位置。
    *
-   * 它不是可拖拽的抽屉组件，没有把手、没有手势：整个页面照常用上下滑动，
-   * 抽屉的相对位移由滚动偏移驱动——滚到 `DRAWER_MAX_LIFT`（= 倒影高度）时
-   * 倒影刚好被完全盖住，机身始终露在外面；继续滚动抽屉就跟着页面一起走。
+   * `cardContentY()` 里已经含了面板自己的 `cardPullShift`，再加 `drawerPullShift`
+   * （= 下拉总量 − 面板已走的那段）和 −`drawerLift`（第二段整体上收），抽屉的
+   * 屏幕位移就是 `pullDown` 走满、面板只走 `CARD_PULL_RATIO`。
+   */
+  private sheetContentY(): number {
+    return this.cardContentY() + COVER_HEIGHT + this.drawerPullShift() - this.drawerLift;
+  }
+
+  /**
+   * 立牌面板（1.62.3）：深色底 + 径向光 + 立牌 + 倒影，**左右各缩进
+   * `PANEL_SIDE_MARGIN`**，自己带 24 圆角、投影与裁剪——它是一张独立的卡，
+   * 不再是「整张卡的上半截」。
    *
-   * 抽屉里装的是**整页的全部内容**（1.57.0）：状态、配对、模式控件、连接步骤、
-   * 设备信息、操作。1.56 之前设备信息与操作在卡片下方，但卡片本身就有一屏多高，
-   * 它们永远落在屏幕外、根本滚不到；并进抽屉后第三段才是真内容，而不是占位条。
-   *
-   * 卡片位置由 `position` 决定（见 build），这里只管「卡里长什么样」：抽屉在
-   * 文档流里排在相机区下面，位移只走 `offset`（不参与布局），所以卡片高度恒定、
-   * 滚动时不会重排；抽屉高度多算 `DRAWER_MAX_LIFT`，静止时多出来的一截被卡片
-   * 裁掉、上移后才露出来，内容不会被切。
+   * 高度比静止时的可见范围多铺两段，两段都藏在白色抽屉后面：
+   * - `REFLECTION_GROW_MAX`（96）：顶边下拉时抽屉往下滑，这一段露出来是倒影；
+   * - `COVER_ROUND`（24）：抽屉顶边的圆角弧里要透出深色，而且下拉到底时抽屉
+   *   顶边正好落在 `COVER_HEIGHT + 96`，圆角弧仍然压在面板上。
    */
   @Builder
-  CameraDrawer() {
-    Stack({ alignContent: Alignment.Top }) {
-      // 深色垫层：比相机区多铺一个圆角高度，抽屉顶部的圆角弧里才是深色。
-      // 用独立垫层而不是给相机区加 padding + 负 margin —— 负 margin 在
-      // Column 里不会把布局收回去，抽屉会整体下移，圆角又落到白底上。
-      Column()
-        .width('100%')
-        // 卡内抽屉最多打开 `REFLECTION_GROW_MAX`，圆角比它再多一个
-        .height(COVER_HEIGHT + REFLECTION_GROW_MAX + COVER_ROUND)
-        .backgroundColor($r('app.color.cover_bg'))
+  CameraPanel() {
+    // 外层只负责「缩进」：`.width('100%')` 加水平 padding，面板本体才拿到
+    // 屏幕宽 − 2×PANEL_SIDE_MARGIN。直接在面板上写 margin 不会缩窄 100% 宽度。
+    Column() {
+      Column() {
+        this.CameraCover()
+      }
+      .width('100%')
+      .height(COVER_HEIGHT + REFLECTION_GROW_MAX + COVER_ROUND)
+      .backgroundColor($r('app.color.cover_bg'))
+      .borderRadius(Radius.Card)
+      .shadow(HeroCardShadow)
+      .clip(true)
+    }
+    .width('100%')
+    .padding({ left: PANEL_SIDE_MARGIN, right: PANEL_SIDE_MARGIN })
+    // 第二段里横向撑满：绕「机身底边」（面板内 158vp 处）缩放，底边因此不动，
+    // 相机只往上长——抽屉顶边正好压在这条线上，接缝不会错开。
+    // `scale` 是渲染属性，滚动时不触发重排。
+    .scale({
+      x: this.panelScale(),
+      y: this.panelScale(),
+      centerX: '50%',
+      centerY: COVER_TOP_PAD + STANDEE_HEIGHT
+    })
+  }
+
+  /**
+   * 白色抽屉：顶部 24 圆角，装整页的全部内容。
+   *
+   * 它与立牌面板是**两个独立的层**，各自 `position` 到内容坐标系里：
+   * - 面板在 `cardContentY()`，顶边下拉时只走 `CARD_PULL_RATIO`；
+   * - 抽屉在 `sheetContentY()`（= 面板顶 + `COVER_HEIGHT` + 卡内打开量 − 第二段
+   *   上收量），下拉时走满整段行程，把面板多铺的倒影露出来。
+   *
+   * **白面和内容是两层**（1.62.1 起）：白面的左右边距跟着第二段收到 0
+   * （`sheetSideMargin()`），内容的内边距却是常数 `16 + CARD_SIDE_MARGIN`。
+   * 合在一层会因为「白面每帧改宽度」把文字排版和自然高度测量一起重算。
+   *
+   * 页面仍然只有一条手势链路：内层这层 Scroll **不接收触摸**，只用来量内容的
+   * 自然高度（Scroll 不约束子元素高度）并把内容裁在抽屉范围内。
+   */
+  @Builder
+  CameraSheet() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // 白面：单独一层，只在左右收边（静止 4vp → 第二段末 0），其余不变
+      Column() {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor($r('app.color.bg_surface'))
+          .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
+      }
+      .width('100%')
+      .height(this.drawerBoxHeight())
+      .padding({ left: this.sheetSideMargin(), right: this.sheetSideMargin() })
 
       Column() {
-      this.CameraCover()
+      Scroll() {
+        Column({ space: 12 }) {
+      this.StatusHeader()
 
-      Column() {
-        Scroll() {
-          Column({ space: 12 }) {
-        this.StatusHeader()
+      // 配对核对要用户当场读一串数字再确认，放在状态头底下，第一屏就能看到
+      if (this.svc.pairingRequired) {
+        this.PairingCard()
+      }
 
-        // 配对核对要用户当场读一串数字再确认，放在状态头底下，第一屏就能看到
-        if (this.svc.pairingRequired) {
-          this.PairingCard()
-        }
-
-        if (this.svc.scanTotal > 0) {
-          Column({ space: 6 }) {
-            Progress({
-              value: this.svc.scanProgress,
-              total: this.svc.scanTotal,
-              type: ProgressType.Linear
-            })
-              .width('100%').height(3)
-              .color($r('app.color.primary'))
-              .backgroundColor($r('app.color.divider'))
-            Row() {
-              Text(this.svc.scanPhaseText || $r('app.string.camera_scanning_fallback'))
-                .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
-              Blank()
-              Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
-                .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
-            }
-            .width('100%')
+      if (this.svc.scanTotal > 0) {
+        Column({ space: 6 }) {
+          Progress({
+            value: this.svc.scanProgress,
+            total: this.svc.scanTotal,
+            type: ProgressType.Linear
+          })
+            .width('100%').height(3)
+            .color($r('app.color.primary'))
+            .backgroundColor($r('app.color.divider'))
+          Row() {
+            Text(this.svc.scanPhaseText || $r('app.string.camera_scanning_fallback'))
+              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
+            Blank()
+            Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
+              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
           }
           .width('100%')
         }
-
-        if (this.svc.scanStatsText !== '' && !(this.svc.connected && this.svc.photoCount > 0)) {
-          Text(this.svc.scanStatsText)
-            .fontSize(FontSize.Caption)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
-
-        if (this.svc.lastScanError !== '') {
-          Text(this.svc.lastScanError)
-            .fontSize(FontSize.Caption)
-            .lineHeight(18)
-            .fontColor($r('app.color.status_error'))
-            .width('100%')
-        }
-
-        Divider().color($r('app.color.divider'))
-
-        // 选择器 + 当前模式的一句话：切完立刻能读到这一句变了，才是切换的反馈。
-        Column({ space: 8 }) {
-          this.ModePicker()
-          Text(this.modeDesc())
-            .fontSize(FontSize.Caption)
-            .lineHeight(18)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%')
-        }
         .width('100%')
-        .alignItems(HorizontalAlign.Start)
+      }
 
-        this.ModeControls()
+      if (this.svc.scanStatsText !== '' && !(this.svc.connected && this.svc.photoCount > 0)) {
+        Text(this.svc.scanStatsText)
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
 
-        Divider().color($r('app.color.divider'))
+      if (this.svc.lastScanError !== '') {
+        Text(this.svc.lastScanError)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
 
-        // 连接步骤：并入抽屉后不再单独成卡
-        Column({ space: 10 }) {
-          Text($r('app.string.camera_guide_title'))
-            .fontSize(FontSize.Caption)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-          this.StepRow(0)
-          this.StepRow(1)
-          this.StepRow(2)
-          if (this.guideNote() !== '') {
-            Text(this.guideNote())
-              .fontSize(FontSize.Micro)
-              .lineHeight(16)
-              .fontColor($r('app.color.text_tertiary'))
-              .width('100%')
-          }
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
+      Divider().color($r('app.color.divider'))
 
-        // TEMP: 第三段滚动验收用的假内容。搜索「TEMP」可以整块删掉。
-        // 18 行 × 56vp ≈ 1008vp，未连接时也够把第三段撑出来。
-        this.TempTestRows()
-
-        // 设备信息 / 操作：抽屉本身就是一张卡，这里是平铺的行 + 小标题，
-        // 不再套一层卡片（白卡压在白抽屉上只剩一道阴影，看不出层次）。
-        if (this.svc.connected) {
-          Divider().color($r('app.color.divider'))
-          this.GroupTitle($r('app.string.camera_group_device'))
-          this.DeviceRows()
-          this.GroupTitle($r('app.string.camera_group_actions'))
-          this.ActionRows()
-        }
-
-        // 末尾留白：底部页签是**浮在内容上**的，滚到底时最后一行会被胶囊压住。
-        // 88 + 抽屉自身 16 的内边距 = 画廊列表末尾那 104vp，两页同一套留白。
-        Row().width('100%').height(88)
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .offset({ y: -this.innerOffset })
-        .onAreaChange((_o: Area, now: Area) => {
-          const h = Number(now.height);
-          if (Math.abs(h - this.drawerContentH) > 0.5) {
-            this.drawerContentH = h;
-            // 内容高度变了，可滚范围随之变化，按新范围重算（并夹住旧偏移）
-            this.syncFromScroll(true);
-          }
-        })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .scrollBar(BarState.Off)
-        // 内容比可视高度矮时必须靠顶：Scroll 默认把矮内容**居中**，
-        // 未连接时内容只有 235vp，会在抽屉顶上留出一大片空白。
-        .align(Alignment.Top)
-        // 这一层不滚：只用来让内容拿到「自然高度」（Scroll 不约束子元素高度，
-        // 直接塞进固定高度的抽屉里会被压扁、测不到真实内容高度），
-        // 以及把内容裁在抽屉范围内。
-        .enableScrollInteraction(false)
+      // 选择器 + 当前模式的一句话：切完立刻能读到这一句变了，才是切换的反馈。
+      Column({ space: 8 }) {
+        this.ModePicker()
+        Text(this.modeDesc())
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-      // 抽屉盒子定高（含第二段要上移的 48vp）：可视高度恒定，第三段总量才算得准
-      .height(this.drawerBoxHeight())
       .alignItems(HorizontalAlign.Start)
-      .backgroundColor($r('app.color.bg_surface'))
-      .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
-      // 一个位移搞定三件事：抵消倒影的预留段（静止时抽屉仍在 COVER_HEIGHT 处）、
-      // 顶边下拉（`pullDown` 让抽屉往下滑、露出更多倒影）、第二段 lift（向上）。
-      // 全是渲染属性，下拉期间不触发重排。
-      .offset({ y: this.drawerPullShift() - REFLECTION_GROW_MAX - this.drawerLift })
+
+      this.ModeControls()
+
+      Divider().color($r('app.color.divider'))
+
+      // 连接步骤：并入抽屉后不再单独成卡
+      Column({ space: 10 }) {
+        Text($r('app.string.camera_guide_title'))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+        this.StepRow(0)
+        this.StepRow(1)
+        this.StepRow(2)
+        if (this.guideNote() !== '') {
+          Text(this.guideNote())
+            .fontSize(FontSize.Micro)
+            .lineHeight(16)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
       }
       .width('100%')
-      // 明确定高：相机区 + 抽屉盒子。它比卡片高 `DRAWER_MAX_LIFT`，多出来
-      // 的一截由卡片裁掉——不能靠 Column 自己收缩，否则抽屉会被压扁。
-      .height(COVER_HEIGHT + REFLECTION_GROW_MAX + this.drawerBoxHeight())
+      .alignItems(HorizontalAlign.Start)
+
+      // TEMP: 第三段滚动验收用的假内容。搜索「TEMP」可以整块删掉。
+      // 18 行 × 56vp ≈ 1008vp，未连接时也够把第三段撑出来。
+      this.TempTestRows()
+
+      // 设备信息 / 操作：抽屉本身就是一张卡，这里是平铺的行 + 小标题，
+      // 不再套一层卡片（白卡压在白抽屉上只剩一道阴影，看不出层次）。
+      if (this.svc.connected) {
+        Divider().color($r('app.color.divider'))
+        this.GroupTitle($r('app.string.camera_group_device'))
+        this.DeviceRows()
+        this.GroupTitle($r('app.string.camera_group_actions'))
+        this.ActionRows()
+      }
+
+      // 末尾留白：底部页签是**浮在内容上**的，滚到底时最后一行会被胶囊压住。
+      // 88 + 抽屉自身 16 的内边距 = 画廊列表末尾那 104vp，两页同一套留白。
+      Row().width('100%').height(88)
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .offset({ y: -this.innerOffset })
+      .onAreaChange((_o: Area, now: Area) => {
+        const h = Number(now.height);
+        if (Math.abs(h - this.drawerContentH) > 0.5) {
+          this.drawerContentH = h;
+          // 内容高度变了，可滚范围随之变化，按新范围重算（并夹住旧偏移）
+          this.syncFromScroll(true);
+        }
+      })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      // 内容比可视高度矮时必须靠顶：Scroll 默认把矮内容**居中**，
+      // 未连接时内容只有 235vp，会在抽屉顶上留出一大片空白。
+      .align(Alignment.Top)
+      // 这一层不滚：只用来让内容拿到「自然高度」（Scroll 不约束子元素高度，
+      // 直接塞进固定高度的抽屉里会被压扁、测不到真实内容高度），
+      // 以及把内容裁在抽屉范围内。
+      .enableScrollInteraction(false)
     }
     .width('100%')
-    .height(this.cardHeight())
-    // 卡片的屏幕位置由 build 里的 position 施加，这里不再叠 offset
-    // 卡片底是白的：抽屉上移后底部露出的 48vp 与抽屉同色。
-    // 抽屉顶部圆角需要的深色由相机区自己多铺一个圆角来提供（见 COVER_ROUND）。
-    .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(Radius.Card)
-    .shadow(HeroCardShadow)
-    .clip(true)
+    .height(this.drawerBoxHeight())
+    // 内容左右内边距 = 16 + 静止边距：白面收边到 0 之后，内容与屏幕边的距离不变
+    .padding({ left: 16 + CARD_SIDE_MARGIN, right: 16 + CARD_SIDE_MARGIN, top: 16, bottom: 16 })
+    .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    // 抽屉盒子定高（含第二段要上移的 48vp）：可视高度恒定，第三段总量才算得准
+    .height(this.drawerBoxHeight())
   }
 
   /**
@@ -1065,7 +1163,7 @@ export struct CameraPage {
         .hitTestBehavior(HitTestMode.None)
 
       // 顶边受光：最上沿 2vp 白光。深色面板是「一块面」，加了这条边才是「一块板」：
-      // 光从上方来，边缘先吃到光。画在内容之上，由卡片的 `clip` 收进 24vp 圆角。
+      // 光从上方来，边缘先吃到光。画在内容之上，由面板自己的 `clip` 收进 24vp 圆角。
       Column()
         .width('100%')
         .height(COVER_RIM_HEIGHT)
@@ -1138,8 +1236,10 @@ export struct CameraPage {
   }
 
   private reflectionOpacity(): number {
-    const base = 0.7;
-    return this.svc.connected ? base : base * 0.7;
+    const base = this.svc.connected ? 0.7 : 0.7 * 0.7;
+    // 第二段里跟着抽屉一起淡出：贴顶时抽屉只走到机身底边下方 `COVER_BOTTOM_GAP`，
+    // 剩下那一小段倒影不再靠抽屉盖，必须自己淡到 0，否则机身下面会露出一小片镜像。
+    return base * (1 - this.stage2Progress());
   }
 
   /**
@@ -1333,15 +1433,23 @@ export struct CameraPage {
           .height(this.contentHeight())
           .hitTestBehavior(HitTestMode.None)
 
-        // 相机卡：用 position 钉在内容坐标系里（页面滚多少，它就相对内容
-        // 往下放多少，屏幕位置因此不变）。它仍在 Scroll 内部，所以整页
-        // 只有一个手势链路——手指按在立牌、抽屉、任何地方，都是同一个滚动。
+        // 立牌面板：缩进 `PANEL_SIDE_MARGIN`，自己的圆角、投影与裁剪。
+        // 用 position 钉在内容坐标系里（页面滚多少，它就相对内容往下放多少，
+        // 屏幕位置因此不变）；仍在 Scroll 内部，所以整页只有一个手势链路。
         Column() {
-          this.CameraDrawer()
+          this.CameraPanel()
         }
         .width('100%')
-        .padding({ left: CARD_SIDE_MARGIN, right: CARD_SIDE_MARGIN })
         .position({ x: 0, y: this.cardContentY() })
+
+        // 白抽屉：画在面板之后，所以压住面板多铺出来的倒影段。与面板共用同一条
+        // 滚动偏移，只是多算了下拉打开量与第二段的上收量。
+        // 抽屉自身通栏（白面按 `sheetSideMargin()` 收边），这一层不再加左右边距。
+        Column() {
+          this.CameraSheet()
+        }
+        .width('100%')
+        .position({ x: 0, y: this.sheetContentY() })
       }
       .width('100%')
       .height(this.contentHeight())
