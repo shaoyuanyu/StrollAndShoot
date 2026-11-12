@@ -3,7 +3,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { WindowUtils } from '../utils/WindowUtils';
 import { L10n } from '../utils/L10n';
-import { saveWindowSnapshot } from '../utils/WindowShot';
+import { saveWindowSnapshot, saveWindowSnapshotBurst } from '../utils/WindowShot';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
@@ -34,6 +34,17 @@ export default class EntryAbility extends UIAbility {
     const label = String(shot).replace(/[^a-zA-Z0-9_-]/g, '');
     // 稍等一帧，避免把前后台切换的中间态截进去
     setTimeout(() => {
+      if (label.startsWith('burst')) {
+        // 临时调试：连拍，用来抓一帧级的合成残影（见 WindowShot.saveWindowSnapshotBurst）
+        saveWindowSnapshotBurst(this.context, 60)
+          .then((n: number) => {
+            hilog.info(DOMAIN, TAG, 'burst done: %{public}d', n);
+          })
+          .catch((err: Error) => {
+            hilog.error(DOMAIN, TAG, 'burst failed: %{public}s', JSON.stringify(err));
+          });
+        return;
+      }
       saveWindowSnapshot(this.context, label === '' ? 'window' : label)
         .then((path: string) => {
           hilog.info(DOMAIN, TAG, 'window snapshot: %{public}s', path);

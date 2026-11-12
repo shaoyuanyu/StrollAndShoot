@@ -39,3 +39,47 @@ export async function saveWindowSnapshot(ctx: common.UIAbilityContext, label: st
     packer.release();
   }
 }
+
+/**
+ * 连续截取本应用窗口（**临时调试工具**，2026-11-12 用于抓一帧级重影/闪烁）。
+ *
+ * 为什么不用 `snapshot_display`：它一次约 0.3s（约 3fps），而这里要抓的是
+ * 持续几帧的合成残影。窗口快照 + JPEG 编码能到 5~10fps，命中率高一档，
+ * 而且不带系统浮层。
+ *
+ * ```bash
+ * hdc shell aa start -a EntryAbility -b <bundle> --ps burst
+ * ```
+ * 产物 `burst_<序号>_<起始毫秒>.jpg` 落在应用沙箱 filesDir 下。
+ * 文件名里的毫秒数就是每一帧的起始时间，用来算帧间隔。
+ */
+export async function saveWindowSnapshotBurst(ctx: common.UIAbilityContext,
+  count: number = 60): Promise<number> {
+  const win = WindowUtils.window;
+  if (!win) {
+    throw new Error('main window is not ready');
+  }
+  const packer = image.createImagePacker();
+  let saved = 0;
+  try {
+    for (let i = 0; i < count; i++) {
+      const t0 = Date.now();
+      const pixelMap = await win.snapshot();
+      try {
+        const buf = await packer.packing(pixelMap, { format: 'image/jpeg', quality: 70 });
+        const path = `${ctx.filesDir}/burst_${i}_${t0}.jpg`;
+        const file = fileIo.openSync(path,
+          fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+        fileIo.writeSync(file.fd, buf);
+        fileIo.closeSync(file);
+        saved++;
+      } finally {
+        await pixelMap.release();
+      }
+    }
+  } finally {
+    packer.release();
+  }
+  hilog.info(DOMAIN, TAG, 'burst saved %{public}d frames', saved);
+  return saved;
+}

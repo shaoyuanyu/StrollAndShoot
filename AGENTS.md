@@ -391,6 +391,7 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 - 应用没在运行时 `aa start` 走 `onCreate`，不会回调 `onNewWant` → 不截图（冷启动截到的是启动画面，没意义）
 - 仅 debug 包生效（`MockPtpDevice.isDebugBuild()` 判断），release 包里不执行
 - 截图落在应用沙箱 `filesDir`，命名 `shot_<label>_<时间戳>.jpg`
+- `--ps shot burst` 是**连拍**模式（`WindowShot.saveWindowSnapshotBurst`，60 帧、约 7fps、`burst_<序号>_<起始毫秒>.jpg`），用来抓「持续几帧」的合成残影；同样阅后即焚
 - 只有 `want.parameters.shot` 存在时才触发，正常启动不受影响
 - 图里不含状态栏与系统手势条，判断应用内布局用它、判断沉浸/状态栏效果仍要用整屏截图
 - **阅后即焚（强制规则）**：这些 jpg 没有任何自动清理机制。`file recv` 取回后**必须立刻删除**设备上的文件，取图与删除写进同一条命令，不要分两步、更不要留到“以后清理”：

@@ -7,7 +7,6 @@ import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2 }
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { Haptics } from '../utils/Haptics';
-import { UiScrollState } from '../model/UiScrollState';
 import { WindowUtils } from '../utils/WindowUtils';
 /**
  * 四选一的四项，顺序与 `CameraLinkMode` 的枚举值一一对应。
@@ -32,13 +31,6 @@ const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
 const STANDEE_HEIGHT = 144;
 /** 倒影高度：取机身下半截，再盖一层渐变淡出。 */
 const REFLECTION_HEIGHT = 48;
-
-/**
- * 封面底部的羽化高度（vp）。深色背板靠这一层在底部渐隐到卡片色，
- * 不能省：省掉就是深色与白卡之间一刀切。取值要盖住倒影区的大半，
- * 否则倒影还会在硬边上方"被截断"。
- */
-const COVER_FADE = 76;
 
 /**
  * 相机区总高（vp）：上内边距 + 立牌 + 倒影。抽屉从这一条线开始。
@@ -72,6 +64,18 @@ const COVER_ROUND = Radius.Card;
 const COVER_TOP_PAD = 14;
 /** 滚到头时立牌上沿与屏幕顶之间留的呼吸间距（vp）。 */
 const COVER_TOP_GAP = 12;
+/**
+ * 贴顶（第三段）时屏幕最顶部的深色兜底高度（vp）。
+ *
+ * 相机面板的「钉住」是 JS 补偿出来的（`offset` 里减去滚动偏移），而滚动偏移
+ * 本身是渲染属性。快速上滑时偶尔会有一帧补偿值与实际偏移对不齐，面板被画低
+ * 十几到几十 vp，屏幕最顶部就露出一条页面底色——用户实测就是「顶部一条白色
+ * 闪烁」。贴顶时面板上沿只在屏幕外 2vp，没有任何余量，所以这一层兜底必须
+ * 存在：它不参与任何位移，只在贴顶后垫在滚动内容**后面**、盖住顶部
+ * `TOP_BACKSTOP`，把那一帧的浅色横带压成面板色。正常帧里它整个被面板盖住
+ * （面板上沿在屏幕外），只有面板被画低时才露出来。
+ */
+const TOP_BACKSTOP = 56;
 /**
  * 「立牌刚好顶到屏幕顶」需要滚过的距离：页面顶部内边距 + 立牌上沿。
  * 滚到这里时相机完整可见、上沿贴着屏幕顶，再往下就没有内容可滚了。
@@ -193,7 +197,6 @@ const PANEL_SIDE_MARGIN = 8;
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
-  @Local scrollState: UiScrollState = UiScrollState.getInstance();
   @Param scroller: Scroller = new Scroller();
   @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
@@ -207,8 +210,6 @@ export struct CameraPage {
   @Event onConnectWireless: () => void = () => {};
   /** 切换链路模式（USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA）。 */
   @Event onSelectMode: (mode: number) => void = (_m: number) => {};
-  /** 滚动进度回调（0~1）：标题栏靠它决定何时反色。 */
-  @Event onScrollProgress: (progress: number) => void = (_p: number) => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -228,8 +229,8 @@ export struct CameraPage {
   /**
    * 滚过「立牌到顶」之后又滚了多少 vp，**不 clamp**。
    *
-   * 相机卡的位置只由它决定（见 `cardContentY`）：卡片被 `position` 钉在内容
-   * 坐标系里，页面每上移 1vp 卡片就相对内容下移 1vp，两者相消，相机原地不动。
+   * 两层卡的位置只由它决定（见 `cardContentY`）：它们被 `position` 钉在内容
+   * 坐标系里，页面每上移 1vp 就相对内容下移 1vp，两者相消，相机原地不动。
    * 这里一旦按内容高度截断，多出来的那点滚动就会重新变成「相机被顶上去」，
    * 也就是反复出现的「第四段」。
    */
@@ -245,7 +246,6 @@ export struct CameraPage {
    * 松手后跟着原生弹簧衰减回 0，不需要自己写动画。
    */
   @Local pullDown: number = 0;
-  /** TEMP: 上一次下拉帧的时间戳，用来量帧间隔 */
 
   aboutToAppear(): void {
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
@@ -793,10 +793,10 @@ export struct CameraPage {
   }
 
   /**
-   * 抽屉盒子的高度：从相机区下沿一直到卡片底边，再加 `DRAWER_MAX_LIFT`。
+   * 抽屉盒子的高度：从相机区下沿一直到卡片底边，再加 `DRAWER_MAX_LIFT`（44）。
    *
-   * 那 48vp 是第二段抽屉上移的量：静止时多出来的这一截被卡片裁掉（看不见），
-   * 上移之后正好补满卡片底部。于是抽屉里的**可视高度恒定**，不会因为抽屉
+   * 那 44vp 是第二段抽屉上收的量：静止时多出来的这一截被屏幕裁掉（看不见），
+   * 上收之后正好补满卡片底部。于是抽屉里的**可视高度恒定**，不会因为抽屉
    * 正在上移而一会儿多一会儿少——第三段的可滚总量才算得准。
    */
   private drawerBoxHeight(): number {
@@ -889,14 +889,16 @@ export struct CameraPage {
   }
 
   /**
-   * 白抽屉在内容坐标系里的 y = 面板顶 + 抽屉顶边在面板坐标系里的位置。
+   * 白抽屉在**卡片坐标系**里的 y（1.62.6）：面板在卡片里固定在 0，抽屉只在这里
+   * 相对面板动。
    *
-   * `cardContentY()` 里已经含了面板自己的 `cardPullShift`，再加 `drawerPullShift`
-   * （= 下拉总量 − 面板已走的那段）和 −`drawerLift`（第二段整体上收），抽屉的
-   * 屏幕位移就是 `pullDown` 走满、面板只走 `CARD_PULL_RATIO`。
+   * = `COVER_HEIGHT`（静止时抽屉顶边就在封面下沿）+ `drawerPullShift`（= 下拉总量
+   * − 面板已走的那段）− `drawerLift`（第二段整体上收）。于是抽屉的屏幕位移是
+   * `pullDown` 走满、面板只走 `CARD_PULL_RATIO`；**第三段里它是常数**
+   * （`COVER_HEIGHT − DRAWER_MAX_LIFT` = 162vp），整张卡只由一个 `position` 驱动。
    */
-  private sheetContentY(): number {
-    return this.cardContentY() + COVER_HEIGHT + this.drawerPullShift() - this.drawerLift;
+  private sheetLocalY(): number {
+    return COVER_HEIGHT + this.drawerPullShift() - this.drawerLift;
   }
 
   /**
@@ -920,6 +922,9 @@ export struct CameraPage {
       .width('100%')
       .height(COVER_HEIGHT + REFLECTION_GROW_MAX + COVER_ROUND)
       .backgroundColor($r('app.color.cover_bg'))
+      // 圆角绘制策略保持默认 `RenderStrategy.FAST`：1.62.8 试过 `OFFSCREEN`
+      // （官方为「圆角 + 模糊」推荐的离屏路径），重影没变，说明不是合成层的问题，
+      // 已回退——离屏每帧要多一张 350×326 的缓冲，没必要。
       .borderRadius(Radius.Card)
       .shadow(HeroCardShadow)
       .clip(true)
@@ -940,10 +945,10 @@ export struct CameraPage {
   /**
    * 白色抽屉：顶部 24 圆角，装整页的全部内容。
    *
-   * 它与立牌面板是**两个独立的层**，各自 `position` 到内容坐标系里：
-   * - 面板在 `cardContentY()`，顶边下拉时只走 `CARD_PULL_RATIO`；
-   * - 抽屉在 `sheetContentY()`（= 面板顶 + `COVER_HEIGHT` + 卡内打开量 − 第二段
-   *   上收量），下拉时走满整段行程，把面板多铺的倒影露出来。
+   * 它与立牌面板是**同一张卡里的上下两段**（1.62.6）：面板固定在卡片坐标系
+   * y=0，抽屉按 `sheetLocalY()`（= `COVER_HEIGHT` + 卡内打开量 − 第二段上收量）
+   * 相对面板动——下拉时走满整段行程，把面板多铺的倒影露出来；第三段里它是常数，
+   * 于是整张卡只由外层那一个 `position` 驱动，接缝两侧不可能错开。
    *
    * **白面和内容是两层**（1.62.1 起）：白面的左右边距跟着第二段收到 0
    * （`sheetSideMargin()`），内容的内边距却是常数 `16 + CARD_SIDE_MARGIN`。
@@ -1077,8 +1082,9 @@ export struct CameraPage {
         const h = Number(now.height);
         if (Math.abs(h - this.drawerContentH) > 0.5) {
           this.drawerContentH = h;
-          // 内容高度变了，可滚范围随之变化，按新范围重算（并夹住旧偏移）
-          this.syncFromScroll(true);
+          // 内容高度变了，可滚范围随之变化，按新范围重算
+          // （`syncFromScroll` 会把偏移夹到新上限，不用再单独传参数）
+          this.syncFromScroll();
         }
       })
       }
@@ -1207,13 +1213,6 @@ export struct CameraPage {
   }
 
   /**
-   * 倒影强度。
-   *
-   * 底是深的（`cover_bg`，两套主题都是），所以两套主题用同一个值。产品图的机身
-   * 本来就黑（倒影那条带平均亮度只有 29/255），0.26 落在深底上等于看不见。
-   * 断开时乘 0.7，和主图的 0.72 呼应。
-   */
-  /**
    * 倒影渐变「淡到底」的位置（0~1，相对倒影盒子）。
    *
    * 静止时 = `REFLECTION_HEIGHT / REFLECTION_BOX`（只露 48）；下拉 p 时把收尾点
@@ -1235,6 +1234,13 @@ export struct CameraPage {
     return this.pullDown - this.cardPullShift();
   }
 
+  /**
+   * 倒影强度。
+   *
+   * 底是深的（`cover_bg`，两套主题都是），所以两套主题用同一个值。产品图的机身
+   * 本来就黑（倒影那条带平均亮度只有 29/255），0.26 落在深底上等于看不见。
+   * 断开时乘 0.7，和主图的 0.72 呼应。
+   */
   private reflectionOpacity(): number {
     const base = this.svc.connected ? 0.7 : 0.7 * 0.7;
     // 第二段里跟着抽屉一起淡出：贴顶时抽屉只走到机身底边下方 `COVER_BOTTOM_GAP`，
@@ -1420,77 +1426,105 @@ export struct CameraPage {
   }
 
   build() {
-    Scroll(this.scroller) {
-      // 滚动层里只有两样东西：一块不可见的占位（决定可滚范围），和一张
-      // **脱离文档流**的相机卡。卡片的屏幕位置由 `position` + `cardContentY()`
-      // 算出来，只跟滚动偏移有关，跟内容高度、测量结果彻底解耦——可滚范围里
-      // 就算多出十几 vp，相机也不可能被顶出去（那正是「第四段」的成因）。
-      Stack({ alignContent: Alignment.TopStart }) {
-        // 幽灵占位：高度 = 卡片静止位置 + 卡高 + 第三段总量，所以可滚范围
-        // 恰好是 `stick + 第三段总量`。它本身不可见、也不接收触摸。
+    // 外层 Stack 只为一件事：贴顶时在滚动内容后面垫一条深色（`TOP_BACKSTOP`）。
+    // 它不跟着滚动、也不跟着补偿位移，所以面板那一帧画低了也只会露出深色。
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.scrollOver > 0.5) {
         Column()
           .width('100%')
-          .height(this.contentHeight())
+          .height(TOP_BACKSTOP)
+          .backgroundColor($r('app.color.cover_bg'))
           .hitTestBehavior(HitTestMode.None)
-
-        // 立牌面板：缩进 `PANEL_SIDE_MARGIN`，自己的圆角、投影与裁剪。
-        // 用 position 钉在内容坐标系里（页面滚多少，它就相对内容往下放多少，
-        // 屏幕位置因此不变）；仍在 Scroll 内部，所以整页只有一个手势链路。
-        Column() {
-          this.CameraPanel()
-        }
-        .width('100%')
-        .position({ x: 0, y: this.cardContentY() })
-
-        // 白抽屉：画在面板之后，所以压住面板多铺出来的倒影段。与面板共用同一条
-        // 滚动偏移，只是多算了下拉打开量与第二段的上收量。
-        // 抽屉自身通栏（白面按 `sheetSideMargin()` 收边），这一层不再加左右边距。
-        Column() {
-          this.CameraSheet()
-        }
-        .width('100%')
-        .position({ x: 0, y: this.sheetContentY() })
       }
-      .width('100%')
-      .height(this.contentHeight())
-    }
+
+      Scroll(this.scroller) {
+        // 滚动层里只有两样东西：一块不可见的占位（决定可滚范围），和两层脱离
+        // 文档流的卡。两层的屏幕位置由 `position` + `cardContentY()` 算出来，只跟
+        // 滚动偏移有关，跟内容高度、测量结果彻底解耦——可滚范围里就算多出十几 vp，
+        // 相机也不可能被顶出去（那正是「第四段」的成因）。
+        Stack({ alignContent: Alignment.TopStart }) {
+          // 幽灵占位：高度 = 卡片静止位置 + 卡高 + 第三段总量，所以可滚范围
+          // 恰好是 `stick + 第三段总量`。它本身不可见、也不接收触摸。
+          Column()
+            .width('100%')
+            .height(this.contentHeight())
+            .hitTestBehavior(HitTestMode.None)
+
+          // **卡片层**（1.62.6）：面板与白抽屉合成同一层，整页的滚动补偿只作用在
+          // 这一个 `position` 上。面板固定在卡片坐标系 y=0，抽屉用 `sheetLocalY()`
+          // 在卡片内相对面板动（第三段里它是常数）。
+          //
+          // 为什么必须合成一层：1.62.3–1.62.5 里面板和抽屉是两个各自 `position`
+          // 的兄弟层，屏幕位移都在 JS 里算；快速上滑时两者偶尔差一帧，面板的
+          // 旧位置会以「半透明的第二台相机」形式留在屏幕上（跨在接缝上，几帧后
+          // 消失）。合成一层之后，接缝两侧只可能整体一起动，不会再互相错开。
+          //
+          // 用 `position` 而不是 `offset`：`offset` 是渲染属性，1.62.4 试过，面板
+          // 的合成层会比滚动偏移晚几帧落位，同样留下残影。
+          Stack({ alignContent: Alignment.TopStart }) {
+            // 立牌面板：缩进 `PANEL_SIDE_MARGIN`，自己的圆角、投影与裁剪。
+            Column() {
+              this.CameraPanel()
+            }
+            .width('100%')
+
+            // 白抽屉：画在面板之后，所以压住面板多铺出来的倒影段。
+            // 抽屉自身通栏（白面按 `sheetSideMargin()` 收边），这一层不加左右边距。
+            Column() {
+              this.CameraSheet()
+            }
+            .width('100%')
+            .position({ x: 0, y: this.sheetLocalY() })
+          }
+          .width('100%')
+          .height(this.cardHeight())
+          .position({ x: 0, y: this.cardContentY() })
+        }
+        .width('100%')
+        .height(this.contentHeight())
+      }
+      .width('100%').height('100%')
+      .scrollBar(BarState.Off)
+      // 只给「顶边」开弹簧（`effectEdge: EffectEdge.START`，API 18 起的单边开关）：
+      // 初始位置继续下拉时 `currentOffset()` 会变成负值，用来把立牌倒影拉长一点点；
+      // 底边保持硬停——滚到底再拉没有任何位移（1.58.0 试过底边回弹，按用户意见关掉）。
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.START })
+      .align(Alignment.Top)
+      // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
+      // 第二段（stick-44 → stick）：抽屉相对相机上收 44，机身下留 4vp 深色边距；
+      // 第三段（stick 之后）：相机不动，抽屉内容自己滚。
+      .onScrollStop(() => {
+        // 惯性结束补一帧：最后一帧如果没进 onScroll，三个位移会停在倒数第二个
+        // 位置（大约差 1~2vp），停下来之后相机就歪了那一两 vp。
+        this.syncFromScroll();
+      })
+      .onScroll(() => {
+        this.syncFromScroll();
+      })
+      }
     .width('100%').height('100%')
-    .scrollBar(BarState.Off)
-    // 只给「顶边」开弹簧（`effectEdge: EffectEdge.START`，API 18 起的单边开关）：
-    // 初始位置继续下拉时 `currentOffset()` 会变成负值，用来把立牌倒影拉长一点点；
-    // 底边保持硬停——滚到底再拉没有任何位移（1.58.0 试过底边回弹，按用户意见关掉）。
-    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.START })
-    .align(Alignment.Top)
-    // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
-    // 第二段（stick-48 → stick）：抽屉相对相机上移 48，把倒影盖完；
-    // 第三段（stick 之后）：相机不动，抽屉内容自己滚。
-    .onScrollStop(() => {
-      // 惯性结束补一帧：最后一帧如果没进 onScroll，三个位移会停在倒数第二个
-      // 位置（大约差 1~2vp），停下来之后相机就歪了那一两 vp。
-      this.syncFromScroll();
-    })
-    .onScroll(() => {
-      this.syncFromScroll();
-    })
   }
 
   /**
    * 按当前滚动偏移同步三个位移。
    *
    * 三段的位移都是**滚动偏移的纯函数**，不依赖任何测量值：
-   * - 卡片位置 → `scrollOver`（未 clamp，偏移越界也照原样补偿，相机钉死）；
-   * - 抽屉上移 → `drawerLift`（stick 前的 48vp 区间）；
+   * - 面板 / 抽屉的位置 → `scrollOver`（上界夹到可滚上限；顶边下拉的负值不夹）；
+   * - 抽屉上收 → `drawerLift`（stick 前的 `DRAWER_MAX_LIFT` 区间）；
    * - 抽屉内容 → `innerOffset`（clamp 在第三段总量上，滚到底不露白）。
-   *
-   * @param clampRange 内容高度刚变过时传 true：此时可滚范围已经变短，但滚动
-   *   容器这一帧还停在旧偏移上，不夹一下会让整张卡被推下去（相机飞出屏幕）。
    */
-  private syncFromScroll(clampRange: boolean = false): void {
+  private syncFromScroll(): void {
     // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
     // 拿它算 lift 永远得 0。这里直接问 Scroller 要当前偏移。
     let y = this.scroller.currentOffset().yOffset;
     const maxY = this.maxScrollY();
-    if (clampRange && y > maxY) {
+    // **末端过冲必须夹掉**（1.62.9，真机 1.62.8 上定位）：
+    // 滚到最底部之后继续用力上滑，`EdgeEffect.Spring` 会让偏移先冲过最大值一小段
+    // 再弹回来（用户看到的是「顶一下 + 抖动 + 重影」）。`scrollOver` 是卡片位置的
+    // 输入，如果跟着这段过冲走，卡片会被多顶上去几 vp、下一帧再锁回来——两帧之间
+    // 就是几十 vp 的位移差，立牌素材看起来就是抖出来的重影。
+    // 这里永远按「夹到可滚上限」的偏移算补偿：过冲只交给 Scroll 自己的弹簧去表现。
+    if (y > maxY) {
       y = maxY;
     }
 
@@ -1524,13 +1558,6 @@ export struct CameraPage {
       this.drawerLift = lift;
     }
 
-    // 标题反色进度：滚到立牌顶到屏幕顶时走满。第三段相机是固定不动的，
-    // 标题始终压在相机图上 —— 全程保持白字。
-    const progress = Math.max(0, Math.min(1, y / stick));
-    if (Math.abs(progress - this.scrollState.cameraProgress) > 0.002) {
-      this.scrollState.cameraProgress = progress;
-      this.onScrollProgress(progress);
-    }
   }
 }
 

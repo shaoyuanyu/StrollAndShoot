@@ -20,7 +20,6 @@ import { UiStateStore } from '../model/UiStateStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
-import { UiScrollState } from '../model/UiScrollState';
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
 import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens';
@@ -50,9 +49,6 @@ export struct MainScreen {
    * 和内容切换同时发生，不等 onChange。
    */
   @Local visualTab: number = 1;
-  @Local uiScroll: UiScrollState = UiScrollState.getInstance();
-  /** 相机页滚动进度（0~1），由 CameraPage 的 onScrollProgress 回传。 */
-  @Local cameraProgress: number = 0;
   @Local logText: string = '';
   @Local downloadProgress: DownloadProgress | null = null;
   @Local downloadedKeys: string[] = [];
@@ -799,7 +795,6 @@ export struct MainScreen {
         TabContent() {
           CameraPage({
             scroller: this.cameraScroller,
-            onScrollProgress: (p: number) => { this.cameraProgress = p; },
             // 全量扫描是用户明确点下的动作，跳过节流；快捷扫描保留 800ms 节流
             onScan: (quick: boolean) => { this.svc.scanForCamera(quick, !quick); },
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); },
