@@ -490,6 +490,23 @@ export struct MainScreen {
     .padding({ left: 16, right: 16 })
   }
 
+  /**
+   * 大标题的字体族。
+   *
+   * 认出机型时标题就是型号本身（`Z 50II`），用**衬线**排——像机身铭牌/品牌字标，
+   * 和无衬线的界面文字拉开一档。其余标题（画廊 / 相机 / 设置）仍是系统默认
+   * HarmonyOS Sans。
+   *
+   * 用通用名 `serif` 而不是具体字体名：设备 `/system/etc/fontconfig.json` 的
+   * `generic` 段里 `Noto Serif` 的别名就是 `serif`（HarmonyOS Sans 也有
+   * `HarmonyOS-Sans` 这类别名），写通用名换机型/换字体版本都不会失效；认不出
+   * 字体时引擎回退到默认字体，不会报错。
+   */
+  private titleFontFamily(): string {
+    if (this.visualTab === 1 && cameraStandeeLabel(this.svc.cameraModel) !== '') return 'serif';
+    return 'HarmonyOS Sans';
+  }
+
   /** 浏览态标题栏：大标题 + 右侧浮动玻璃胶囊。 */
   @Builder
   NormalTitleRow() {
@@ -499,6 +516,7 @@ export struct MainScreen {
         Text(this.tabTitle())
           .fontSize(FontSize.Display)
           .fontWeight(FontWeight.Bold)
+          .fontFamily(this.titleFontFamily())
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })

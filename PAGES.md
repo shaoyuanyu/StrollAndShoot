@@ -197,6 +197,17 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 `cameraSerialBadge()` 把序列号渲染成**型号右下角的角标**（`FontSize.Nano` 9fp、
 三级色、与型号底部对齐）。认不出机型时两样都不显示。
 
+**相机名用衬线字体**（1.47.0）：`MainScreen.titleFontFamily()` 在「相机页 + 认出
+机型」时返回通用族名 `serif`，其余标题（画廊 / 相机 / 设置）显式用 `HarmonyOS Sans`。
+通用名取自设备 `/system/etc/fontconfig.json` 的 `generic` 段——本机 `Noto Serif`
+的别名就是 `serif`（`HarmonyOS Sans` 的别名是 `HarmonyOS-Sans`），所以写族名比写
+`Noto Serif` 稳；认不出时引擎回退到默认字体，不会报错。实测这条链路把
+`fontWeight(Bold)` 落到了 Noto Serif 的 wght 轴上，不需要额外的粗体文件。
+
+衬线只给**型号**，序列号角标仍是系统无衬线、9fp——一个像铭牌，一个像规格行。
+换字体后角标与型号基线的差值从 -2px 变成 +2px（3.5 密度下约 1.1vp），可以忽略，
+所以 `padding({ bottom: 5 })` 不用跟着调。
+
 ##### 素材要按「机身」居中，不是按画布
 
 产品图是 3/4 角度拍的，**投影在右下**，所以按「整张图的不透明区域」裁出来的
