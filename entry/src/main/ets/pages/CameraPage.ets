@@ -806,10 +806,10 @@ export struct CameraPage {
    * 深色底给 0.26，浅色底压到 0.16。断开时再乘 0.7，和主图的 0.72 呼应。
    */
   private reflectionOpacity(): number {
-    // 深色 0.7、浅色 0.16：产品图的机身本来就黑（倒影那条带平均亮度只有
+    // 深色 0.7、浅色 0.25：产品图的机身本来就黑（倒影那条带平均亮度只有
     // 29/255），0.26 落在纯黑上等于看不见，0.5 在真机上仍然偏淡；浅色底反过来，
-    // 同样的值会显脏。
-    const base = this.isDarkTheme() ? 0.7 : 0.16;
+    // 同样的值会显脏，所以两档差得很多。
+    const base = this.isDarkTheme() ? 0.7 : 0.25;
     return this.svc.connected ? base : base * 0.7;
   }
 
