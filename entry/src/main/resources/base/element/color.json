@@ -101,6 +101,14 @@
       "value": "#00F1F3F5"
     },
     {
+      "name": "cover_bg",
+      "value": "#1B1C1E"
+    },
+    {
+      "name": "cover_bg_fade",
+      "value": "#001B1C1E"
+    },
+    {
       "name": "bg_surface_fade",
       "value": "#00FFFFFF"
     },
@@ -198,7 +206,7 @@
     },
     {
       "name": "hero_glow",
-      "value": "#00FFFFFF"
+      "value": "#24FFFFFF"
     }
   ]
 }

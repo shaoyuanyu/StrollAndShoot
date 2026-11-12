@@ -730,11 +730,16 @@ export struct CameraPage {
   }
 
   /**
-   * 封面：当前（或上次）连接的相机商品图 + 倒影。
+   * 封面：当前（或上次）连接的相机商品图 + 倒影，压在一条**深色背板**上。
    *
-   * 只有两样东西：机身后面一圈很淡的径向光（`hero_glow`，深色 14% 白、浅色
-   * 不可见；黑机身压在深色卡上会糊，光负责把轮廓托出来），以及机身下方一层
-   * 倒影。断开时只有图片与倒影变淡。
+   * 背板为什么是深的（1.52.0）：相机机身本身就是黑的，产品图也是按深底棚拍
+   * 的——倒影、边缘的高光、机身后面那圈径向光都建立在深底上。同一张图放到
+   * 白卡上，倒影很快被白吃掉，光也托不出轮廓，观感就是「贴纸」。所以浅色
+   * 模式下这条封面单独用 `cover_bg`（`#1B1C1E`），深色模式下它就是卡片色
+   * （`#1C1C1E`），**深色模式一个像素都不变**。
+   *
+   * 只改封面这一层、不改整张卡：卡内的状态、选择器、说明仍然用白底黑字，
+   * 不需要另配一套 on-dark 文字与控件色，也不会在浅色页面里压一块黑。
    *
    * 型号名与序列号都在标题栏（`MainScreen.NormalTitleRow`），封面只留产品。
    */
@@ -753,11 +758,12 @@ export struct CameraPage {
     }
     .width('100%')
     .padding({ top: 14 })
+    .backgroundColor($r('app.color.cover_bg'))
     .radialGradient({
       center: ['50%', '44%'],
       radius: 210,
-      // 外圈用卡片底色的透明版，避免径向渐变中段发灰
-      colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.bg_surface_fade'), 1]]
+      // 外圈用背板底色的透明版，避免径向渐变中段发灰
+      colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.cover_bg_fade'), 1]]
     })
   }
 
@@ -775,22 +781,15 @@ export struct CameraPage {
     return STANDEE_HEIGHT * cameraStandeeAspect(this.svc.cameraModel);
   }
 
-  /** 当前生效的深/浅色（跟随 `setColorMode()` 之后的实际配置）。 */
-  private isDarkTheme(): boolean {
-    return WindowUtils.isDarkMode(this.getUIContext().getHostContext());
-  }
-
   /**
    * 倒影强度。
    *
-   * 两个主题都画倒影（一致性），但底色越亮、同样的不透明度看起来越「脏」：
-   * 深色底给 0.7，浅色底压到 0.25。断开时再乘 0.7，和主图的 0.72 呼应。
+   * 底是深的（`cover_bg`，两套主题都是），所以两套主题用同一个值。产品图的机身
+   * 本来就黑（倒影那条带平均亮度只有 29/255），0.26 落在深底上等于看不见。
+   * 断开时乘 0.7，和主图的 0.72 呼应。
    */
   private reflectionOpacity(): number {
-    // 产品图的机身本来就黑（倒影那条带平均亮度只有 29/255），0.26 落在纯黑上
-    // 等于看不见，0.5 在真机上仍然偏淡；浅色底反过来，同样的值会显脏，
-    // 所以两档差得很多。
-    const base = this.isDarkTheme() ? 0.7 : 0.25;
+    const base = 0.7;
     return this.svc.connected ? base : base * 0.7;
   }
 
@@ -825,9 +824,9 @@ export struct CameraPage {
         .linearGradient({
           angle: 180,
           colors: [
-            [$r('app.color.bg_surface_fade'), 0],
-            [$r('app.color.bg_surface_fade'), 0.34],
-            [$r('app.color.bg_surface'), 1]
+            [$r('app.color.cover_bg_fade'), 0],
+            [$r('app.color.cover_bg_fade'), 0.34],
+            [$r('app.color.cover_bg'), 1]
           ]
         })
     }
@@ -835,7 +834,7 @@ export struct CameraPage {
     .height(REFLECTION_HEIGHT)
     // 渐变遮罩的收尾色必须与「这块下面的背板」完全同色，否则会把背板涂出一块
     // 带硬边的矩形。这里显式铺一层 bg_surface，让遮罩和卡片由构造保证同色。
-    .backgroundColor($r('app.color.bg_surface'))
+    .backgroundColor($r('app.color.cover_bg'))
     .clip(true)
   }
 

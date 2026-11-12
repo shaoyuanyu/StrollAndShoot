@@ -101,6 +101,14 @@
       "value": "#00000000"
     },
     {
+      "name": "cover_bg",
+      "value": "#1C1C1E"
+    },
+    {
+      "name": "cover_bg_fade",
+      "value": "#001C1C1E"
+    },
+    {
       "name": "bg_surface_fade",
       "value": "#001C1C1E"
     },
