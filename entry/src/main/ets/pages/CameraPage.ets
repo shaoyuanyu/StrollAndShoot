@@ -77,6 +77,15 @@ const TEMP_ROW_INDEXES: number[] = [
 ];
 
 /**
+ * 顶边下拉（初始位置继续往下滑）的回弹上限（vp）。
+ *
+ * 下拉时**不移动卡片**（卡片一挪，标题栏那 130vp 的页面底色就被带出来了），
+ * 而是把「立牌倒影」拉长同样的量、抽屉被布局顶着一起下移：露出的是更多倒影，
+ * 背景仍然全是深色背板。上限 24vp ≈ 倒影高度（48）的一半。
+ */
+const TOP_PULL_MAX = 24;
+
+/**
  * 相机页。
  *
  * **整页只有一套容器语言**：页面底色上是 24vp 圆角的白卡，卡与卡之间用分组小标题
@@ -143,6 +152,13 @@ export struct CameraPage {
   @Local scrollOver: number = 0;
   /** 抽屉内容的自然高度（在内层 Scroll 里测，不受父级高度约束）。 */
   @Local drawerContentH: number = 0;
+  /**
+   * 顶边下拉量（0..TOP_PULL_MAX）：倒影被拉长多少、抽屉就下移多少。
+   *
+   * 由底边/顶边弹簧的越界量驱动（`currentOffset()` 在顶边下拉时是负值），
+   * 松手后跟着原生弹簧衰减回 0，不需要自己写动画。
+   */
+  @Local pullDown: number = 0;
 
   aboutToAppear(): void {
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
@@ -765,7 +781,8 @@ export struct CameraPage {
       // Column 里不会把布局收回去，抽屉会整体下移，圆角又落到白底上。
       Column()
         .width('100%')
-        .height(COVER_HEIGHT + COVER_ROUND)
+        // 下拉时相机区变高，垫层也要跟上，否则抽屉顶部的圆角弧里会露出白卡
+        .height(COVER_HEIGHT + this.pullDown + COVER_ROUND)
         .backgroundColor($r('app.color.cover_bg'))
 
       Column() {
@@ -909,7 +926,7 @@ export struct CameraPage {
       .width('100%')
       // 明确定高：相机区 + 抽屉盒子。它比卡片高 `DRAWER_MAX_LIFT`，多出来
       // 的一截由卡片裁掉——不能靠 Column 自己收缩，否则抽屉会被压扁。
-      .height(COVER_HEIGHT + this.drawerBoxHeight())
+      .height(COVER_HEIGHT + this.pullDown + this.drawerBoxHeight())
     }
     .width('100%')
     .height(this.cardHeight())
@@ -1027,7 +1044,8 @@ export struct CameraPage {
         })
     }
     .width('100%')
-    .height(REFLECTION_HEIGHT)
+    // 顶边下拉时这里跟着变长：倒影露出更多，抽屉被布局顶着一起下移
+    .height(REFLECTION_HEIGHT + this.pullDown)
     // 渐变遮罩的收尾色必须与「这块下面的背板」完全同色，否则会把背板涂出一块
     // 带硬边的矩形。这里显式铺一层 bg_surface，让遮罩和卡片由构造保证同色。
     .backgroundColor($r('app.color.cover_bg'))
@@ -1176,9 +1194,10 @@ export struct CameraPage {
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
-    // 两端都不给回弹：滚到底就是硬停。1.58.0 试过底边 Spring（振幅不可调，
-    // 原生给量 47~238vp，只截 16vp 喂给抽屉内容），手感对比用，现已关掉。
-    .edgeEffect(EdgeEffect.None)
+    // 只给「顶边」开弹簧（`effectEdge: EffectEdge.START`，API 18 起的单边开关）：
+    // 初始位置继续下拉时 `currentOffset()` 会变成负值，用来把立牌倒影拉长一点点；
+    // 底边保持硬停——滚到底再拉没有任何位移（1.58.0 试过底边回弹，按用户意见关掉）。
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.START })
     .align(Alignment.Top)
     // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
     // 第二段（stick-48 → stick）：抽屉相对相机上移 48，把倒影盖完；
@@ -1214,13 +1233,22 @@ export struct CameraPage {
     }
 
     const stick = stickScrollVp();
-    // 未 clamp：偏移万一越过 maxY（内容变矮的那一帧），这里也跟上它
-    const over = Math.max(0, y - stick);
-    if (Math.abs(over - this.scrollOver) > 0.2) {
-      this.scrollOver = over;
+    // 卡片补偿：0 ≤ y ≤ stick 时为 0（卡片跟着页面正常上移）；越过 stick 后
+    // 取越界量把卡片钉住；**顶边下拉（y < 0）时取 y 本身**，把卡片按回原位，
+    // 否则整张卡会往下挪、把标题栏那 130vp 的页面底色带出来。
+    const shift = y > stick ? y - stick : (y < 0 ? y : 0);
+    if (Math.abs(shift - this.scrollOver) > 0.2) {
+      this.scrollOver = shift;
+    }
+
+    // 顶边下拉：倒影长度 + 抽屉下移量，都取这一份（上限 TOP_PULL_MAX）
+    const pull = y < 0 ? Math.min(TOP_PULL_MAX, -y) : 0;
+    if (Math.abs(pull - this.pullDown) > 0.2) {
+      this.pullDown = pull;
     }
 
     // 抽屉内容 = 第三段总量，clamp 住，滚到底不露白
+    const over = Math.max(0, y - stick);
     const span = this.innerScrollSpan();
     const inner = Math.min(span, over);
     if (Math.abs(inner - this.innerOffset) > 0.5) {

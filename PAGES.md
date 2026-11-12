@@ -219,18 +219,23 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
   **不要用 `@ObservedV2` 单例传这个值**：实测 `MainScreen` 不会因此重渲染；
 - **`onScroll` 的第二个参数是本帧增量，不是累计位置**（实测每帧 1~2vp）。
   求位移必须用 `Scroller.currentOffset().yOffset`；用回调参数会永远算出 0；
-- **两端都不给回弹**：`.edgeEffect(EdgeEffect.None)`，滚到底就是硬停。
-  1.58.0 试过底边 Spring，1.58.1 按要求关掉、留作手感对比。当时的结论仍然成立，
-  以后要重开就按这几条来：
-  - 用 `EdgeEffectOptions.effectEdge = EffectEdge.END`（API 18 起的**单边**开关）
-    只弹底边；顶边一定要硬——顶部是抽屉入场位，回弹会把相机往下拽、露出页面底色；
-  - 原生 Spring 的振幅**不可调**（实测轻拉一屏的 1/4 有 47vp、猛拉 238vp），
-    整张卡跟着走相机会被顶出屏幕，就是「第四段」的观感。所以弹簧只能当
-    **越界量发生器**：回弹期间 `currentOffset()` 会越过 `maxScrollY()`，
-    卡片按未 clamp 的偏移补偿（实测相机屏幕位置恒为 `-2.00`，一 vp 不动），
-    抽屉内容只取越界量的前 16vp 弹一下，衰减曲线由原生弹簧给、不用 `animateTo`；
-  - 代价是「不夹取」必须成为默认路径：`onScroll` 里不能夹 `maxScrollY()`，
-    否则越界量被吞掉；夹取只留给「内容变矮」那条（见下一条）。
+- **顶边下拉 = 倒影变长，不是整页下沉**（1.59.0）：
+  `.edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.START })`
+  ——`effectEdge` 是 API 18 起的**单边**开关，只给顶边；底边硬停（1.58.0 试过
+  底边回弹，按用户意见 1.58.1 关掉，要重开见本节末尾）。
+  - 下拉时 `currentOffset()` 变成**负值**，`pullDown = min(TOP_PULL_MAX, -y)`
+    （上限 24vp ≈ 倒影高度的一半）；
+  - 卡片**原地不动**：`scrollOver` 在 y<0 时取 y 本身，把卡片按回原位——
+    卡片一挪，标题栏那 130vp 的页面底色就被带出来了，用户明确要求「不露出页面空白背景」；
+  - 于是"弹"的是立牌倒影：`StandeeReflection` 高度 `REFLECTION_HEIGHT + pullDown`
+    （露出更多镜像画面），抽屉被布局顶着一起下移，`cover_bg` 垫层也同步长高，
+    否则抽屉顶部圆角弧里会露出白卡。实测下拉 24vp 时抽屉顶边 1179 → 1263px
+    （336.86 → 360.86vp），卡片顶边不动、卡内没有一条页面底色；
+  - 松手后 `pullDown` 跟着原生弹簧的衰减回到 0，不写 `animateTo`。
+  - 底边回弹若要重开：`effectEdge` 换成 `EffectEdge.END`，在 `inner` 上叠加
+    `min(CONTENT_BOUNCE_MAX, over - span)`；**注意**原生 Spring 振幅不可调
+    （实测轻拉一屏的 1/4 有 47vp、猛拉 238vp），整张卡跟着走会被顶出屏幕，
+    只能像这样截一段喂给内容；并且 `onScroll` 里不能夹 `maxScrollY()`。
 - **内容变矮时要把偏移夹回来**：断开连接会让设备信息与操作整块消失，第三段总量
   骤减、可滚范围跟着缩短。滚动容器下一帧才收偏移，这一帧读到的还是旧值，按旧范围
   算出来的位移会把整张卡推下去（实测相机整个飞出屏幕、抽屉顶边 547 → 2065px）。
