@@ -67,6 +67,16 @@ function stickScrollVp(): number {
 }
 
 /**
+ * TEMP: 假内容的行下标（18 行）。验收完连同 `TempTestRows()` 一起删掉。
+ *
+ * 为什么需要它：抽屉内容在「未连接」时只有 235vp，而抽屉可视高度是 621vp，
+ * 第三段（内容内部滚动）根本触发不了。补 18 行 56vp 的假行，任何模式下都能滚。
+ */
+const TEMP_ROW_INDEXES: number[] = [
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17
+];
+
+/**
  * 相机页。
  *
  * **整页只有一套容器语言**：页面底色上是 24vp 圆角的白卡，卡与卡之间用分组小标题
@@ -856,6 +866,10 @@ export struct CameraPage {
           this.ActionRows()
         }
 
+        // TEMP: 第三段滚动验收用的假内容。搜索「TEMP」可以整块删掉。
+        // 18 行 × 56vp ≈ 1008vp，未连接时也够把第三段撑出来。
+        this.TempTestRows()
+
         // 末尾留白：底部页签是**浮在内容上**的，滚到底时最后一行会被胶囊压住。
         // 88 + 抽屉自身 16 的内边距 = 画廊列表末尾那 104vp，两页同一套留白。
         Row().width('100%').height(88)
@@ -1018,6 +1032,29 @@ export struct CameraPage {
     // 带硬边的矩形。这里显式铺一层 bg_surface，让遮罩和卡片由构造保证同色。
     .backgroundColor($r('app.color.cover_bg'))
     .clip(true)
+  }
+
+  /**
+   * TEMP: 第三段滚动验收用的假内容（搜索「TEMP」整块删除）。
+   *
+   * 用 `CameraInfoRow` 只是为了让假内容与抽屉里真实的设备信息行同一个尺度
+   * （56vp 行高 + 分隔线），滚起来看不出拼接痕迹；行数够多，未连接时也能把
+   * 第三段撑到「要滚两屏」。
+   */
+  @Builder
+  TempTestRows() {
+    Column() {
+      Divider().color($r('app.color.divider'))
+      this.GroupTitle('测试内容（临时）')
+      ForEach(TEMP_ROW_INDEXES, (i: number) => {
+        CameraInfoRow({
+          label: `测试行 ${i + 1}`,
+          value: `占位内容 ${i + 1}`,
+          last: i === TEMP_ROW_INDEXES.length - 1
+        })
+      }, (i: number) => `temp_row_${i}`)
+    }
+    .width('100%')
   }
 
   /** 设备信息：平铺的行，抽屉本身就是它的卡片。 */
