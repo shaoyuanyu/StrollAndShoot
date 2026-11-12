@@ -806,7 +806,9 @@ export struct CameraPage {
    * 深色底给 0.26，浅色底压到 0.16。断开时再乘 0.7，和主图的 0.72 呼应。
    */
   private reflectionOpacity(): number {
-    const base = this.isDarkTheme() ? 0.26 : 0.16;
+    // 深色 0.5、浅色 0.16：产品图的机身本来就黑（底部平均亮度只有 29/255），
+    // 0.26 落在纯黑上等于看不见；浅色底反过来，同样的值会显脏。
+    const base = this.isDarkTheme() ? 0.5 : 0.16;
     return this.svc.connected ? base : base * 0.7;
   }
 
