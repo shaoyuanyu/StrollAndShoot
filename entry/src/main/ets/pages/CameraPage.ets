@@ -77,6 +77,16 @@ const TEMP_ROW_INDEXES: number[] = [
 ];
 
 /**
+ * 底边回弹的最大位移（vp）——只让**抽屉内容**弹这么多，整张卡不动。
+ *
+ * 原生 `EdgeEffect.Spring` 的振幅不可调：真机实测轻拉一屏的 1/4 就有 47vp、
+ * 猛拉有 238vp，而卡片一旦跟着走，相机会被顶出屏幕（就是「第四段」的观感）。
+ * 所以弹簧只当「越界量发生器」用，取它越界的那一小段、砍到 16vp 换算成内容位移：
+ * 相机与抽屉纹丝不动，只有内容自己弹一下再顺着弹簧的衰减回到原位。
+ */
+const CONTENT_BOUNCE_MAX = 16;
+
+/**
  * 相机页。
  *
  * **整页只有一套容器语言**：页面底色上是 24vp 圆角的白卡，卡与卡之间用分组小标题
@@ -856,6 +866,10 @@ export struct CameraPage {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
 
+        // TEMP: 第三段滚动验收用的假内容。搜索「TEMP」可以整块删掉。
+        // 18 行 × 56vp ≈ 1008vp，未连接时也够把第三段撑出来。
+        this.TempTestRows()
+
         // 设备信息 / 操作：抽屉本身就是一张卡，这里是平铺的行 + 小标题，
         // 不再套一层卡片（白卡压在白抽屉上只剩一道阴影，看不出层次）。
         if (this.svc.connected) {
@@ -865,10 +879,6 @@ export struct CameraPage {
           this.GroupTitle($r('app.string.camera_group_actions'))
           this.ActionRows()
         }
-
-        // TEMP: 第三段滚动验收用的假内容。搜索「TEMP」可以整块删掉。
-        // 18 行 × 56vp ≈ 1008vp，未连接时也够把第三段撑出来。
-        this.TempTestRows()
 
         // 末尾留白：底部页签是**浮在内容上**的，滚到底时最后一行会被胶囊压住。
         // 88 + 抽屉自身 16 的内边距 = 画廊列表末尾那 104vp，两页同一套留白。
@@ -881,8 +891,8 @@ export struct CameraPage {
           const h = Number(now.height);
           if (Math.abs(h - this.drawerContentH) > 0.5) {
             this.drawerContentH = h;
-            // 内容高度变了，可滚范围随之变化，立刻按新范围重算三个位移
-            this.syncFromScroll();
+            // 内容高度变了，可滚范围随之变化，按新范围重算（并夹住旧偏移）
+            this.syncFromScroll(true);
           }
         })
         }
@@ -1176,9 +1186,14 @@ export struct CameraPage {
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
-    // 关掉回弹：滚到头后继续拉，内容会被再拉出一截而卡片位置只跟偏移走，
-    // 松手回弹的整个过程看着就是「页面在抖」。没有回弹就没有这一段。
-    .edgeEffect(EdgeEffect.None)
+    // 只给「底边」开弹簧（`effectEdge: EffectEdge.END`，API 18 起）：顶边仍然是硬的，
+    // 顶部是抽屉的入场位，回弹只会把相机往下拽、露出页面底色。
+    //
+    // 弹簧在这里**只当越界量发生器**：回弹期间 `currentOffset()` 会越过
+    // `maxScrollY()`（真机实测猛拉 238vp、轻拉 47vp），`syncFromScroll()` 里
+    // 卡片按未 clamp 的偏移补偿，所以整张卡不动、相机一 vp 都不移；只有抽屉内容
+    // 取越界量的前 16vp 弹一下，再顺着弹簧自己的衰减曲线回到原位。
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.END })
     .align(Alignment.Top)
     // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
     // 第二段（stick-48 → stick）：抽屉相对相机上移 48，把倒影盖完；
@@ -1197,44 +1212,51 @@ export struct CameraPage {
    * 按当前滚动偏移同步三个位移。
    *
    * 三段的位移都是**滚动偏移的纯函数**，不依赖任何测量值：
-   * - 卡片位置 → `scrollOver`（未 clamp，滚多少补多少）；
+   * - 卡片位置 → `scrollOver`（未 clamp，**连回弹的越界量也照原样补偿**，
+   *   所以底边回弹期间相机一 vp 都不动）；
    * - 抽屉上移 → `drawerLift`（stick 前的 48vp 区间）；
-   * - 抽屉内容 → `innerOffset`（stick 之后，clamp 在第三段总量上，滚到底不露白）。
+   * - 抽屉内容 → `innerOffset`（第三段总量 + 一点点回弹）。
+   *
+   * @param clampRange 内容高度刚变过时传 true：此时可滚范围已经变短，但滚动
+   *   容器这一帧还停在旧偏移上，不夹一下会让整张卡被推下去（相机飞出屏幕）。
    */
-  private syncFromScroll(): void {
+  private syncFromScroll(clampRange: boolean = false): void {
     // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
     // 拿它算 lift 永远得 0。这里直接问 Scroller 要当前偏移。
     let y = this.scroller.currentOffset().yOffset;
-
-    // 内容变矮的瞬间（例如刚断开连接，设备信息与操作整块消失）第三段总量会
-    // 缩短、可滚范围跟着变短。滚动容器下一帧就会把偏移收回去，但**这一帧**
-    // 读到的还是旧值——按旧范围算出来的位移会把整张卡推下去，相机直接飞出屏幕。
-    // 所以先按新的上限夹一次；范围本身就等于 maxScrollY()，正常情况下夹不到。
     const maxY = this.maxScrollY();
-    if (y > maxY + 0.5) {
+    if (clampRange && y > maxY) {
       y = maxY;
     }
 
-    const over = Math.max(0, y - stickScrollVp());
+    const stick = stickScrollVp();
+    // 未 clamp：底边回弹时偏移会越过 maxY，这里跟上它，卡片屏幕位置才恒定
+    const over = Math.max(0, y - stick);
     if (Math.abs(over - this.scrollOver) > 0.2) {
       this.scrollOver = over;
     }
 
-    const inner = Math.min(this.innerScrollSpan(), over);
+    // 抽屉内容 = 第三段（clamp 住，滚到底不露白）+ 底边回弹。
+    // 回弹量取原生弹簧越界的那一小段、再砍到 `CONTENT_BOUNCE_MAX`：整张卡不跟着
+    // 走（相机钉死），只有内容自己弹一下；原生弹簧的衰减曲线顺便就是回弹动画，
+    // 不需要自己写 animateTo。
+    const span = this.innerScrollSpan();
+    const bounce = Math.min(CONTENT_BOUNCE_MAX, Math.max(0, over - span));
+    const inner = Math.min(span, over) + bounce;
     if (Math.abs(inner - this.innerOffset) > 0.5) {
       this.innerOffset = inner;
     }
 
     // lift 在「立牌到顶」之前 48vp 就启动：页面继续上移的同时抽屉追上去，
     // 等滚到头时 lift 正好走满，相机完整留在屏幕上。
-    const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
+    const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stick - DRAWER_MAX_LIFT)));
     if (Math.abs(lift - this.drawerLift) > 0.5) {
       this.drawerLift = lift;
     }
 
     // 标题反色进度：滚到立牌顶到屏幕顶时走满。第三段相机是固定不动的，
     // 标题始终压在相机图上 —— 全程保持白字。
-    const progress = Math.max(0, Math.min(1, y / stickScrollVp()));
+    const progress = Math.max(0, Math.min(1, y / stick));
     if (Math.abs(progress - this.scrollState.cameraProgress) > 0.002) {
       this.scrollState.cameraProgress = progress;
       this.onScrollProgress(progress);
