@@ -515,22 +515,6 @@ export struct MainScreen {
   }
 
   /** 浏览态标题栏：大标题 + 右侧浮动玻璃胶囊。 */
-  /** 相机页滚动时标题反色。 */
-  private titleColor(): ResourceColor {
-    if (this.visualTab === 1 && this.uiScroll.cameraProgress > 0.55) {
-      return Color.White;
-    }
-    return $r('app.color.text_primary');
-  }
-
-  /** 型号右下角的序列号角标，反色时一起变浅白。 */
-  private titleSubColor(): ResourceColor {
-    if (this.visualTab === 1 && this.uiScroll.cameraProgress > 0.55) {
-      return '#CCFFFFFF';
-    }
-    return $r('app.color.text_tertiary');
-  }
-
   @Builder
   NormalTitleRow() {
     Row() {
@@ -540,20 +524,22 @@ export struct MainScreen {
           .fontSize(FontSize.Display)
           .fontWeight(FontWeight.Bold)
           .fontFamily(this.titleFontFamily())
-          // 相机页标题栏完全透明：滚到相机图上之后反色成白字，否则黑字压在
-          // 深色机身上读不出来。0.55 是标题完全落到图片上的位置。
-          .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55 && this.cameraProgress > 0
-            ? Color.White
-            : $r('app.color.text_primary'))
+          // 相机页标题栏完全透明，标题会压在相机图上：用「白字 + DIFFERENCE 混合」
+          // 让颜色**跟着背后的像素逐像素反色**——背景是页面底色(241)时算出 14
+          // （近黑），压在深色机身上(~32)时算出 223（近白），字跨在交界处时
+          // 笔画两边各自反色。不需要阈值、不需要滚动进度，下拉时自然跟着变。
+          .fontColor(this.visualTab === 1 ? Color.White : $r('app.color.text_primary'))
+          .blendMode(this.visualTab === 1 ? BlendMode.DIFFERENCE : BlendMode.NONE)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .flexShrink(1)
         if (this.cameraSerialBadge() !== '') {
           Text(this.cameraSerialBadge())
             .fontSize(FontSize.Nano)
-            .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55 && this.cameraProgress > 0
-              ? '#CCFFFFFF'
-              : $r('app.color.text_tertiary'))
+            // 角标同样反色，但压 0.7 不透明度，反色后比标题暗一档（保持层级）
+            .fontColor(this.visualTab === 1 ? Color.White : $r('app.color.text_tertiary'))
+            .blendMode(this.visualTab === 1 ? BlendMode.DIFFERENCE : BlendMode.NONE)
+            .opacity(this.visualTab === 1 ? 0.7 : 1)
             .padding({ bottom: 5 })
             .flexShrink(0)
         }
