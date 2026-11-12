@@ -262,15 +262,26 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 `#1C1C1E`。选中胶囊因此与卡片同色——它在视觉上不是「卡片上的一块白」，而是
 「从轨道里抬到卡片那一层」，不靠阴影也立得住。
 
-选择器上方配一行分组小标题「连接方式」（`camera_group_mode`，`FontSize.Caption` +
-`text_tertiary`，与选择器间距 8vp，比卡片内常规的 12vp 紧一档）：选择器没有边框
-也没有底，没有这行字就只是四段普通文字。
+**选择器下面紧跟当前模式的一句话**（`camera_mode_desc_*`，12fp `text_secondary`），
+两者间距 8vp、读成一组。这句话原来在下面「连接步骤」卡的开头，而那张卡在首屏
+之外——切完模式屏幕上什么都不变，用户会以为没点上（1.50.0 用户反馈「切换时得不到
+反馈」）。搬到选择器正下方之后，切换的瞬间这句话就换了，反馈才成立；
+「连接步骤」卡因此只留相机侧的三步。
+
+不再给选择器配「连接方式」这种分组小标题：轨道本身已经划出边界，标题是废字。
 
 **不要加回图标**：`Wi-Fi AP` 与 `Wi-Fi STA` 的区别不是任何一张图能画出来的，
 四个图标只会把控件重新拉回「双行 + 不统一笔画」的老问题。
 
-内容区拿不到沉浸光感（官方限制），这里不用材质。`ColorMetrics` / `LengthMetrics`
-会报 `Function may throw exceptions` 告警，与 `WindowShot` 同类，可接受。
+**材质**：`TabSegmentButtonV2` 虽然有 `backgroundSystemMaterial`（API 26），但官方
+《组件适配沉浸光感》写明分段按钮的沉浸光感**只在 Navigation/NavDestination 标题栏
+或底部 TabBar 中生效**。1.50.0 在真机上实测过：挂上 `ImmersiveMaterial` 后把
+`buttonBackgroundColor` 改成纯红，轨道渲染出来仍是 `(254,0,0)`——材质在内容区
+根本不参与绘制。想要真材质只有一条路：换成 `Select`（官方列出在内容区全页面生效
+的选择类控件），代价是四选一收进下拉、不再同屏可见。
+
+`ColorMetrics` / `LengthMetrics` 会报 `Function may throw exceptions` 告警，
+与 `WindowShot` 同类，可接受。
 
 #### 状态头只此一处
 
@@ -322,7 +333,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 卡内**不再套一层实底块**。设置页是「页面底 → 卡片」两级，相机页以前多一层 `filter_chip_bg` 灰块，深色下发闷；现在是「卡片 → hairline 分隔」。
 - **卡片统一 24vp 圆角、16vp 内边距，立牌那张卡也一样**；相机卡要 `clip(true)`，否则封面那层径向光的矩形四角会露出直角。
-- 相机卡内部：`Column({ space: 12 })`，封面在上、下面依次是状态头、扫描进度、错误、`Divider`、「连接方式」小标题 + 四选一、模式专属控件。封面上边距 14vp，内容区上边距 12vp（**没有立牌**时改为 16vp）。
+- 相机卡内部：`Column({ space: 12 })`，封面在上、下面依次是状态头、扫描进度、错误、`Divider`、四选一 + 当前模式一句话、模式专属控件。封面上边距 14vp，内容区上边距 12vp（**没有立牌**时改为 16vp）。
 - 行高 56vp；状态头 16fp Medium、正文 15fp、步骤与说明 12fp、note 10fp。
 - 已连接时状态头右侧是照片数胶囊（`primary_soft` + `primary`）；此时不再显示 `scanStatsText`（「照片 38 张 | 扫描完成」），否则一张卡里同一个数字出现两遍。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏，内容 `padding({ left: 16, right: 16, top: 8, bottom: 96 })`（底部 96 给悬浮页签让位）。

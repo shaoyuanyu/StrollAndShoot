@@ -285,7 +285,9 @@ export struct CameraPage {
       buttonPadding: LengthMetrics.vp(4),
       buttonBorderRadius: LengthMetrics.vp(22),
       buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page')),
-      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_surface'))
+      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_surface')),
+      // 切换时胶囊滑动 + 文字颜色过渡（API 24 起，项目 target 26）
+      enableStateAnimation: true
     })
       .width('100%')
   }
@@ -320,13 +322,8 @@ export struct CameraPage {
     Column({ space: 10 }) {
       this.GroupTitle($r('app.string.camera_guide_title'))
       Column({ space: 12 }) {
-        // 模式说明放在说明书开头，而不是相机卡末尾：它讲的是「这个模式怎么用」，
-        // 和下面三步是同一件事，留在卡片底部只会变成一句孤零零的脚注。
-        Text(this.modeDesc())
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
+        // 模式说明已经搬到相机卡里（选择器正下方）——那里切换时立刻可见。
+        // 这张卡只留「相机侧怎么设」的三步。
         Column({ space: 10 }) {
           this.StepRow(0)
           this.StepRow(1)
@@ -686,15 +683,17 @@ export struct CameraPage {
         // 线下是「换一种连接方式」——四选一 + 当前模式的专属控件。
         Divider().color($r('app.color.divider'))
 
-        // 选择器自己不带标题，轨道又很浅，单独摆在分隔线下面容易读成「四段文字」。
-        // 给它一行小标题，才知道这是一组可点的选项；两者间距 8vp（比卡片里 12vp 的
-        // 常规间距紧一档），读成一组而不是两个并列元素。
+        // 选择器 + 当前模式的一句话，读成一组（8vp，比卡片内常规的 12vp 紧一档）。
+        // 这句话必须留在选择器正下方：模式说明原来在下面「连接步骤」卡的开头，
+        // 而那张卡在首屏之外——切完模式屏幕上什么都不变，用户会以为没点上。
+        // 现在切完立刻能读到这一句变了，这才是切换的反馈。
         Column({ space: 8 }) {
-          Text($r('app.string.camera_group_mode'))
-            .fontSize(FontSize.Caption)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
           this.ModePicker()
+          Text(this.modeDesc())
+            .fontSize(FontSize.Caption)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
