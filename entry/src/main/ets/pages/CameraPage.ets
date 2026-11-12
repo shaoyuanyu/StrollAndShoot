@@ -77,13 +77,24 @@ const TEMP_ROW_INDEXES: number[] = [
 ];
 
 /**
- * 顶边下拉（初始位置继续往下滑）的回弹上限（vp）。
+ * 顶边下拉（初始位置继续往下滑）抽屉最多能往下走多少 vp。
  *
  * 下拉时**不移动卡片**（卡片一挪，标题栏那 130vp 的页面底色就被带出来了），
- * 而是把「立牌倒影」拉长同样的量、抽屉被布局顶着一起下移：露出的是更多倒影，
- * 背景仍然全是深色背板。上限 24vp ≈ 倒影高度（48）的一半。
+ * 而是让抽屉从倒影上滑下去、露出更多倒影；背景仍然全是深色背板。
+ *
+ * 96 = 倒影图自身的剩余高度（翻转图 144 高，静止时只露 48），也就是「最多把
+ * 整面倒影都看出来」。**不要**用固定的小上限（1.59.0 是 24/56）：原生弹簧给的
+ * 越界量轻松过百，硬截一段就会出现「手指还在走、画面已经不动」的死区，手感上
+ * 既弱又像卡住。
  */
-const TOP_PULL_MAX = 24;
+const TOP_PULL_MAX = 96;
+/**
+ * 倒影盒子高度：布局上恒定，抽屉静止时用 `offset` 抵消掉 `TOP_PULL_MAX`。
+ * 它等于翻转图自身的高度——再高也没有画面可露了。
+ */
+const REFLECTION_BOX = REFLECTION_HEIGHT + TOP_PULL_MAX;
+/** 倒影渐变的「保持透明」段长度（vp）：这一段完全透出镜像，之后才开始淡出。 */
+const REFLECTION_FADE_HOLD = 16;
 
 /**
  * 相机页。
@@ -159,6 +170,7 @@ export struct CameraPage {
    * 松手后跟着原生弹簧衰减回 0，不需要自己写动画。
    */
   @Local pullDown: number = 0;
+  /** TEMP: 上一次下拉帧的时间戳，用来量帧间隔 */
 
   aboutToAppear(): void {
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
@@ -781,8 +793,8 @@ export struct CameraPage {
       // Column 里不会把布局收回去，抽屉会整体下移，圆角又落到白底上。
       Column()
         .width('100%')
-        // 下拉时相机区变高，垫层也要跟上，否则抽屉顶部的圆角弧里会露出白卡
-        .height(COVER_HEIGHT + this.pullDown + COVER_ROUND)
+        // 下拉到底时抽屉顶边落在 `COVER_HEIGHT + TOP_PULL_MAX`，圆角比它再多一个
+        .height(COVER_HEIGHT + TOP_PULL_MAX + COVER_ROUND)
         .backgroundColor($r('app.color.cover_bg'))
 
       Column() {
@@ -921,12 +933,15 @@ export struct CameraPage {
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
-      .offset({ y: -this.drawerLift })
+      // 一个位移搞定三件事：抵消倒影的预留段（静止时抽屉仍在 COVER_HEIGHT 处）、
+      // 顶边下拉（`pullDown` 让抽屉往下滑、露出更多倒影）、第二段 lift（向上）。
+      // 全是渲染属性，下拉期间不触发重排。
+      .offset({ y: this.pullDown - TOP_PULL_MAX - this.drawerLift })
       }
       .width('100%')
       // 明确定高：相机区 + 抽屉盒子。它比卡片高 `DRAWER_MAX_LIFT`，多出来
       // 的一截由卡片裁掉——不能靠 Column 自己收缩，否则抽屉会被压扁。
-      .height(COVER_HEIGHT + this.pullDown + this.drawerBoxHeight())
+      .height(COVER_HEIGHT + TOP_PULL_MAX + this.drawerBoxHeight())
     }
     .width('100%')
     .height(this.cardHeight())
@@ -955,7 +970,20 @@ export struct CameraPage {
    */
   @Builder
   CameraCover() {
-    Stack({ alignContent: Alignment.Bottom }) {
+    Stack({ alignContent: Alignment.Top }) {
+      // 径向光单独一层、**固定 `COVER_HEIGHT` 高**：倒影盒子在布局上预留到了
+      // 下拉上限（比静止视觉的倒影高一截），光晕要是跟着那个盒子的百分比走，
+      // 圆心会随盒子变高而下移，静止时的观感就变了。
+      Column()
+        .width('100%')
+        .height(COVER_HEIGHT)
+        .radialGradient({
+          center: ['50%', '44%'],
+          radius: 210,
+          // 外圈用背板底色的透明版，避免径向渐变中段发灰
+          colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.cover_bg_fade'), 1]]
+        })
+
       Column() {
         Image(cameraStandeeMedia(this.svc.cameraModel))
           .width(this.standeeWidth())
@@ -968,13 +996,7 @@ export struct CameraPage {
         this.StandeeReflection()
       }
       .width('100%')
-      .padding({ top: 14 })
-      .radialGradient({
-        center: ['50%', '44%'],
-        radius: 210,
-        // 外圈用背板底色的透明版，避免径向渐变中段发灰
-        colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.cover_bg_fade'), 1]]
-      })
+      .padding({ top: COVER_TOP_PAD })
     }
     .width('100%')
     .backgroundColor($r('app.color.cover_bg'))
@@ -1001,6 +1023,16 @@ export struct CameraPage {
    * 本来就黑（倒影那条带平均亮度只有 29/255），0.26 落在深底上等于看不见。
    * 断开时乘 0.7，和主图的 0.72 呼应。
    */
+  /**
+   * 倒影渐变「淡到底」的位置（0~1，相对倒影盒子）。
+   *
+   * 静止时 = `REFLECTION_HEIGHT / REFLECTION_BOX`（只露 48）；下拉 p 时把收尾点
+   * 推到 `(48 + p) / REFLECTION_BOX`，于是渐变始终在不透明的抽屉顶边处结束。
+   */
+  private reflectionFadeEnd(): number {
+    return (REFLECTION_HEIGHT + this.pullDown) / REFLECTION_BOX;
+  }
+
   private reflectionOpacity(): number {
     const base = 0.7;
     return this.svc.connected ? base : base * 0.7;
@@ -1034,18 +1066,24 @@ export struct CameraPage {
         // '#00000000'：线性渐变按「非预乘」插值，从透明黑渐变到不透明浅色会在
         // 中段经过一段灰——浅色下就是一条全宽灰带（深色下恰好是黑，看不出来，
         // 所以只在浅色暴露）。只有 RGB 保持一致、只让 alpha 变，才是纯淡出。
+        //
+        // 收尾那一档跟着 `pullDown` 走（`reflectionFadeEnd()`）：渐变必须**永远
+        // 收在抽屉顶边**，否则下拉时露出的是「已经淡成背板色的一段」再接新露出的
+        // 镜像，中间出现一条硬边。改的是颜色停靠点，不是高度——不触发重排。
         .linearGradient({
           angle: 180,
           colors: [
             [$r('app.color.cover_bg_fade'), 0],
-            [$r('app.color.cover_bg_fade'), 0.34],
+            [$r('app.color.cover_bg_fade'), REFLECTION_FADE_HOLD / REFLECTION_BOX],
+            [$r('app.color.cover_bg'), this.reflectionFadeEnd()],
             [$r('app.color.cover_bg'), 1]
           ]
         })
     }
     .width('100%')
-    // 顶边下拉时这里跟着变长：倒影露出更多，抽屉被布局顶着一起下移
-    .height(REFLECTION_HEIGHT + this.pullDown)
+    // 盒子高度恒定（= 翻转图自身高度）：抽屉用 offset 抵消预留段，下拉时露出来。
+    // **不要**写成 `REFLECTION_HEIGHT + pullDown`，那是每帧改布局。
+    .height(REFLECTION_BOX)
     // 渐变遮罩的收尾色必须与「这块下面的背板」完全同色，否则会把背板涂出一块
     // 带硬边的矩形。这里显式铺一层 bg_surface，让遮罩和卡片由构造保证同色。
     .backgroundColor($r('app.color.cover_bg'))
