@@ -1112,6 +1112,14 @@ export struct CameraPage {
     .align(Alignment.Top)
     // 第一段（0 → 顶部内边距）整页上移，把相机顶到屏幕顶；
     // 第二段（顶部内边距 → +48）抽屉才相对相机上移，把倒影盖完。
+    // 滚动停止再对齐一次：惯性结束的最后一点如果没进 onScroll，
+    // cardOffset 会停在倒数第二帧，净位移就多出几 vp（相机被顶上去）
+    .onScrollStop(() => {
+      const y = this.scroller.currentOffset().yOffset;
+      const raw = Math.max(0, y - stickScrollVp());
+      this.cardOffset = raw;
+      this.innerOffset = Math.min(this.innerScrollSpan(), raw);
+    })
     .onScroll(() => {
       // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
       // 拿它算 lift 会永远得 0。这里直接问 Scroller 要当前偏移。
@@ -1126,7 +1134,7 @@ export struct CameraPage {
         this.innerOffset = inner;
       }
       // 卡片跟着「未 clamp」的位移走，相机才不会在可滚范围末尾被顶出去
-      if (Math.abs(raw - this.cardOffset) > 0.5) {
+      if (Math.abs(raw - this.cardOffset) > 0.2) {
         this.cardOffset = raw;
       }
       const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
