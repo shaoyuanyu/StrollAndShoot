@@ -20,6 +20,7 @@ import { UiStateStore } from '../model/UiStateStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
 import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { UiScrollState } from '../model/UiScrollState';
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
 import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens';
@@ -49,6 +50,9 @@ export struct MainScreen {
    * 和内容切换同时发生，不等 onChange。
    */
   @Local visualTab: number = 1;
+  @Local uiScroll: UiScrollState = UiScrollState.getInstance();
+  /** 相机页滚动进度（0~1），由 CameraPage 的 onScrollProgress 回传。 */
+  @Local cameraProgress: number = 0;
   @Local logText: string = '';
   @Local downloadProgress: DownloadProgress | null = null;
   @Local downloadedKeys: string[] = [];
@@ -511,6 +515,22 @@ export struct MainScreen {
   }
 
   /** 浏览态标题栏：大标题 + 右侧浮动玻璃胶囊。 */
+  /** 相机页滚动时标题反色。 */
+  private titleColor(): ResourceColor {
+    if (this.visualTab === 1 && this.uiScroll.cameraProgress > 0.55) {
+      return Color.White;
+    }
+    return $r('app.color.text_primary');
+  }
+
+  /** 型号右下角的序列号角标，反色时一起变浅白。 */
+  private titleSubColor(): ResourceColor {
+    if (this.visualTab === 1 && this.uiScroll.cameraProgress > 0.55) {
+      return '#CCFFFFFF';
+    }
+    return $r('app.color.text_tertiary');
+  }
+
   @Builder
   NormalTitleRow() {
     Row() {
@@ -520,14 +540,20 @@ export struct MainScreen {
           .fontSize(FontSize.Display)
           .fontWeight(FontWeight.Bold)
           .fontFamily(this.titleFontFamily())
-          .fontColor($r('app.color.text_primary'))
+          // 相机页标题栏完全透明：滚到相机图上之后反色成白字，否则黑字压在
+          // 深色机身上读不出来。0.55 是标题完全落到图片上的位置。
+          .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55
+            ? Color.White
+            : $r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .flexShrink(1)
         if (this.cameraSerialBadge() !== '') {
           Text(this.cameraSerialBadge())
             .fontSize(FontSize.Nano)
-            .fontColor($r('app.color.text_tertiary'))
+            .fontColor(this.visualTab === 1 && this.cameraProgress > 0.55
+              ? '#CCFFFFFF'
+              : $r('app.color.text_tertiary'))
             .padding({ bottom: 5 })
             .flexShrink(0)
         }
@@ -787,6 +813,7 @@ export struct MainScreen {
         TabContent() {
           CameraPage({
             scroller: this.cameraScroller,
+            onScrollProgress: (p: number) => { this.cameraProgress = p; },
             // 全量扫描是用户明确点下的动作，跳过节流；快捷扫描保留 800ms 节流
             onScan: (quick: boolean) => { this.svc.scanForCamera(quick, !quick); },
             onDisconnect: () => { this.svc.disconnect(); this.syncDownloadedKeys(); },

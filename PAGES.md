@@ -168,8 +168,12 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
   内容不足一屏、`onScroll` 不触发，联动永远看不到。内容不够时白色面板也一直
   铺到底，不会在最后一行文字下面露出页面底色；页面底部那 96vp 的 tab 让位改由
   「卡片下面还有内容时才补的占位」承担。
-- **两段滚动**（1.54.0）：第一段整页上移，滚到「顶部内边距」时相机刚好顶到屏幕顶；
-  第二段才让抽屉相对相机上移、把倒影盖完。`drawerLift = clamp(scrollY − topPadding, 0, 48)`；
+- **两段滚动**（1.54.0）：lift 在「立牌顶到屏幕顶」之前 48vp 就启动
+  （`stickScrollVp − 48`），所以滚到头时倒影刚好盖完、相机仍完整留在屏幕上。
+  滚到底的偏移 = `stickScrollVp`（顶部内边距 + 立牌上沿），卡片高度按它来配；
+- **标题反色**（1.54.1）：相机页标题栏全透明，滚动进度经 `CameraPage.onScrollProgress`
+  回传给 `MainScreen` 的 `@Local cameraProgress`，超过 0.55 时标题转白、序列号转浅白。
+  **不要用 `@ObservedV2` 单例传这个值**：实测 `MainScreen` 不会因此重渲染；
 - **`onScroll` 的第二个参数是本帧增量，不是累计位置**（实测每帧 1~2vp）。
   求 lift 必须用 `Scroller.currentOffset().yOffset`；用回调参数会永远算出 0；
 - **顶部避让改用 padding 而不是 `contentStartOffset`**：后者会把初始位置直接推到

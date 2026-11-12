@@ -7,6 +7,7 @@ import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2 }
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { Haptics } from '../utils/Haptics';
+import { UiScrollState } from '../model/UiScrollState';
 import { WindowUtils } from '../utils/WindowUtils';
 /**
  * 四选一的四项，顺序与 `CameraLinkMode` 的枚举值一一对应。
@@ -53,6 +54,15 @@ const DRAWER_MAX_LIFT = REFLECTION_HEIGHT;
  * 让深色往下多铺一个圆角、再用负 margin 把布局高度收回去，弧里才是深色。
  */
 const COVER_ROUND = Radius.Card;
+/** 立牌上沿在卡片内的位置（相机区上内边距）。 */
+const COVER_TOP_PAD = 14;
+/**
+ * 「立牌刚好顶到屏幕顶」需要滚过的距离：页面顶部内边距 + 立牌上沿。
+ * 滚到这里时相机完整可见、上沿贴着屏幕顶，再往下就没有内容可滚了。
+ */
+function stickScrollVp(): number {
+  return titleBarTotalVp() + 8 + COVER_TOP_PAD;
+}
 
 /**
  * 相机页。
@@ -78,6 +88,7 @@ const COVER_ROUND = Radius.Card;
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
+  @Local scrollState: UiScrollState = UiScrollState.getInstance();
   @Param scroller: Scroller = new Scroller();
   @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
@@ -91,6 +102,8 @@ export struct CameraPage {
   @Event onConnectWireless: () => void = () => {};
   /** 切换链路模式（USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA）。 */
   @Event onSelectMode: (mode: number) => void = (_m: number) => {};
+  /** 滚动进度回调（0~1）：标题栏靠它决定何时反色。 */
+  @Event onScrollProgress: (progress: number) => void = (_p: number) => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
@@ -656,11 +669,10 @@ export struct CameraPage {
    */
   private drawerMinHeight(): number {
     const screenVp = this.getUIContext().px2vp(WindowUtils.windowHeightPx);
-    // 两段可滚空间：
-    //   ① 标题栏高度——把相机立牌顶到屏幕顶；
-    //   ② DRAWER_MAX_LIFT——抽屉接着上移、把倒影盖完。
-    // 所以卡片 = 一屏 − 顶部内边距 + 这两段。
-    return screenVp + DRAWER_MAX_LIFT;
+    // 可滚总量 = 立牌顶到屏幕顶所需的距离。抽屉的 48vp 位移在滚到头之前
+    // 就已完成（见 onScroll），所以不再额外加 DRAWER_MAX_LIFT——否则滚到底时
+    // 相机会被推出屏幕。卡片 = 一屏 + 立牌上沿，正好滚这么多。
+    return screenVp + COVER_TOP_PAD;
   }
 
   /**
@@ -749,6 +761,23 @@ export struct CameraPage {
         this.ModeControls()
 
         Divider().color($r('app.color.divider'))
+
+        // TEMP: 第三段验证用的假内容，确认后删除
+        Column({ space: 8 }) {
+          ForEach([0, 1, 2, 3, 4, 5], (i: number) => {
+            Row() {
+              Text(`占位内容 ${i + 1}`)
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+            }
+            .width('100%')
+            .height(64)
+            .padding({ left: 12 })
+            .borderRadius(Radius.Chip)
+            .backgroundColor($r('app.color.bg_page'))
+          }, (i: number) => `${i}`)
+        }
+        .width('100%')
 
         // 连接步骤：并入抽屉后不再单独成卡
         Column({ space: 10 }) {
@@ -1034,10 +1063,18 @@ export struct CameraPage {
     .onScroll(() => {
       // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
       // 拿它算 lift 会永远得 0。这里直接问 Scroller 要当前偏移。
+      // lift 在「立牌到顶」之前 48vp 就启动：页面继续上移的同时抽屉追上去，
+      // 等滚到头时 lift 正好走满，相机完整留在屏幕上。
       const y = this.scroller.currentOffset().yOffset;
-      const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (titleBarTotalVp() + 8)));
+      const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
       if (Math.abs(lift - this.drawerLift) > 0.5) {
         this.drawerLift = lift;
+      }
+      // 标题反色进度：滚到立牌顶到屏幕顶时走满
+      const progress = Math.max(0, Math.min(1, y / stickScrollVp()));
+      if (Math.abs(progress - this.scrollState.cameraProgress) > 0.02) {
+        this.scrollState.cameraProgress = progress;
+        this.onScrollProgress(progress);
       }
     })
   }
