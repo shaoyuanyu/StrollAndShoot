@@ -648,7 +648,8 @@ export struct CameraPage {
    */
   private drawerMinHeight(): number {
     const screenVp = this.getUIContext().px2vp(WindowUtils.windowHeightPx);
-    return screenVp - titleBarTotalVp() - 8;
+    // 多出 DRAWER_MAX_LIFT：一进页面就有 48vp 可滚，抽屉才能被滚出来
+    return screenVp - titleBarTotalVp() - 8 + DRAWER_MAX_LIFT;
   }
 
   /**
@@ -757,17 +758,15 @@ export struct CameraPage {
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
-      // margin 固定、位移走 offset：offset 不参与布局，卡片高度就不会随
-      // lift 变化（高度一变就会触发重排、滚动时抖动，而且实测高度又会反过来
-      // 影响卡片高度，形成自引用收缩——抽屉会被直接裁没）
-      // 负 margin-bottom 把底部那 48vp 缓冲从布局里扣掉：静止时它恰好被卡片
-      // 裁掉（看到的是 16vp 底部留白），上移后才会露出来。用布局而不是实测
-      // 高度，避免「卡片高度 ↔ 抽屉高度」的自引用收缩。
-      .margin({ bottom: -DRAWER_MAX_LIFT })
+      // 位移只走 offset（不参与布局）：卡片高度恒定，滚动时不重排。
+      // 抽屉底部一直铺到卡片底，上移后露出的那 48vp 是卡片自己的白色底，
+      // 与抽屉同色，所以看不出「底部漏出来」。
       .offset({ y: -this.drawerLift })
     }
     .width('100%')
     .constraintSize({ minHeight: this.drawerMinHeight() })
+    // 卡片底保持深色：抽屉顶部圆角要露出深色才看得见。抽屉上移后底部
+    // 露出的那 48vp 深色正好落在屏幕下缘、并且被悬浮页签挡住，实际不可见。
     .backgroundColor($r('app.color.cover_bg'))
     .borderRadius(Radius.Card)
     .shadow(CardShadow)
@@ -812,6 +811,7 @@ export struct CameraPage {
       })
     }
     .width('100%')
+    .backgroundColor($r('app.color.cover_bg'))
   }
 
   /**
