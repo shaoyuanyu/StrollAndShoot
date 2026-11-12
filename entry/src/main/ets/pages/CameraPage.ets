@@ -641,6 +641,17 @@ export struct CameraPage {
    * 立牌于是和其它卡处在同一套尺度里，不再是通栏的一条「海报」。
    */
   /**
+   * 相机卡的最小高度：一屏减掉标题栏与页面顶部内边距。
+   *
+   * 抽屉要「拉到底」——即使内容是空白，白色面板也应该铺到屏幕底部，
+   * 而不是在最后一行文字下面就把页面底色露出来。
+   */
+  private drawerMinHeight(): number {
+    const screenVp = this.getUIContext().px2vp(WindowUtils.windowHeightPx);
+    return screenVp - titleBarTotalVp() - 8;
+  }
+
+  /**
    * 相机卡 = 固定的相机区 + 一张**跟随页面滚动**上移的白色抽屉（1.53.0）。
    *
    * 它不是可拖拽的抽屉组件，没有把手、没有手势：整个页面照常用上下滑动，
@@ -742,6 +753,7 @@ export struct CameraPage {
       // 底部多留 DRAWER_MAX_LIFT：卡片高度按「抽屉已经拉到底」算，
       // 静止时这段缓冲正好被卡片裁掉，上移后才会露出来。
       .padding({ left: 16, right: 16, top: 16, bottom: 16 + DRAWER_MAX_LIFT })
+      .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
@@ -755,6 +767,7 @@ export struct CameraPage {
       .offset({ y: -this.drawerLift })
     }
     .width('100%')
+    .constraintSize({ minHeight: this.drawerMinHeight() })
     .backgroundColor($r('app.color.cover_bg'))
     .borderRadius(Radius.Card)
     .shadow(CardShadow)
@@ -987,7 +1000,7 @@ export struct CameraPage {
 
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 96 })
+      .padding({ left: 16, right: 16, top: 8 })
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)

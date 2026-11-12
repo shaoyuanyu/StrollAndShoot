@@ -162,6 +162,10 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
   卡片裁掉（可见 16vp 底部留白），上移后才露出来，内容不会被切；
 - 位移只走 `offset({ y: -drawerLift })`，**不参与布局**，所以卡片高度恒定、
   滚动时不重排；
+- **抽屉铺到屏幕底**：相机卡用 `constraintSize({ minHeight })` 撑到
+  「屏幕高 − 标题栏 − 8」，抽屉 `layoutWeight(1)` 吃掉剩余高度。内容不足一屏时
+  白色面板也一直铺到底，不会在最后一行文字下面露出页面底色；页面底部那 96vp 的
+  tab 让位改由「卡片下面还有内容时才补的占位」承担，否则未连接时页面会白滚一截。
 - `drawerLift = clamp(scrollY, 0, 48)`，由 `Scroll.onScroll` 驱动；
 - 入场动画：`aboutToAppear` 里先置于 48 再 `animateTo` 到 0（抽屉从盖住
   倒影滑到露出倒影）。
