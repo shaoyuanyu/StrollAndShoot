@@ -77,22 +77,35 @@ const TEMP_ROW_INDEXES: number[] = [
 ];
 
 /**
- * 顶边下拉（初始位置继续往下滑）抽屉最多能往下走多少 vp。
+ * 顶边下拉时，**整张深色卡片**（圆角、深色底、机身与倒影一起）走多少比例。
  *
- * 下拉时**不移动卡片**（卡片一挪，标题栏那 130vp 的页面底色就被带出来了），
- * 而是让抽屉从倒影上滑下去、露出更多倒影；背景仍然全是深色背板。
- *
- * 96 = 倒影图自身的剩余高度（翻转图 144 高，静止时只露 48），也就是「最多把
- * 整面倒影都看出来」。**不要**用固定的小上限（1.59.0 是 24/56）：原生弹簧给的
- * 越界量轻松过百，硬截一段就会出现「手指还在走、画面已经不动」的死区，手感上
- * 既弱又像卡住。
+ * 抽屉走满 1，卡片只走 1/3：下拉时卡片先自己往下弹一小段（这是"卡面也有弹簧"
+ * 的那一段），剩下的行程让抽屉在卡内继续打开、露出更多倒影。**不能为 0**——
+ * 用户要的就是卡面也跟着弹；也不能太大，否则抽屉在卡内几乎不动、倒影不增长。
  */
-const TOP_PULL_MAX = 96;
+const CARD_PULL_RATIO = 1 / 3;
 /**
- * 倒影盒子高度：布局上恒定，抽屉静止时用 `offset` 抵消掉 `TOP_PULL_MAX`。
- * 它等于翻转图自身的高度——再高也没有画面可露了。
+ * 静止时露出的倒影高度（= `REFLECTION_HEIGHT`）之外，最多还能再看出来多少 vp。
+ * 翻转图自身只有 144 高，所以最多再加 96：再多也没有画面可露了。
  */
-const REFLECTION_BOX = REFLECTION_HEIGHT + TOP_PULL_MAX;
+const REFLECTION_GROW_MAX = STANDEE_HEIGHT - REFLECTION_HEIGHT;
+/**
+ * 倒影盒子高度（布局上恒定）= 翻转图自身高度。抽屉静止时用 `offset` 把
+ * `REFLECTION_GROW_MAX` 那段藏到抽屉后面，下拉时滑出来。
+ */
+const REFLECTION_BOX = REFLECTION_HEIGHT + REFLECTION_GROW_MAX;
+/**
+ * 顶边下拉时**抽屉**最多能走多少 vp（卡片走其中的 `CARD_PULL_RATIO`）。
+ *
+ * **这个数是算出来的，不要手写。** 卡片自己也在往下走，抽屉在卡片内部又能再
+ * 打开一截，所以「倒影完整露出」要求：
+ *   可见倒影 = REFLECTION_HEIGHT + 抽屉位移 − 卡片位移
+ *           = REFLECTION_HEIGHT + p·(1 − CARD_PULL_RATIO)
+ * 要求它 ≥ REFLECTION_BOX：
+ *   p ≥ REFLECTION_GROW_MAX / (1 − CARD_PULL_RATIO) = 96 / (2/3) = 144
+ * 取小一点就会出现「倒影还没露完，抽屉已经停住」的硬边。
+ */
+const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
 /** 倒影渐变的「保持透明」段长度（vp）：这一段完全透出镜像，之后才开始淡出。 */
 const REFLECTION_FADE_HOLD = 16;
 
@@ -766,7 +779,8 @@ export struct CameraPage {
    * `标题栏 + 8 - stick`，相机于是钉在屏幕顶部、上方只留 `COVER_TOP_GAP`。
    */
   private cardContentY(): number {
-    return titleBarTotalVp() + 8 + this.scrollOver;
+    // 顶边下拉时整张卡再往下走一小段（`cardPullShift`），卡面因此也有回弹
+    return titleBarTotalVp() + 8 + this.scrollOver + this.cardPullShift();
   }
 
   /**
@@ -793,8 +807,8 @@ export struct CameraPage {
       // Column 里不会把布局收回去，抽屉会整体下移，圆角又落到白底上。
       Column()
         .width('100%')
-        // 下拉到底时抽屉顶边落在 `COVER_HEIGHT + TOP_PULL_MAX`，圆角比它再多一个
-        .height(COVER_HEIGHT + TOP_PULL_MAX + COVER_ROUND)
+        // 卡内抽屉最多打开 `REFLECTION_GROW_MAX`，圆角比它再多一个
+        .height(COVER_HEIGHT + REFLECTION_GROW_MAX + COVER_ROUND)
         .backgroundColor($r('app.color.cover_bg'))
 
       Column() {
@@ -936,12 +950,12 @@ export struct CameraPage {
       // 一个位移搞定三件事：抵消倒影的预留段（静止时抽屉仍在 COVER_HEIGHT 处）、
       // 顶边下拉（`pullDown` 让抽屉往下滑、露出更多倒影）、第二段 lift（向上）。
       // 全是渲染属性，下拉期间不触发重排。
-      .offset({ y: this.pullDown - TOP_PULL_MAX - this.drawerLift })
+      .offset({ y: this.drawerPullShift() - REFLECTION_GROW_MAX - this.drawerLift })
       }
       .width('100%')
       // 明确定高：相机区 + 抽屉盒子。它比卡片高 `DRAWER_MAX_LIFT`，多出来
       // 的一截由卡片裁掉——不能靠 Column 自己收缩，否则抽屉会被压扁。
-      .height(COVER_HEIGHT + TOP_PULL_MAX + this.drawerBoxHeight())
+      .height(COVER_HEIGHT + REFLECTION_GROW_MAX + this.drawerBoxHeight())
     }
     .width('100%')
     .height(this.cardHeight())
@@ -1030,7 +1044,19 @@ export struct CameraPage {
    * 推到 `(48 + p) / REFLECTION_BOX`，于是渐变始终在不透明的抽屉顶边处结束。
    */
   private reflectionFadeEnd(): number {
-    return (REFLECTION_HEIGHT + this.pullDown) / REFLECTION_BOX;
+    // 可见倒影 = 48 + 抽屉位移 − 立牌位移；收尾点再除盒子高，钳到 1
+    const visible = REFLECTION_HEIGHT + this.drawerPullShift();
+    return Math.min(1, visible / REFLECTION_BOX);
+  }
+
+  /** 整张深色卡片的下移量：抽屉行程的 `CARD_PULL_RATIO`。 */
+  private cardPullShift(): number {
+    return this.pullDown * CARD_PULL_RATIO;
+  }
+
+  /** 抽屉在**卡片内部**再打开多少：总行程减去卡片自己已经走掉的那段。 */
+  private drawerPullShift(): number {
+    return this.pullDown - this.cardPullShift();
   }
 
   private reflectionOpacity(): number {
