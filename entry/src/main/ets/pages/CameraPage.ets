@@ -829,11 +829,11 @@ export struct CameraPage {
         .interpolation(ImageInterpolation.High)
         .draggable(false)
         .scale({ x: 1, y: -1 })
-        // 素材已裁到「机身实心底＝画布底」，镜像线正好落在机身上，不用再挪
-        .translate({ y: -1 })
+        // 素材已裁到「机身实心底＝画布底」且底座保持不透明，镜像线正好落在
+        // 机身底边上，不需要位移（挪一点反而会在中间露出一行背景）
+        .translate({ y: 0 })
         // 产品图只有 780px 宽，铺到这个尺寸要放大 1.3 倍，放大后压缩块的边角会
         // 透出来；倒影本来就该「隐隐约约」，加一点模糊最省事也最像反光。
-        .blur(2)
         .opacity(this.reflectionOpacity())
       Column()
         .width('100%')
