@@ -119,6 +119,19 @@ const REFLECTION_BOX = REFLECTION_HEIGHT + REFLECTION_GROW_MAX;
 const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
 /** 倒影渐变的「保持透明」段长度（vp）：这一段完全透出镜像，之后才开始淡出。 */
 const REFLECTION_FADE_HOLD = 16;
+/**
+ * 第二段「形变」（面板撑满 / 白面收边）相对滚动进度的提前量指数（1.63.5）。
+ *
+ * 为什么不是 1（= 跟滚动线性同步）：松手吸附用的是框架的限位动画，它的曲线在
+ * **前一半时间就走掉 88% 的偏移**，后一半（约 300ms）只走最后 1vp。偏移没动多少，
+ * 但「进度」还有 12% 没走完——面板那 4.6% 的放大（≈16vp 宽）会在这 300ms 里继续
+ * 慢慢长完，眼睛看到的就是「已经吸附住了，卡面还在放大」。
+ * 把形变进度换成 `1 − (1 − p)^2.2`：到位 87.5% 时形变已经到 99%（残余 ≈0.2vp，
+ * 看不见），于是收尾那段只剩偏移在爬，形变早就落定。**面板与白面必须用同一条曲线**
+ * ——任何一个时刻面板比白面宽，面板的深色就会从边缝里漏出来。
+ * 想让它更早收：调大指数；1 就是退回线性同步。
+ */
+const STAGE2_SHAPE_EXP = 2.2;
 
 /*
  * 下面三个常数是「立体感」的三层光，合起来讲一个光源在正上方的故事：
@@ -807,6 +820,17 @@ export struct CameraPage {
   }
 
   /**
+   * 第二段的「形变进度」：面板撑满 + 白面收边按它走，比滚动进度更早收尾。
+   *
+   * 吸附动画后 300ms 只走不到 1vp 的偏移，线性同步会让放大一直拖到动画结束；
+   * 提前量见 `STAGE2_SHAPE_EXP`。
+   */
+  private stage2Shape(): number {
+    const p = this.stage2Progress();
+    return 1 - Math.pow(1 - p, STAGE2_SHAPE_EXP);
+  }
+
+  /**
    * 面板横向撑满所需的缩放比 = 屏幕宽 /（屏幕宽 − 2×`PANEL_SIDE_MARGIN`）。
    *
    * 365.7vp 的机器上 = 365.7 / 349.7 ≈ 1.046。面板宽 349.7 乘它正好 365.7，
@@ -826,7 +850,7 @@ export struct CameraPage {
 
   /** 当前缩放：静止 1，第二段结束时 `panelGrowScale()`。 */
   private panelScale(): number {
-    return 1 + (this.panelGrowScale() - 1) * this.stage2Progress();
+    return 1 + (this.panelGrowScale() - 1) * this.stage2Shape();
   }
 
   /**
@@ -836,7 +860,7 @@ export struct CameraPage {
    * 完整盖住，不会从边缝里漏出深色；两者同时到 0，贴顶那一帧整个画面左右齐边。
    */
   private sheetSideMargin(): number {
-    return CARD_SIDE_MARGIN * (1 - this.stage2Progress());
+    return CARD_SIDE_MARGIN * (1 - this.stage2Shape());
   }
 
   /** 抽屉里真正能看见内容的高度（扣掉上下 16 的内边距）。 */
@@ -1486,6 +1510,27 @@ export struct CameraPage {
       // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
       // 第二段（stick-48 → stick）：抽屉相对相机上收 48，正好收到机身底边；
       // 第三段（stick 之后）：相机不动，抽屉内容自己滚。
+      //
+      // **第一段 / 第二段松手吸附**（1.63.0）：这两段是一条连续动画（整页上移，
+      // 同时抽屉追上去把倒影收干净），手指在半路松开的话画面会冻在「相机悬在半空、
+      // 倒影只淡掉一半」的中间态，所以松手后由框架的限位滚动归位到最近端点。
+      //
+      // **1.63.1–1.63.3 曾改成自己 scrollTo + 自定义贝塞尔**（为了把漫长的收尾
+      // 加速），落点正确、数值也确实更硬，但用户实测觉得「不连贯」——手写动画
+      // 从零速起步、而框架的吸附接着松手时的速度走，衔接处的手感对不上。
+      // 1.63.4 起**回到官方 scrollSnap**：宁可接受它 575ms 的长尾巴，也要衔接
+      // 自然。要再动这条动画，先看 PAGES.md「其余要点」里 1.63.1–1.63.4 的实测。
+      //
+      // 分页点只有两个：0（原位）与 `stickScrollVp()`（贴顶）。第二段的终点与
+      // 第一段共用同一个偏移，所以只有两个停留点。
+      // `enableSnapToEnd: false` 是**关键**：官方语义是「允许在最后一页和末尾之间
+      // 自由滑动」，去掉它第三段就废了（抽屉内容一松手就弹回开头）。
+      .scrollSnap({
+        snapAlign: ScrollSnapAlign.START,
+        snapPagination: [0, stickScrollVp()],
+        enableSnapToStart: true,
+        enableSnapToEnd: false
+      })
       .onScrollStop(() => {
         // 惯性结束补一帧：最后一帧如果没进 onScroll，三个位移会停在倒数第二个
         // 位置（大约差 1~2vp），停下来之后相机就歪了那一两 vp。
