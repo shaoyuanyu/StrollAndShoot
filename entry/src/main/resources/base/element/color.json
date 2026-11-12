@@ -33,6 +33,10 @@
       "value": "#FFFFFF"
     },
     {
+      "name": "control_track",
+      "value": "#E4E6EA"
+    },
+    {
       "name": "bg_page",
       "value": "#F1F3F5"
     },

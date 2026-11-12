@@ -75,3 +75,20 @@ export class ControlHeight {
 export function pillRadius(height: number): number {
   return height / 2;
 }
+
+/**
+ * 页面卡片的投影。
+ *
+ * 深色下卡片（`#1C1C1E`）压在纯黑页面上，亮度差 28，自己就浮得起来；浅色下
+ * 白卡压在 `#F1F3F5` 上，差值只有 13，整页会「发平」——这层极淡的投影
+ * （6% 黑、18 模糊、下移 5）补的就是这个差。深色下黑投影落在纯黑背景上看不见，
+ * 所以不需要按主题分支。
+ *
+ * 只加在 24vp 圆角的页面卡片上；卡内的分隔线、行、控件不要再叠。
+ */
+export const CardShadow: ShadowOptions = {
+  radius: 18,
+  color: '#0F000000',
+  offsetX: 0,
+  offsetY: 5
+};

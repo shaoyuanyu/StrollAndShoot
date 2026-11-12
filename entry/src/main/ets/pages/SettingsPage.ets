@@ -10,7 +10,7 @@ import { cameraStandeeKeys, cameraStandeeLabel } from '../utils/CameraStandee';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { L10n } from '../utils/L10n';
-import { ControlHeight, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
+import { CardShadow, ControlHeight, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import { GlassEffect } from '../utils/GlassEffect';
 
 /** 深色模式下拉的取值顺序，与 DARK_OPTIONS 一一对应。 */
@@ -374,6 +374,7 @@ export struct SettingsPage {
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
         .borderRadius(Radius.Card)
+        .shadow(CardShadow)
 
         // ---- 画廊 ----
         this.GroupTitle($r('app.string.settings_section_gallery'))
@@ -405,6 +406,7 @@ export struct SettingsPage {
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
         .borderRadius(Radius.Card)
+        .shadow(CardShadow)
 
         // ---- 定位 ----
         this.GroupTitle($r('app.string.settings_section_location'))
@@ -467,6 +469,7 @@ export struct SettingsPage {
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
         .borderRadius(Radius.Card)
+        .shadow(CardShadow)
 
         // ---- 存储 ----
         this.GroupTitle($r('app.string.settings_section_storage'))
@@ -482,6 +485,7 @@ export struct SettingsPage {
         .width('100%').height(RowHeight.Single).padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
         .borderRadius(Radius.Card)
+        .shadow(CardShadow)
         .onClick(() => { this.onOpenCacheManagement(); })
 
         // ---- 关于 ----
@@ -498,6 +502,7 @@ export struct SettingsPage {
         .width('100%').height(RowHeight.Single).padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))
         .borderRadius(Radius.Card)
+        .shadow(CardShadow)
 
         // ---- 调试 ----
         if (this.debugBuild) {
@@ -623,6 +628,7 @@ export struct SettingsPage {
           .width('100%').padding(16)
           .backgroundColor($r('app.color.bg_surface'))
           .borderRadius(Radius.Card)
+          .shadow(CardShadow)
         }
       }
       .width('100%')

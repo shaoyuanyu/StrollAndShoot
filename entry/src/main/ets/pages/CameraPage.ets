@@ -1,11 +1,12 @@
 import { CameraService } from '../services/CameraService';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
-import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
+import { CardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2 } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
+import { Haptics } from '../utils/Haptics';
 import { WindowUtils } from '../utils/WindowUtils';
 /**
  * 四选一的四项，顺序与 `CameraLinkMode` 的枚举值一一对应。
@@ -266,11 +267,18 @@ export struct CameraPage {
     TabSegmentButtonV2({
       items: MODE_ITEMS,
       selectedIndex: this.svc.linkMode,
-      $selectedIndex: (index: number) => { this.onSelectMode(index); },
+      $selectedIndex: (index: number) => {
+        // 只有真的换了一档才震一下。点当前项、以及程序回写 selectedIndex
+        // 都不该有反馈——振动一滥用就成了噪音。
+        if (index !== this.svc.linkMode) {
+          Haptics.tap();
+        }
+        this.onSelectMode(index);
+      },
       itemFontSize: LengthMetrics.fp(FontSize.Section),
       itemSelectedFontSize: LengthMetrics.fp(FontSize.Section),
       itemFontWeight: FontWeight.Regular,
-      itemSelectedFontWeight: FontWeight.Medium,
+      itemSelectedFontWeight: FontWeight.Bold,
       itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
       itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.primary')),
       itemPadding: {
@@ -284,7 +292,10 @@ export struct CameraPage {
       buttonMinHeight: LengthMetrics.vp(44),
       buttonPadding: LengthMetrics.vp(4),
       buttonBorderRadius: LengthMetrics.vp(22),
-      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page')),
+      // 轨道不能用 bg_page：那是页面底色，浅色下白卡 255、轨道 242，差值只有 13，
+      // 整条轨道像「卡片被切开一道缝」。control_track 浅色 228（差值 27），
+      // 深色仍是纯黑（卡片 28 → 轨道 0，同样是 27），两种主题的层次强度对齐。
+      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.control_track')),
       itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_surface')),
       // 切换时胶囊滑动 + 文字颜色过渡（API 24 起，项目 target 26）
       enableStateAnimation: true
@@ -344,6 +355,7 @@ export struct CameraPage {
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius(Radius.Card)
+      .shadow(CardShadow)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -712,6 +724,7 @@ export struct CameraPage {
     .width('100%')
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
+    .shadow(CardShadow)
     // 圆角裁剪：封面那层径向光的矩形边界落在卡片四角上，不裁会露出直角
     .clip(true)
   }
@@ -847,6 +860,7 @@ export struct CameraPage {
     .padding({ left: 16, right: 16 })
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
+    .shadow(CardShadow)
   }
 
   /** 次要操作单独一张卡：全量扫描（会丢缓存）与断开连接。 */
@@ -870,6 +884,7 @@ export struct CameraPage {
     .padding({ left: 16, right: 16 })
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
+    .shadow(CardShadow)
   }
 
   /**
@@ -918,6 +933,7 @@ export struct CameraPage {
     .padding(16)
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
+    .shadow(CardShadow)
   }
 
   build() {

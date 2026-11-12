@@ -9,7 +9,7 @@ import { CameraCachePrefs, type CameraCachePref } from '../services/CameraCacheP
 import { ThumbnailCache, type CacheInfo } from '../services/ThumbnailCache';
 import { L10n } from '../utils/L10n';
 import { formatIsoDate } from '../utils/DateTimeText';
-import { FontSize, IconSize, Radius } from '../utils/UiTokens';
+import { CardShadow, FontSize, IconSize, Radius } from '../utils/UiTokens';
 
 @Builder
 export function CacheManagementPageBuilder() {
@@ -183,6 +183,7 @@ export struct CacheManagementPage {
                 .width('100%').padding(16)
                 .backgroundColor($r('app.color.bg_surface'))
                 .borderRadius(Radius.Card)
+                .shadow(CardShadow)
               }
               .margin({ bottom: 8 })
             })

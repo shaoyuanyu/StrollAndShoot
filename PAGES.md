@@ -250,17 +250,23 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 | 参数 | 取值 | 说明 |
 |---|---|---|
-| `buttonBackgroundColor` | `bg_page` | 轨道，比卡片暗一档 |
+| `buttonBackgroundColor` | `control_track` | 轨道，见下方「轨道为什么不用 `bg_page`」 |
 | `itemSelectedBackgroundColor` | `bg_surface` | 选中项从轨道浮起，回到卡片亮度 |
 | `itemFontColor` / `itemSelectedFontColor` | `text_secondary` / `primary` | |
 | `itemFontSize` / `itemSelectedFontSize` | `FontSize.Section`（13） | 12 太局促；14 时 `Wi-Fi STA` 会顶满两段 |
-| `itemFontWeight` / `itemSelectedFontWeight` | Regular / Medium | |
+| `itemFontWeight` / `itemSelectedFontWeight` | Regular / **Bold** | 1.51.0 由 Medium 提到 Bold：13fp 下 Medium 几乎看不出 |
 | `itemMinHeight` / `buttonMinHeight` | 36 / 44 | 原来是 52 的双行，现在单行 |
 | `itemBorderRadius` / `buttonBorderRadius` | 18 / 22 | 内嵌 4vp，圆角跟着小一档 |
 
-**两种主题下都是「选中项更亮」**：浅色 `#F1F3F5` 浮 `#FFFFFF`，深色 `#000000` 浮
+**两种主题下都是「选中项更亮」**：浅色 `#E4E6EA` 浮 `#FFFFFF`，深色 `#000000` 浮
 `#1C1C1E`。选中胶囊因此与卡片同色——它在视觉上不是「卡片上的一块白」，而是
 「从轨道里抬到卡片那一层」，不靠阴影也立得住。
+
+**轨道为什么不用 `bg_page`（1.51.0）**：`bg_page` 是页面底色，浅色下
+`#F1F3F5`(242) 与白卡 255 只差 13，整条轨道看起来像「卡片被切开一道缝」；
+同一份色值在深色下是卡片 28 → 轨道 0，差值 28，观感反而很好。所以浅色需要
+一条独立的、比 `bg_page` 更深的轨道（`#E4E6EA`，228，差值 27），把两种主题的
+**层次强度对齐**——这才是「深色质感好、浅色发平」的直接原因。
 
 **选择器下面紧跟当前模式的一句话**（`camera_mode_desc_*`，12fp `text_secondary`），
 两者间距 8vp、读成一组。这句话原来在下面「连接步骤」卡的开头，而那张卡在首屏
@@ -272,6 +278,10 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 **不要加回图标**：`Wi-Fi AP` 与 `Wi-Fi STA` 的区别不是任何一张图能画出来的，
 四个图标只会把控件重新拉回「双行 + 不统一笔画」的老问题。
+
+切换模式时调用 `Haptics.tap()`（`utils/Haptics.ets`，10ms、`usage: 'touch'`）。
+规则是**只在真的换了一档时震**：点当前项、程序回写 `selectedIndex` 都不震。
+项目里这是唯一一处触觉调用，不要往滚动、普通点击上铺。
 
 **材质**：`TabSegmentButtonV2` 虽然有 `backgroundSystemMaterial`（API 26），但官方
 《组件适配沉浸光感》写明分段按钮的沉浸光感**只在 Navigation/NavDestination 标题栏
@@ -333,6 +343,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 卡内**不再套一层实底块**。设置页是「页面底 → 卡片」两级，相机页以前多一层 `filter_chip_bg` 灰块，深色下发闷；现在是「卡片 → hairline 分隔」。
 - **卡片统一 24vp 圆角、16vp 内边距，立牌那张卡也一样**；相机卡要 `clip(true)`，否则封面那层径向光的矩形四角会露出直角。
+- **每张页面卡片都要带 `CardShadow`**（`UiTokens.ets`，`radius 18 / #0F000000 / offsetY 5`）。这不是装饰：深色下卡片 `#1C1C1E` 压在纯黑页面上有 28 的亮度差，自己就浮得起来；浅色下白卡压在 `#F1F3F5` 上只差 13，没有这层极淡的投影整页会发平。深色下黑投影落在纯黑背景上看不见，所以不需要按主题分支。只加在 24vp 圆角的卡片上，卡内的行与控件不要再叠。
 - 相机卡内部：`Column({ space: 12 })`，封面在上、下面依次是状态头、扫描进度、错误、`Divider`、四选一 + 当前模式一句话、模式专属控件。封面上边距 14vp，内容区上边距 12vp（**没有立牌**时改为 16vp）。
 - 行高 56vp；状态头 16fp Medium、正文 15fp、步骤与说明 12fp、note 10fp。
 - 已连接时状态头右侧是照片数胶囊（`primary_soft` + `primary`）；此时不再显示 `scanStatsText`（「照片 38 张 | 扫描完成」），否则一张卡里同一个数字出现两遍。

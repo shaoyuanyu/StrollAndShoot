@@ -7,7 +7,7 @@ import { TITLE_BAR_HEIGHT, titleBarInsetVp } from '../utils/TitleBarMetrics';
 import { type GpsDayTrack } from '../utils/GpsTrack';
 import { L10n } from '../utils/L10n';
 import { formatDayKey } from '../utils/DateTimeText';
-import { ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
+import { CardShadow, ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import type { GpsDailyGroup } from '../model/PhotoEntry';
 import { GlassEffect } from '../utils/GlassEffect';
 
@@ -157,6 +157,7 @@ struct GpsDayCard {
     .width('100%')
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
+    .shadow(CardShadow)
     .border({
       width: this.selectMode && this.selected() ? 1.5 : 0,
       color: $r('app.color.primary')

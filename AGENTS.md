@@ -111,7 +111,7 @@ devecocli build clean
 - **签好的 HAP 能装真机**（2026-11-06 实测）：Profile 的 `debug-info.device-ids` 里登记了真机 UDID，手机打开无线调试后 `hdc -t IP:端口 install -r entry-default-signed.hap` 1.4 秒装完并成功启动。真正装不进的是**模拟器**，它只接受 unsigned 包。
 - `build-profile.json5` 里两个 product 都是 `targetSdkVersion: "26.0.0"`、`compatibleSdkVersion: "26.0.0"`：功能、行为变更与最低安装版本统一按 API 26，**只能安装到 7.0.0 及以上设备**，因此调用 API 26 接口不需要再包 `deviceInfo.apiAvailable('26.0.0')`。
 - **API 26 起版本号写法变了**：26 及以上写成纯语义化字符串 `"26.0.0"`，不再是 `"6.1.0(23)"` 那种 `M.S.F(N)` 形式。
-- 升级到 26 后已核过的行为变更：`shadow` 的 `radius: 0` 从“无阴影”变为“无模糊阴影”、Media Library `READ_IMAGEVIDEO` 只能读本地图库、`.kernel` 权限需 bin 显式声明——本项目均未触及（未用 `shadow`、未申请 `READ_IMAGEVIDEO`、手机应用无 bin 子进程）。
+- 升级到 26 后已核过的行为变更：`shadow` 的 `radius: 0` 从“无阴影”变为“无模糊阴影”、Media Library `READ_IMAGEVIDEO` 只能读本地图库、`.kernel` 权限需 bin 显式声明——本项目未申请 `READ_IMAGEVIDEO`、手机应用无 bin 子进程；`shadow` 自 1.51.0 起用于卡片投影（`CardShadow`，radius 恒大于 0），未触及 `radius: 0` 的新语义。
 - 涉及相机与 USB 的验证仍然只能在真机上做。
 
 ## 目录结构
@@ -128,7 +128,7 @@ StrollAndShoot/
 ├── entry/
 │   ├── build-profile.json5         # 模块构建；CMake 配置在 externalNativeOptions
 │   ├── src/main/
-│   │   ├── module.json5            # ability、权限（INTERNET、LOCATION、APPROXIMATELY_LOCATION、KEEP_BACKGROUND_RUNNING、DETECT_GESTURE）
+│   │   ├── module.json5            # ability、权限（INTERNET、LOCATION、APPROXIMATELY_LOCATION、KEEP_BACKGROUND_RUNNING、DETECT_GESTURE、VIBRATE）
 │   │   ├── ets/
 │   │   │   ├── entryability/       # EntryAbility：窗口尺寸、避让区监听、加载 pages/Index
 │   │   │   ├── pages/              # 页面、PTP 会话层、早期原型页
@@ -801,10 +801,10 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 #### 颜色资源
 
-颜色资源共 49 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
+颜色资源共 50 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
 
 - 品牌与语义：`primary`、`primary_light`、`primary_soft`、`status_connected`、`status_disconnected`、`status_error`、`button_danger`
-- 背景、材质与文本：`bg_page`、`bg_surface`、`bg_page_fade`、`bg_surface_fade`、`bg_debug_log`、`thumbnail_placeholder`、`glass_bg`、`nav_bg`、`nav_bg_mid`、`nav_bg_weak`、`progress_track`、`scrim`、`filter_chip_bg`、`card_border`、`divider`、`text_primary`、`text_secondary`、`text_tertiary`、`text_on_primary`、`text_on_dark`、`log_text`
+- 背景、材质与文本：`bg_page`、`bg_surface`、`bg_page_fade`、`bg_surface_fade`、`bg_debug_log`、`thumbnail_placeholder`、`glass_bg`、`nav_bg`、`nav_bg_mid`、`nav_bg_weak`、`progress_track`、`scrim`、`filter_chip_bg`、`card_border`、`control_track`、`divider`、`text_primary`、`text_secondary`、`text_tertiary`、`text_on_primary`、`text_on_dark`、`log_text`
 - 预览器专用（跟随深浅色；浅色为页面底、深色为纯黑）：`viewer_backdrop`、`viewer_scrim`、`viewer_scrim_top`、`viewer_scrim_clear`、`viewer_banner_bg`、`viewer_text_on_dark_80`、`viewer_text_on_dark_70`、`viewer_chrome_text`、`viewer_chrome_text_secondary`、`viewer_glass_button`、`viewer_chrome`、`viewer_chrome_motion`、`viewer_material_tint`、`viewer_placeholder_bg`、`viewer_placeholder_thumb`、`viewer_placeholder_image`、`viewer_text_secondary`、`viewer_text_tertiary`、`viewer_accent`
 
 设计语言为 HarmonyOS 沉浸光感：
