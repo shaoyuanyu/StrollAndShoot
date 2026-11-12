@@ -669,12 +669,15 @@ export struct CameraPage {
    * 抽屉要「拉到底」——即使内容是空白，白色面板也应该铺到屏幕底部，
    * 而不是在最后一行文字下面就把页面底色露出来。
    */
-  private drawerMinHeight(): number {
+  /**
+   * 相机卡的精确高度 = 一屏 + `stickScrollVp`（外层要滚掉的两段）。
+   *
+   * 外层滚到 stick 就到底，之后的手势交给抽屉内部的 Scroll，
+   * 相机因此停在原地，只有内容继续滚。
+   */
+  private cardHeight(): number {
     const screenVp = this.getUIContext().px2vp(WindowUtils.windowHeightPx);
-    // 可滚总量 = 立牌顶到屏幕顶所需的距离。抽屉的 48vp 位移在滚到头之前
-    // 就已完成（见 onScroll），所以不再额外加 DRAWER_MAX_LIFT——否则滚到底时
-    // 相机会被推出屏幕。卡片 = 一屏 + 立牌上沿，正好滚这么多。
-    return screenVp + COVER_TOP_PAD - COVER_TOP_GAP;
+    return screenVp + stickScrollVp() - (titleBarTotalVp() + 8);
   }
 
   /**
@@ -706,7 +709,9 @@ export struct CameraPage {
       Column() {
       this.CameraCover()
 
-      Column({ space: 12 }) {
+      Column() {
+        Scroll() {
+          Column({ space: 12 }) {
         this.StatusHeader()
 
         if (this.svc.scanTotal > 0) {
@@ -800,26 +805,26 @@ export struct CameraPage {
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
       }
       .width('100%')
-      // 底部多留 DRAWER_MAX_LIFT：卡片高度按「抽屉已经拉到底」算，
-      // 静止时这段缓冲正好被卡片裁掉，上移后才会露出来。
-      .padding({ left: 16, right: 16, top: 16, bottom: 16 + DRAWER_MAX_LIFT })
-      // 用最小高度而不是 layoutWeight：内容少时铺满一屏，内容多时由内容自己
-      // 撑高卡片，页面才能继续滚（第三段）。
-      .constraintSize({ minHeight: this.drawerMinHeight() - COVER_HEIGHT })
+      .padding({ left: 16, right: 16, top: 16, bottom: 16 })
+      .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
-      // 位移只走 offset（不参与布局）：卡片高度恒定，滚动时不重排。
-      // 抽屉底部一直铺到卡片底，上移后露出的那 48vp 是卡片自己的白色底，
-      // 与抽屉同色，所以看不出「底部漏出来」。
       .offset({ y: -this.drawerLift })
       }
       .width('100%')
     }
     .width('100%')
-    .constraintSize({ minHeight: this.drawerMinHeight() })
+    .height(this.cardHeight())
     // 卡片底是白的：抽屉上移后底部露出的 48vp 与抽屉同色。
     // 抽屉顶部圆角需要的深色由相机区自己多铺一个圆角来提供（见 COVER_ROUND）。
     .backgroundColor($r('app.color.bg_surface'))
@@ -1061,6 +1066,11 @@ export struct CameraPage {
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
+    // 外层先滚（两段），滚到底再把手势交给抽屉内部
+    .nestedScroll({
+      scrollForward: NestedScrollMode.PARENT_FIRST,
+      scrollBackward: NestedScrollMode.PARENT_FIRST
+    })
     .align(Alignment.Top)
     // 第一段（0 → 顶部内边距）整页上移，把相机顶到屏幕顶；
     // 第二段（顶部内边距 → +48）抽屉才相对相机上移，把倒影盖完。
