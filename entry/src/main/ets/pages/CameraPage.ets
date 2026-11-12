@@ -133,6 +133,18 @@ const STANDEE_SHADOW_HEIGHT = 18;
 const STANDEE_SHADOW_WIDTH_RATIO = 0.72;
 /** 深色面板底部落在抽屉上的投影高度（vp），跟着抽屉顶边走。 */
 const PANEL_SHADOW_HEIGHT = 24;
+/**
+ * 相机卡的左右页边距（vp，1.62.1）。
+ *
+ * **故意比标题栏的 16 小 4vp**：上滑到第二、三段时标题与「搜索相机」都压在卡上，
+ * 卡片边距和标题栏内边距相等的话，卡片左边线会和标题文字的左边缘连成一条竖线、
+ * 右边线正好切在胶囊按钮边上，看着像对齐失误而不是设计。卡片外扩 4vp 之后，
+ * 标题在卡面上有 4vp 的呼吸位，边界不再连成一线；同时抽屉内容区左右各多 4vp。
+ *
+ * 卡片内部（抽屉）仍用 16 的内边距 —— 那是卡片内容的标准内缩，跟着页边距一起缩
+ * 会让文字贴到圆角边上。
+ */
+const CARD_SIDE_MARGIN = 12;
 
 /**
  * 相机页。
@@ -1327,7 +1339,7 @@ export struct CameraPage {
           this.CameraDrawer()
         }
         .width('100%')
-        .padding({ left: 16, right: 16 })
+        .padding({ left: CARD_SIDE_MARGIN, right: CARD_SIDE_MARGIN })
         .position({ x: 0, y: this.cardContentY() })
       }
       .width('100%')
