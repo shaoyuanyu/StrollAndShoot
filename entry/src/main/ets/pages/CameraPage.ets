@@ -28,16 +28,23 @@ const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
  * 立牌高度（vp）。宽度不写死，按素材宽高比算（见 `standeeWidth()`）：
  * 盒子与画布同比例，`Contain` 才不会在上下留透明带，立牌底边和倒影才能严丝合缝。
  */
-const STANDEE_HEIGHT = 172;
+const STANDEE_HEIGHT = 144;
 /** 倒影高度：取机身下半截，再盖一层渐变淡出。 */
-const REFLECTION_HEIGHT = 76;
+const REFLECTION_HEIGHT = 48;
 
 /**
  * 封面底部的羽化高度（vp）。深色背板靠这一层在底部渐隐到卡片色，
  * 不能省：省掉就是深色与白卡之间一刀切。取值要盖住倒影区的大半，
  * 否则倒影还会在硬边上方"被截断"。
  */
-const COVER_FADE = 96;
+const COVER_FADE = 76;
+
+/**
+ * 相机区总高（vp）：上内边距 + 立牌 + 倒影。抽屉从这一条线开始。
+ * 抽屉最多上拉到「倒影完全被盖住」，也就是 `DRAWER_MAX_LIFT`。
+ */
+const COVER_HEIGHT = 14 + STANDEE_HEIGHT + REFLECTION_HEIGHT;
+const DRAWER_MAX_LIFT = REFLECTION_HEIGHT;
 
 /**
  * 相机页。
@@ -80,10 +87,29 @@ export struct CameraPage {
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
 
+  /**
+   * 抽屉状态。
+   *
+   * - `drawerLift`：抽屉相对静止位置上移了多少 vp（0..DRAWER_MAX_LIFT），
+   *   上拉时相机区的倒影被逐渐盖住；
+   * - `drawerContentH`：抽屉内容实测高度，卡片总高 = 相机区 + 它 - lift，
+   *   所以抽屉上移不会在卡片底部漏出空白；
+   * - `drawerDragStart`：本次拖拽的起点，用来把 offsetY 换算成绝对位移。
+   */
+  @Local drawerLift: number = 0;
+
   aboutToAppear(): void {
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
       this.wifiInput = this.svc.wifiHost;
     }
+    // 抽屉入场：先停在「盖住倒影」，再滑到「倒影完整露出」。这就是抽屉动画，
+    // 不需要把手、也不需要额外手势；之后滚动继续驱动它。
+    this.drawerLift = DRAWER_MAX_LIFT;
+    setTimeout(() => {
+      animateTo({ duration: 420, curve: Curve.EaseOut }, () => {
+        this.drawerLift = 0;
+      });
+    }, 80);
   }
 
   // ------------------------------------------------------------------
@@ -332,40 +358,6 @@ export struct CameraPage {
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)
-  }
-
-  /** 连接步骤：小标题 + 一张说明卡（先一句话说清这个模式，再是相机侧的三步）。 */
-  @Builder
-  GuideSection() {
-    Column({ space: 10 }) {
-      this.GroupTitle($r('app.string.camera_guide_title'))
-      Column({ space: 12 }) {
-        // 模式说明已经搬到相机卡里（选择器正下方）——那里切换时立刻可见。
-        // 这张卡只留「相机侧怎么设」的三步。
-        Column({ space: 10 }) {
-          this.StepRow(0)
-          this.StepRow(1)
-          this.StepRow(2)
-          if (this.guideNote() !== '') {
-            Text(this.guideNote())
-              .fontSize(FontSize.Micro)
-              .lineHeight(16)
-              .fontColor($r('app.color.text_tertiary'))
-              .width('100%')
-          }
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Start)
-      }
-      .width('100%')
-      .padding(16)
-      .alignItems(HorizontalAlign.Start)
-      .backgroundColor($r('app.color.bg_surface'))
-      .borderRadius(Radius.Card)
-      .shadow(CardShadow)
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
   }
 
   /** 状态头：圆点 + 一句完整的话 +（已连接时）照片数 / 蓝牙断开口。 */
@@ -648,12 +640,26 @@ export struct CameraPage {
    * `bg_surface`，所以物体是被压在这张卡上；卡片再统一 24vp 圆角与 16vp 内边距，
    * 立牌于是和其它卡处在同一套尺度里，不再是通栏的一条「海报」。
    */
+  /**
+   * 相机卡 = 固定的相机区 + 一张**跟随页面滚动**上移的白色抽屉（1.53.0）。
+   *
+   * 它不是可拖拽的抽屉组件，没有把手、没有手势：整个页面照常用上下滑动，
+   * 抽屉的相对位移由滚动偏移驱动——滚到 `DRAWER_MAX_LIFT`（= 倒影高度）时
+   * 倒影刚好被完全盖住，机身始终露在外面；继续滚动抽屉就跟着页面一起走。
+   *
+   * 抽屉里装的是整页除了设备信息 / 操作之外的全部内容：状态、连接方式、
+   * 模式控件、连接步骤，所以下面不再是一张独立的「连接步骤」卡。
+   *
+   * 抽屉在正常文档流里排在相机区下面，位移只走 `offset`（不参与布局），
+   * 所以卡片高度恒定、滚动时不会重排；抽屉底部多留 `DRAWER_MAX_LIFT` 的
+   * 缓冲，并由负 `margin-bottom` 从布局里扣掉，静止时被卡片裁掉、上移后
+   * 才露出来，内容不会被切。
+   */
   @Builder
-  CameraCard() {
+  CameraDrawer() {
     Column() {
-      if (this.svc.cameraModel !== '') {
-        this.CameraCover()
-      }
+      this.CameraCover()
+
       Column({ space: 12 }) {
         this.StatusHeader()
 
@@ -679,8 +685,6 @@ export struct CameraPage {
           .width('100%')
         }
 
-        // 照片数已经在状态头右侧的胶囊里了，这行统计再报一遍只是重复；
-        // 只有拿不到胶囊（未连接、或者连上了但还没照片）时才补这一行。
         if (this.svc.scanStatsText !== '' && !(this.svc.connected && this.svc.photoCount > 0)) {
           Text(this.svc.scanStatsText)
             .fontSize(FontSize.Caption)
@@ -688,8 +692,6 @@ export struct CameraPage {
             .width('100%')
         }
 
-        // 失败原因统一写进 lastScanError，切换模式时清空，所以这里显示的一定
-        // 属于当前模式。以前切到 USB 还挂着上一轮的「蓝牙连接失败」。
         if (this.svc.lastScanError !== '') {
           Text(this.svc.lastScanError)
             .fontSize(FontSize.Caption)
@@ -698,14 +700,9 @@ export struct CameraPage {
             .width('100%')
         }
 
-        // 分隔线把这张卡分成两半：线上是「这台机器现在怎么样」，
-        // 线下是「换一种连接方式」——四选一 + 当前模式的专属控件。
         Divider().color($r('app.color.divider'))
 
-        // 选择器 + 当前模式的一句话，读成一组（8vp，比卡片内常规的 12vp 紧一档）。
-        // 这句话必须留在选择器正下方：模式说明原来在下面「连接步骤」卡的开头，
-        // 而那张卡在首屏之外——切完模式屏幕上什么都不变，用户会以为没点上。
-        // 现在切完立刻能读到这一句变了，这才是切换的反馈。
+        // 选择器 + 当前模式的一句话：切完立刻能读到这一句变了，才是切换的反馈。
         Column({ space: 8 }) {
           this.ModePicker()
           Text(this.modeDesc())
@@ -718,21 +715,49 @@ export struct CameraPage {
         .alignItems(HorizontalAlign.Start)
 
         this.ModeControls()
+
+        Divider().color($r('app.color.divider'))
+
+        // 连接步骤：并入抽屉后不再单独成卡
+        Column({ space: 10 }) {
+          Text($r('app.string.camera_guide_title'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+          this.StepRow(0)
+          this.StepRow(1)
+          this.StepRow(2)
+          if (this.guideNote() !== '') {
+            Text(this.guideNote())
+              .fontSize(FontSize.Micro)
+              .lineHeight(16)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .padding({
-        left: 16,
-        right: 16,
-        top: this.svc.cameraModel !== '' ? 12 : 16,
-        bottom: 16
-      })
+      // 底部多留 DRAWER_MAX_LIFT：卡片高度按「抽屉已经拉到底」算，
+      // 静止时这段缓冲正好被卡片裁掉，上移后才会露出来。
+      .padding({ left: 16, right: 16, top: 16, bottom: 16 + DRAWER_MAX_LIFT })
       .alignItems(HorizontalAlign.Start)
+      .backgroundColor($r('app.color.bg_surface'))
+      .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
+      // margin 固定、位移走 offset：offset 不参与布局，卡片高度就不会随
+      // lift 变化（高度一变就会触发重排、滚动时抖动，而且实测高度又会反过来
+      // 影响卡片高度，形成自引用收缩——抽屉会被直接裁没）
+      // 负 margin-bottom 把底部那 48vp 缓冲从布局里扣掉：静止时它恰好被卡片
+      // 裁掉（看到的是 16vp 底部留白），上移后才会露出来。用布局而不是实测
+      // 高度，避免「卡片高度 ↔ 抽屉高度」的自引用收缩。
+      .margin({ bottom: -DRAWER_MAX_LIFT })
+      .offset({ y: -this.drawerLift })
     }
     .width('100%')
-    .backgroundColor($r('app.color.bg_surface'))
+    .backgroundColor($r('app.color.cover_bg'))
     .borderRadius(Radius.Card)
     .shadow(CardShadow)
-    // 圆角裁剪：封面那层径向光的矩形边界落在卡片四角上，不裁会露出直角
     .clip(true)
   }
 
@@ -766,29 +791,12 @@ export struct CameraPage {
       }
       .width('100%')
       .padding({ top: 14 })
-      .backgroundColor($r('app.color.cover_bg'))
       .radialGradient({
         center: ['50%', '44%'],
         radius: 210,
         // 外圈用背板底色的透明版，避免径向渐变中段发灰
         colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.cover_bg_fade'), 1]]
       })
-
-      // 底边羽化（1.52.1）：深色背板如果一条直线切在倒影中间再接白卡，就是
-      // 「泾渭分明」。这里盖一层从透明到卡片色的渐变，深色在底部自己溶掉——
-      // 倒影正好在这一段里淡出，读起来像产品摄影的无缝背景纸。
-      // 用 `bg_surface_fade → bg_surface` 而不是写死白色：深色模式下两端都是
-      // 卡片色，这一层等于不存在，不需要按主题分支。
-      Column()
-        .width('100%')
-        .height(COVER_FADE)
-        .linearGradient({
-          angle: 180,
-          colors: [
-            [$r('app.color.bg_surface_fade'), 0],
-            [$r('app.color.bg_surface'), 1]
-          ]
-        })
     }
     .width('100%')
   }
@@ -965,8 +973,8 @@ export struct CameraPage {
     Scroll(this.scroller) {
       Column({ space: 10 }) {
         // 相机卡没有分组标题：整页讲的就是这一台相机，标题栏里已经写着型号。
-        this.CameraCard()
-        this.GuideSection()
+        // 连接步骤已经并进抽屉，「下文」不再单独成卡。
+        this.CameraDrawer()
         if (this.svc.pairingRequired) {
           this.PairingCard()
         }
@@ -976,6 +984,7 @@ export struct CameraPage {
           this.GroupTitle($r('app.string.camera_group_actions'))
           this.ActionsCard()
         }
+
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 8, bottom: 96 })
@@ -983,6 +992,13 @@ export struct CameraPage {
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
     .align(Alignment.Top)
+    // 抽屉的相对位移由滚动驱动：滚到倒影高度时刚好把倒影盖完
+    .onScroll((_x: number, y: number) => {
+      const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y));
+      if (Math.abs(lift - this.drawerLift) > 0.5) {
+        this.drawerLift = lift;
+      }
+    })
     // 标题栏浮在内容之上，首屏内容按其高度内缩；滚动时从标题栏下方穿过
     .contentStartOffset(titleBarTotalVp())
   }
