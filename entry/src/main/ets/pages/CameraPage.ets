@@ -822,6 +822,12 @@ export struct CameraPage {
         .scrollBar(BarState.Off)
         // 第二段结束前不响应触摸，手势统一交给外层
         .enableScrollInteraction(this.innerScrollEnabled)
+        // 内层滚到边界后把手势还给父级：向下滚时先让内容回顶，再交回外层，
+        // 这样三段能反向逐级退回（否则内容回顶后整页就卡住不动了）
+        .nestedScroll({
+          scrollForward: NestedScrollMode.SELF_FIRST,
+          scrollBackward: NestedScrollMode.SELF_FIRST
+        })
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 16, bottom: 16 })
