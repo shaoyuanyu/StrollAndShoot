@@ -123,14 +123,14 @@ export struct CameraPage {
   /** 第三段：抽屉内容上移量（外层滚动驱动，内层 Scroll 不参与滚动）。 */
   @Local innerOffset: number = 0;
   /**
-   * 第三段：整卡下移量，用未 clamp 的 over。
+   * 滚过「立牌到顶」之后又滚了多少 vp，**不 clamp**。
    *
-   * 必须和 `innerOffset` 分开：外层 Column 的 `space` 会让可滚范围比
-   * `stick + innerMax` 多出十几 vp，卡片如果也 clamp 住，多滚的那一点就会
-   * 把相机顶出屏幕、吃掉顶部间距（现象上是「第四段」）。卡片跟随未 clamp 的
-   * 位移，相机才真正钉死；内容用 clamp 过的那份，滚到底不露白。
+   * 相机卡的位置只由它决定（见 `cardContentY`）：卡片被 `position` 钉在内容
+   * 坐标系里，页面每上移 1vp 卡片就相对内容下移 1vp，两者相消，相机原地不动。
+   * 这里一旦按内容高度截断，多出来的那点滚动就会重新变成「相机被顶上去」，
+   * 也就是反复出现的「第四段」。
    */
-  @Local cardOffset: number = 0;
+  @Local scrollOver: number = 0;
   /** 抽屉内容的自然高度（在内层 Scroll 里测，不受父级高度约束）。 */
   @Local drawerContentH: number = 0;
 
@@ -670,29 +670,9 @@ export struct CameraPage {
   }
 
   /**
-   * 相机卡：立牌当封面，下面是「现在什么状态」与「换一种连接方式」。
+   * 相机卡的精确高度 = 一屏 + 第一、二段要滚掉的距离。
    *
-   * 封面没有自己的背板——**卡片就是背板**。倒影的渐隐落点与卡片底色同为
-   * `bg_surface`，所以物体是被压在这张卡上；卡片再统一 24vp 圆角与 16vp 内边距，
-   * 立牌于是和其它卡处在同一套尺度里，不再是通栏的一条「海报」。
-   */
-  /**
-   * 相机卡的最小高度：一屏减掉标题栏与页面顶部内边距。
-   *
-   * 抽屉要「拉到底」——即使内容是空白，白色面板也应该铺到屏幕底部，
-   * 而不是在最后一行文字下面就把页面底色露出来。
-   */
-  /** 第三段可滚总量：内容自然高度 - 抽屉可视高度。 */
-  private innerScrollSpan(): number {
-    const visible = this.cardHeight() - COVER_HEIGHT - 32;
-    return Math.max(0, this.drawerContentH - visible);
-  }
-
-  /**
-   * 相机卡的精确高度 = 一屏 + `stickScrollVp`（外层要滚掉的两段）。
-   *
-   * 外层滚到 stick 就到底，之后的手势交给抽屉内部的 Scroll，
-   * 相机因此停在原地，只有内容继续滚。
+   * 卡片底边在「立牌到顶」时正好落到屏幕底边，抽屉因此能一直接到屏幕底部。
    */
   private cardHeight(): number {
     const screenVp = this.getUIContext().px2vp(WindowUtils.windowHeightPx);
@@ -700,19 +680,72 @@ export struct CameraPage {
   }
 
   /**
-   * 相机卡 = 固定的相机区 + 一张**跟随页面滚动**上移的白色抽屉（1.53.0）。
+   * 抽屉盒子的高度：从相机区下沿一直到卡片底边，再加 `DRAWER_MAX_LIFT`。
+   *
+   * 那 48vp 是第二段抽屉上移的量：静止时多出来的这一截被卡片裁掉（看不见），
+   * 上移之后正好补满卡片底部。于是抽屉里的**可视高度恒定**，不会因为抽屉
+   * 正在上移而一会儿多一会儿少——第三段的可滚总量才算得准。
+   */
+  private drawerBoxHeight(): number {
+    return this.cardHeight() - COVER_HEIGHT + DRAWER_MAX_LIFT;
+  }
+
+  /** 抽屉里真正能看见内容的高度（扣掉上下 16 的内边距）。 */
+  private visibleContentH(): number {
+    return this.drawerBoxHeight() - 32;
+  }
+
+  /** 第三段可滚总量：内容自然高度 - 抽屉可视高度。内容装得下就是 0。 */
+  private innerScrollSpan(): number {
+    return Math.max(0, this.drawerContentH - this.visibleContentH());
+  }
+
+  /**
+   * 可滚范围的上限：第一、二段 + 第三段总量。
+   *
+   * 滚动容器的范围由 `contentHeight()` 精确给出，两者恒等；这个值用来在
+   * 「内容变矮」的瞬间夹一下读到的偏移（见 `syncFromScroll`）。
+   */
+  private maxScrollY(): number {
+    return stickScrollVp() + this.innerScrollSpan();
+  }
+
+  /**
+   * 滚动内容的总高度：卡片静止位置 + 卡高 + 第三段总量。
+   *
+   * 减去一屏就是可滚范围，正好等于 `stickScrollVp() + 第三段总量`——一分不多、
+   * 一分不少。范围精确，滚到底就不会有「多出来的一段」。
+   */
+  private contentHeight(): number {
+    return titleBarTotalVp() + 8 + this.cardHeight() + this.innerScrollSpan();
+  }
+
+  /**
+   * 相机卡在**内容坐标系**里的 y。
+   *
+   * 屏幕坐标 = 它 - 滚动偏移。第一段（y ≤ stick）里它恒等于静止位置，卡片跟着
+   * 页面一起上移；滚过 stick 之后每滚 1vp 它就 +1vp，屏幕坐标恒等于
+   * `标题栏 + 8 - stick`，相机于是钉在屏幕顶部、上方只留 `COVER_TOP_GAP`。
+   */
+  private cardContentY(): number {
+    return titleBarTotalVp() + 8 + this.scrollOver;
+  }
+
+  /**
+   * 相机卡 = 固定的相机区 + 一张**跟随页面滚动**上移的白色抽屉。
    *
    * 它不是可拖拽的抽屉组件，没有把手、没有手势：整个页面照常用上下滑动，
    * 抽屉的相对位移由滚动偏移驱动——滚到 `DRAWER_MAX_LIFT`（= 倒影高度）时
    * 倒影刚好被完全盖住，机身始终露在外面；继续滚动抽屉就跟着页面一起走。
    *
-   * 抽屉里装的是整页除了设备信息 / 操作之外的全部内容：状态、连接方式、
-   * 模式控件、连接步骤，所以下面不再是一张独立的「连接步骤」卡。
+   * 抽屉里装的是**整页的全部内容**（1.57.0）：状态、配对、模式控件、连接步骤、
+   * 设备信息、操作。1.56 之前设备信息与操作在卡片下方，但卡片本身就有一屏多高，
+   * 它们永远落在屏幕外、根本滚不到；并进抽屉后第三段才是真内容，而不是占位条。
    *
-   * 抽屉在正常文档流里排在相机区下面，位移只走 `offset`（不参与布局），
-   * 所以卡片高度恒定、滚动时不会重排；抽屉底部多留 `DRAWER_MAX_LIFT` 的
-   * 缓冲，并由负 `margin-bottom` 从布局里扣掉，静止时被卡片裁掉、上移后
-   * 才露出来，内容不会被切。
+   * 卡片位置由 `position` 决定（见 build），这里只管「卡里长什么样」：抽屉在
+   * 文档流里排在相机区下面，位移只走 `offset`（不参与布局），所以卡片高度恒定、
+   * 滚动时不会重排；抽屉高度多算 `DRAWER_MAX_LIFT`，静止时多出来的一截被卡片
+   * 裁掉、上移后才露出来，内容不会被切。
    */
   @Builder
   CameraDrawer() {
@@ -732,6 +765,11 @@ export struct CameraPage {
         Scroll() {
           Column({ space: 12 }) {
         this.StatusHeader()
+
+        // 配对核对要用户当场读一串数字再确认，放在状态头底下，第一屏就能看到
+        if (this.svc.pairingRequired) {
+          this.PairingCard()
+        }
 
         if (this.svc.scanTotal > 0) {
           Column({ space: 6 }) {
@@ -788,23 +826,6 @@ export struct CameraPage {
 
         Divider().color($r('app.color.divider'))
 
-        // TEMP: 第三段验证用的假内容，确认后删除
-        Column({ space: 8 }) {
-          ForEach([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], (i: number) => {
-            Row() {
-              Text(`占位内容 ${i + 1}`)
-                .fontSize(FontSize.Caption)
-                .fontColor($r('app.color.text_tertiary'))
-            }
-            .width('100%')
-            .height(64)
-            .padding({ left: 12 })
-            .borderRadius(Radius.Chip)
-            .backgroundColor($r('app.color.bg_page'))
-          }, (i: number) => `${i}`)
-        }
-        .width('100%')
-
         // 连接步骤：并入抽屉后不再单独成卡
         Column({ space: 10 }) {
           Text($r('app.string.camera_guide_title'))
@@ -824,6 +845,20 @@ export struct CameraPage {
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
+
+        // 设备信息 / 操作：抽屉本身就是一张卡，这里是平铺的行 + 小标题，
+        // 不再套一层卡片（白卡压在白抽屉上只剩一道阴影，看不出层次）。
+        if (this.svc.connected) {
+          Divider().color($r('app.color.divider'))
+          this.GroupTitle($r('app.string.camera_group_device'))
+          this.DeviceRows()
+          this.GroupTitle($r('app.string.camera_group_actions'))
+          this.ActionRows()
+        }
+
+        // 末尾留白：底部页签是**浮在内容上**的，滚到底时最后一行会被胶囊压住。
+        // 88 + 抽屉自身 16 的内边距 = 画廊列表末尾那 104vp，两页同一套留白。
+        Row().width('100%').height(88)
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
@@ -832,12 +867,17 @@ export struct CameraPage {
           const h = Number(now.height);
           if (Math.abs(h - this.drawerContentH) > 0.5) {
             this.drawerContentH = h;
+            // 内容高度变了，可滚范围随之变化，立刻按新范围重算三个位移
+            this.syncFromScroll();
           }
         })
         }
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+        // 内容比可视高度矮时必须靠顶：Scroll 默认把矮内容**居中**，
+        // 未连接时内容只有 235vp，会在抽屉顶上留出一大片空白。
+        .align(Alignment.Top)
         // 这一层不滚：只用来让内容拿到「自然高度」（Scroll 不约束子元素高度，
         // 直接塞进固定高度的抽屉里会被压扁、测不到真实内容高度），
         // 以及把内容裁在抽屉范围内。
@@ -845,17 +885,21 @@ export struct CameraPage {
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-      .layoutWeight(1)
+      // 抽屉盒子定高（含第二段要上移的 48vp）：可视高度恒定，第三段总量才算得准
+      .height(this.drawerBoxHeight())
       .alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.bg_surface'))
       .borderRadius({ topLeft: Radius.Card, topRight: Radius.Card })
       .offset({ y: -this.drawerLift })
       }
       .width('100%')
+      // 明确定高：相机区 + 抽屉盒子。它比卡片高 `DRAWER_MAX_LIFT`，多出来
+      // 的一截由卡片裁掉——不能靠 Column 自己收缩，否则抽屉会被压扁。
+      .height(COVER_HEIGHT + this.drawerBoxHeight())
     }
     .width('100%')
     .height(this.cardHeight())
-    .offset({ y: this.innerOffset })
+    // 卡片的屏幕位置由 build 里的 position 施加，这里不再叠 offset
     // 卡片底是白的：抽屉上移后底部露出的 48vp 与抽屉同色。
     // 抽屉顶部圆角需要的深色由相机区自己多铺一个圆角来提供（见 COVER_ROUND）。
     .backgroundColor($r('app.color.bg_surface'))
@@ -976,8 +1020,9 @@ export struct CameraPage {
     .clip(true)
   }
 
+  /** 设备信息：平铺的行，抽屉本身就是它的卡片。 */
   @Builder
-  DeviceCard() {
+  DeviceRows() {
     Column() {
       CameraInfoRow({ label: $r('app.string.camera_info_brand'), value: this.svc.deviceManufacturer || $r('app.string.common_unknown') })
       CameraInfoRow({ label: $r('app.string.camera_info_model'), value: this.svc.cameraName || $r('app.string.common_unknown') })
@@ -994,15 +1039,11 @@ export struct CameraPage {
       })
     }
     .width('100%')
-    .padding({ left: 16, right: 16 })
-    .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(Radius.Card)
-    .shadow(CardShadow)
   }
 
-  /** 次要操作单独一张卡：全量扫描（会丢缓存）与断开连接。 */
+  /** 次要操作：全量扫描（会丢缓存）与断开连接。 */
   @Builder
-  ActionsCard() {
+  ActionRows() {
     Column() {
       CameraActionRow({
         label: $r('app.string.camera_action_full_scan'),
@@ -1018,10 +1059,6 @@ export struct CameraPage {
       })
     }
     .width('100%')
-    .padding({ left: 16, right: 16 })
-    .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(Radius.Card)
-    .shadow(CardShadow)
   }
 
   /**
@@ -1068,90 +1105,103 @@ export struct CameraPage {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor($r('app.color.bg_surface'))
-    .borderRadius(Radius.Card)
-    .shadow(CardShadow)
+    // 抽屉本身就是白卡，这里用主色淡底当「面板」，否则白压白只剩一道阴影
+    .backgroundColor($r('app.color.primary_soft'))
+    .borderRadius(Radius.Inner)
   }
 
   build() {
     Scroll(this.scroller) {
-      Column({ space: 10 }) {
-        // 相机卡没有分组标题：整页讲的就是这一台相机，标题栏里已经写着型号。
-        // 连接步骤已经并进抽屉，「下文」不再单独成卡。
-        this.CameraDrawer()
-        if (this.svc.pairingRequired) {
-          this.PairingCard()
-        }
-        if (this.svc.connected) {
-          this.GroupTitle($r('app.string.camera_group_device'))
-          this.DeviceCard()
-          this.GroupTitle($r('app.string.camera_group_actions'))
-          this.ActionsCard()
-        }
+      // 滚动层里只有两样东西：一块不可见的占位（决定可滚范围），和一张
+      // **脱离文档流**的相机卡。卡片的屏幕位置由 `position` + `cardContentY()`
+      // 算出来，只跟滚动偏移有关，跟内容高度、测量结果彻底解耦——可滚范围里
+      // 就算多出十几 vp，相机也不可能被顶出去（那正是「第四段」的成因）。
+      Stack({ alignContent: Alignment.TopStart }) {
+        // 幽灵占位：高度 = 卡片静止位置 + 卡高 + 第三段总量，所以可滚范围
+        // 恰好是 `stick + 第三段总量`。它本身不可见、也不接收触摸。
+        Column()
+          .width('100%')
+          .height(this.contentHeight())
+          .hitTestBehavior(HitTestMode.None)
 
-        // 第三段的可滚空间：卡片被 offset 抵消固定后，外层还要能再滚出
-        // 「内容超出容器」的那一段。内容不够时是 0，滚到第二段末就停。
-        Row().width('100%').height(this.innerScrollSpan())
+        // 相机卡：用 position 钉在内容坐标系里（页面滚多少，它就相对内容
+        // 往下放多少，屏幕位置因此不变）。它仍在 Scroll 内部，所以整页
+        // 只有一个手势链路——手指按在立牌、抽屉、任何地方，都是同一个滚动。
+        Column() {
+          this.CameraDrawer()
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16 })
+        .position({ x: 0, y: this.cardContentY() })
       }
       .width('100%')
-      // 用 padding 而不是 contentStartOffset：后者会把初始位置直接推到内容顶部，
-      // 「整页上移直到相机到顶」这一段就没有了。padding 会随滚动一起离开。
-      .padding({ left: 16, right: 16, top: titleBarTotalVp() + 8 })
+      .height(this.contentHeight())
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
-    // 关掉回弹：滚到头后继续拉，外层内容会被再拉出一截，但卡片的 offset 已经
-    // clamp 在 innerMax 不再跟随，相机会被整体顶出去、顶部间距被压成 0
-    // （现象上就是多出「第四段」）。没有回弹就没有这一段。
+    // 关掉回弹：滚到头后继续拉，内容会被再拉出一截而卡片位置只跟偏移走，
+    // 松手回弹的整个过程看着就是「页面在抖」。没有回弹就没有这一段。
     .edgeEffect(EdgeEffect.None)
-    // 外层先滚（两段），滚到底再把手势交给抽屉内部
-    .nestedScroll({
-      scrollForward: NestedScrollMode.PARENT_FIRST,
-      scrollBackward: NestedScrollMode.PARENT_FIRST
-    })
     .align(Alignment.Top)
-    // 第一段（0 → 顶部内边距）整页上移，把相机顶到屏幕顶；
-    // 第二段（顶部内边距 → +48）抽屉才相对相机上移，把倒影盖完。
-    // 滚动停止再对齐一次：惯性结束的最后一点如果没进 onScroll，
-    // cardOffset 会停在倒数第二帧，净位移就多出几 vp（相机被顶上去）
+    // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
+    // 第二段（stick-48 → stick）：抽屉相对相机上移 48，把倒影盖完；
+    // 第三段（stick 之后）：相机不动，抽屉内容自己滚。
     .onScrollStop(() => {
-      const y = this.scroller.currentOffset().yOffset;
-      const raw = Math.max(0, y - stickScrollVp());
-      this.cardOffset = raw;
-      this.innerOffset = Math.min(this.innerScrollSpan(), raw);
+      // 惯性结束补一帧：最后一帧如果没进 onScroll，三个位移会停在倒数第二个
+      // 位置（大约差 1~2vp），停下来之后相机就歪了那一两 vp。
+      this.syncFromScroll();
     })
     .onScroll(() => {
-      // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
-      // 拿它算 lift 会永远得 0。这里直接问 Scroller 要当前偏移。
-      // lift 在「立牌到顶」之前 48vp 就启动：页面继续上移的同时抽屉追上去，
-      // 等滚到头时 lift 正好走满，相机完整留在屏幕上。
-      const y = this.scroller.currentOffset().yOffset;
-      // 第三段：滚过 stick 后位移转成「内容上移 + 卡片下移抵消」，
-      // 视觉上就是相机不动、内容自己滚
-      const raw = Math.max(0, y - stickScrollVp());
-      const inner = Math.min(this.innerScrollSpan(), raw);
-      if (Math.abs(inner - this.innerOffset) > 0.5) {
-        this.innerOffset = inner;
-      }
-      // 卡片跟着「未 clamp」的位移走，相机才不会在可滚范围末尾被顶出去
-      if (Math.abs(raw - this.cardOffset) > 0.2) {
-        this.cardOffset = raw;
-      }
-      const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
-      if (Math.abs(lift - this.drawerLift) > 0.5) {
-        this.drawerLift = lift;
-      }
-      // 标题反色进度：滚到立牌顶到屏幕顶时走满
-      // 0~1 = 相机还在屏幕上（标题压在图上升级为白）；-1 = 已经滚过相机、
-      // 背景变成白色内容区，标题要退回黑字。
-      // 第三段相机是固定不动的，标题始终压在相机图上 —— 全程保持白字。
-      // （以前有「滚过就退回黑字」的分支，那是整页滚动时代的逻辑。）
-      const progress = Math.max(0, Math.min(1, y / stickScrollVp()));
-      if (Math.abs(progress - this.scrollState.cameraProgress) > 0.002) {
-        this.scrollState.cameraProgress = progress;
-        this.onScrollProgress(progress);
-      }
+      this.syncFromScroll();
     })
+  }
+
+  /**
+   * 按当前滚动偏移同步三个位移。
+   *
+   * 三段的位移都是**滚动偏移的纯函数**，不依赖任何测量值：
+   * - 卡片位置 → `scrollOver`（未 clamp，滚多少补多少）；
+   * - 抽屉上移 → `drawerLift`（stick 前的 48vp 区间）；
+   * - 抽屉内容 → `innerOffset`（stick 之后，clamp 在第三段总量上，滚到底不露白）。
+   */
+  private syncFromScroll(): void {
+    // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
+    // 拿它算 lift 永远得 0。这里直接问 Scroller 要当前偏移。
+    let y = this.scroller.currentOffset().yOffset;
+
+    // 内容变矮的瞬间（例如刚断开连接，设备信息与操作整块消失）第三段总量会
+    // 缩短、可滚范围跟着变短。滚动容器下一帧就会把偏移收回去，但**这一帧**
+    // 读到的还是旧值——按旧范围算出来的位移会把整张卡推下去，相机直接飞出屏幕。
+    // 所以先按新的上限夹一次；范围本身就等于 maxScrollY()，正常情况下夹不到。
+    const maxY = this.maxScrollY();
+    if (y > maxY + 0.5) {
+      y = maxY;
+    }
+
+    const over = Math.max(0, y - stickScrollVp());
+    if (Math.abs(over - this.scrollOver) > 0.2) {
+      this.scrollOver = over;
+    }
+
+    const inner = Math.min(this.innerScrollSpan(), over);
+    if (Math.abs(inner - this.innerOffset) > 0.5) {
+      this.innerOffset = inner;
+    }
+
+    // lift 在「立牌到顶」之前 48vp 就启动：页面继续上移的同时抽屉追上去，
+    // 等滚到头时 lift 正好走满，相机完整留在屏幕上。
+    const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
+    if (Math.abs(lift - this.drawerLift) > 0.5) {
+      this.drawerLift = lift;
+    }
+
+    // 标题反色进度：滚到立牌顶到屏幕顶时走满。第三段相机是固定不动的，
+    // 标题始终压在相机图上 —— 全程保持白字。
+    const progress = Math.max(0, Math.min(1, y / stickScrollVp()));
+    if (Math.abs(progress - this.scrollState.cameraProgress) > 0.002) {
+      this.scrollState.cameraProgress = progress;
+      this.onScrollProgress(progress);
+    }
   }
 }
 

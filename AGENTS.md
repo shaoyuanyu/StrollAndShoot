@@ -684,6 +684,8 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - 多选框选这类「手指跨单元格」的交互不要给单元格加 PanGesture（跨格收不到 Move），也不要和 List 的滚动抢优先级。当前做法：多选态 `List.enableScrollInteraction(false)` + `List.onTouch` 原始触摸 + 官方 `Scroller.getItemIndex(x, y)`（API 14）把坐标换成 flat 列表下标，再用 `Scroller.getItemRect(index)`（API 11）拿行矩形、按列均分反推单元格。
 - `TouchObject.x/y` 是**相对注册 onTouch 的组件**，与 `getItemIndex/getItemRect` 的坐标口径一致，可以直接混用。
 - 拖到列表上下边缘时要自己开定时器 `scrollBy`（官方 List 不会替你做），否则长列表选不到屏幕外的照片。
+- **`Scroll` 默认把「比可视高度矮」的内容垂直居中**（2026-11-12 实测：内容 235vp、可视 621vp，内容顶落在 352.9 + (621−235.4)/2 = 545.7vp）。内容要贴着顶部就写 `.align(Alignment.Top)`；量自然高度用的「不滚动的内层 Scroll」同样会遇到。
+- **用 `position` / `offset` 抵消滚动时，可滚范围必须精确等于补偿量**（2026-11-12）：范围只要多出一点（例如外层 `Column` 的 `space` 累积的 10vp），多出来的滚动就变成「内容被顶走」，且因为补偿量常按内容高度 clamp，表现为末尾多出一段（相机页反复出现的「第四段」）。要么让定高占位精确给出范围，要么让位置只由滚动偏移算出来、与内容高度无关。
 
 ### 后台长时任务与通知进度（2026-11-09 核对）
 
