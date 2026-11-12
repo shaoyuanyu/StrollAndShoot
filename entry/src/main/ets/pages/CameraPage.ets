@@ -120,6 +120,14 @@ export struct CameraPage {
    * - `drawerDragStart`：本次拖拽的起点，用来把 offsetY 换算成绝对位移。
    */
   @Local drawerLift: number = 0;
+  /**
+   * 第三段是否已解锁。
+   *
+   * 内层 Scroll 全程只有一份滚动链路：在滚过第二段（`stickScrollVp`）之前
+   * 它不响应触摸，手势全部交给外层；滚到第二段结束后才启用，第三段才是
+   * 「内容区内部滚动」。否则一进页面就能直接滚内容、跳段。
+   */
+  @Local innerScrollEnabled: boolean = false;
 
   aboutToAppear(): void {
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
@@ -812,6 +820,8 @@ export struct CameraPage {
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+        // 第二段结束前不响应触摸，手势统一交给外层
+        .enableScrollInteraction(this.innerScrollEnabled)
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 16, bottom: 16 })
@@ -1080,6 +1090,10 @@ export struct CameraPage {
       // lift 在「立牌到顶」之前 48vp 就启动：页面继续上移的同时抽屉追上去，
       // 等滚到头时 lift 正好走满，相机完整留在屏幕上。
       const y = this.scroller.currentOffset().yOffset;
+      const unlocked = y >= stickScrollVp();
+      if (unlocked !== this.innerScrollEnabled) {
+        this.innerScrollEnabled = unlocked;
+      }
       const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
       if (Math.abs(lift - this.drawerLift) > 0.5) {
         this.drawerLift = lift;
