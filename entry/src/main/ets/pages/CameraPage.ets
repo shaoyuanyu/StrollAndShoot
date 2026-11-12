@@ -122,6 +122,15 @@ export struct CameraPage {
   @Local drawerLift: number = 0;
   /** 第三段：抽屉内容上移量（外层滚动驱动，内层 Scroll 不参与滚动）。 */
   @Local innerOffset: number = 0;
+  /**
+   * 第三段：整卡下移量，用未 clamp 的 over。
+   *
+   * 必须和 `innerOffset` 分开：外层 Column 的 `space` 会让可滚范围比
+   * `stick + innerMax` 多出十几 vp，卡片如果也 clamp 住，多滚的那一点就会
+   * 把相机顶出屏幕、吃掉顶部间距（现象上是「第四段」）。卡片跟随未 clamp 的
+   * 位移，相机才真正钉死；内容用 clamp 过的那份，滚到底不露白。
+   */
+  @Local cardOffset: number = 0;
   /** 抽屉内容的自然高度（在内层 Scroll 里测，不受父级高度约束）。 */
   @Local drawerContentH: number = 0;
 
@@ -1111,9 +1120,14 @@ export struct CameraPage {
       const y = this.scroller.currentOffset().yOffset;
       // 第三段：滚过 stick 后位移转成「内容上移 + 卡片下移抵消」，
       // 视觉上就是相机不动、内容自己滚
-      const over = Math.max(0, Math.min(this.innerScrollSpan(), y - stickScrollVp()));
-      if (Math.abs(over - this.innerOffset) > 0.5) {
-        this.innerOffset = over;
+      const raw = Math.max(0, y - stickScrollVp());
+      const inner = Math.min(this.innerScrollSpan(), raw);
+      if (Math.abs(inner - this.innerOffset) > 0.5) {
+        this.innerOffset = inner;
+      }
+      // 卡片跟着「未 clamp」的位移走，相机才不会在可滚范围末尾被顶出去
+      if (Math.abs(raw - this.cardOffset) > 0.5) {
+        this.cardOffset = raw;
       }
       const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
       if (Math.abs(lift - this.drawerLift) > 0.5) {
