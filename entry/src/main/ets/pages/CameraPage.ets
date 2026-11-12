@@ -120,14 +120,10 @@ export struct CameraPage {
    * - `drawerDragStart`：本次拖拽的起点，用来把 offsetY 换算成绝对位移。
    */
   @Local drawerLift: number = 0;
-  /**
-   * 第三段是否已解锁。
-   *
-   * 内层 Scroll 全程只有一份滚动链路：在滚过第二段（`stickScrollVp`）之前
-   * 它不响应触摸，手势全部交给外层；滚到第二段结束后才启用，第三段才是
-   * 「内容区内部滚动」。否则一进页面就能直接滚内容、跳段。
-   */
-  @Local innerScrollEnabled: boolean = false;
+  /** 第三段：抽屉内容上移量（外层滚动驱动，内层 Scroll 不参与滚动）。 */
+  @Local innerOffset: number = 0;
+  /** 抽屉内容的自然高度（在内层 Scroll 里测，不受父级高度约束）。 */
+  @Local drawerContentH: number = 0;
 
   aboutToAppear(): void {
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
@@ -677,6 +673,12 @@ export struct CameraPage {
    * 抽屉要「拉到底」——即使内容是空白，白色面板也应该铺到屏幕底部，
    * 而不是在最后一行文字下面就把页面底色露出来。
    */
+  /** 第三段可滚总量：内容自然高度 - 抽屉可视高度。 */
+  private innerScrollSpan(): number {
+    const visible = this.cardHeight() - COVER_HEIGHT - 32;
+    return Math.max(0, this.drawerContentH - visible);
+  }
+
   /**
    * 相机卡的精确高度 = 一屏 + `stickScrollVp`（外层要滚掉的两段）。
    *
@@ -816,18 +818,21 @@ export struct CameraPage {
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
+        .offset({ y: -this.innerOffset })
+        .onAreaChange((_o: Area, now: Area) => {
+          const h = Number(now.height);
+          if (Math.abs(h - this.drawerContentH) > 0.5) {
+            this.drawerContentH = h;
+          }
+        })
         }
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        // 第二段结束前不响应触摸，手势统一交给外层
-        .enableScrollInteraction(this.innerScrollEnabled)
-        // 内层滚到边界后把手势还给父级：向下滚时先让内容回顶，再交回外层，
-        // 这样三段能反向逐级退回（否则内容回顶后整页就卡住不动了）
-        .nestedScroll({
-          scrollForward: NestedScrollMode.SELF_FIRST,
-          scrollBackward: NestedScrollMode.SELF_FIRST
-        })
+        // 这一层不滚：只用来让内容拿到「自然高度」（Scroll 不约束子元素高度，
+        // 直接塞进固定高度的抽屉里会被压扁、测不到真实内容高度），
+        // 以及把内容裁在抽屉范围内。
+        .enableScrollInteraction(false)
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 16, bottom: 16 })
@@ -841,6 +846,7 @@ export struct CameraPage {
     }
     .width('100%')
     .height(this.cardHeight())
+    .offset({ y: this.innerOffset })
     // 卡片底是白的：抽屉上移后底部露出的 48vp 与抽屉同色。
     // 抽屉顶部圆角需要的深色由相机区自己多铺一个圆角来提供（见 COVER_ROUND）。
     .backgroundColor($r('app.color.bg_surface'))
@@ -1074,6 +1080,9 @@ export struct CameraPage {
           this.ActionsCard()
         }
 
+        // 第三段的可滚空间：卡片被 offset 抵消固定后，外层还要能再滚出
+        // 「内容超出容器」的那一段。内容不够时是 0，滚到第二段末就停。
+        Row().width('100%').height(this.innerScrollSpan())
       }
       .width('100%')
       // 用 padding 而不是 contentStartOffset：后者会把初始位置直接推到内容顶部，
@@ -1096,9 +1105,11 @@ export struct CameraPage {
       // lift 在「立牌到顶」之前 48vp 就启动：页面继续上移的同时抽屉追上去，
       // 等滚到头时 lift 正好走满，相机完整留在屏幕上。
       const y = this.scroller.currentOffset().yOffset;
-      const unlocked = y >= stickScrollVp();
-      if (unlocked !== this.innerScrollEnabled) {
-        this.innerScrollEnabled = unlocked;
+      // 第三段：滚过 stick 后位移转成「内容上移 + 卡片下移抵消」，
+      // 视觉上就是相机不动、内容自己滚
+      const over = Math.max(0, Math.min(this.innerScrollSpan(), y - stickScrollVp()));
+      if (Math.abs(over - this.innerOffset) > 0.5) {
+        this.innerOffset = over;
       }
       const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (stickScrollVp() - DRAWER_MAX_LIFT)));
       if (Math.abs(lift - this.drawerLift) > 0.5) {
@@ -1107,11 +1118,9 @@ export struct CameraPage {
       // 标题反色进度：滚到立牌顶到屏幕顶时走满
       // 0~1 = 相机还在屏幕上（标题压在图上升级为白）；-1 = 已经滚过相机、
       // 背景变成白色内容区，标题要退回黑字。
-      // 滚过立牌顶之后相机还会在屏幕上停留一段（相机区 206vp），
-      // 这 150vp 内标题仍然压在图上升级为白，再往下相机滚走才退回黑字。
-      const progress = y <= stickScrollVp() + 150
-        ? Math.max(0, Math.min(1, y / stickScrollVp()))
-        : -1;
+      // 第三段相机是固定不动的，标题始终压在相机图上 —— 全程保持白字。
+      // （以前有「滚过就退回黑字」的分支，那是整页滚动时代的逻辑。）
+      const progress = Math.max(0, Math.min(1, y / stickScrollVp()));
       if (Math.abs(progress - this.scrollState.cameraProgress) > 0.002) {
         this.scrollState.cameraProgress = progress;
         this.onScrollProgress(progress);
