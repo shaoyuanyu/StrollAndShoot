@@ -45,6 +45,14 @@ const COVER_FADE = 76;
  */
 const COVER_HEIGHT = 14 + STANDEE_HEIGHT + REFLECTION_HEIGHT;
 const DRAWER_MAX_LIFT = REFLECTION_HEIGHT;
+/**
+ * 相机区底色要比内容区多铺一个圆角高度。
+ *
+ * 抽屉的顶部圆角在圆角弧内是透明的，露出的颜色取决于它下面是谁——相机区
+ * 只有正好到抽屉顶边的话，弧里露出来的是卡片底色（白），圆角就消失了。
+ * 让深色往下多铺一个圆角、再用负 margin 把布局高度收回去，弧里才是深色。
+ */
+const COVER_ROUND = Radius.Card;
 
 /**
  * 相机页。
@@ -648,8 +656,11 @@ export struct CameraPage {
    */
   private drawerMinHeight(): number {
     const screenVp = this.getUIContext().px2vp(WindowUtils.windowHeightPx);
-    // 多出 DRAWER_MAX_LIFT：一进页面就有 48vp 可滚，抽屉才能被滚出来
-    return screenVp - titleBarTotalVp() - 8 + DRAWER_MAX_LIFT;
+    // 两段可滚空间：
+    //   ① 标题栏高度——把相机立牌顶到屏幕顶；
+    //   ② DRAWER_MAX_LIFT——抽屉接着上移、把倒影盖完。
+    // 所以卡片 = 一屏 − 顶部内边距 + 这两段。
+    return screenVp + DRAWER_MAX_LIFT;
   }
 
   /**
@@ -669,7 +680,16 @@ export struct CameraPage {
    */
   @Builder
   CameraDrawer() {
-    Column() {
+    Stack({ alignContent: Alignment.Top }) {
+      // 深色垫层：比相机区多铺一个圆角高度，抽屉顶部的圆角弧里才是深色。
+      // 用独立垫层而不是给相机区加 padding + 负 margin —— 负 margin 在
+      // Column 里不会把布局收回去，抽屉会整体下移，圆角又落到白底上。
+      Column()
+        .width('100%')
+        .height(COVER_HEIGHT + COVER_ROUND)
+        .backgroundColor($r('app.color.cover_bg'))
+
+      Column() {
       this.CameraCover()
 
       Column({ space: 12 }) {
@@ -762,12 +782,14 @@ export struct CameraPage {
       // 抽屉底部一直铺到卡片底，上移后露出的那 48vp 是卡片自己的白色底，
       // 与抽屉同色，所以看不出「底部漏出来」。
       .offset({ y: -this.drawerLift })
+      }
+      .width('100%')
     }
     .width('100%')
     .constraintSize({ minHeight: this.drawerMinHeight() })
-    // 卡片底保持深色：抽屉顶部圆角要露出深色才看得见。抽屉上移后底部
-    // 露出的那 48vp 深色正好落在屏幕下缘、并且被悬浮页签挡住，实际不可见。
-    .backgroundColor($r('app.color.cover_bg'))
+    // 卡片底是白的：抽屉上移后底部露出的 48vp 与抽屉同色。
+    // 抽屉顶部圆角需要的深色由相机区自己多铺一个圆角来提供（见 COVER_ROUND）。
+    .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
     .shadow(CardShadow)
     .clip(true)
@@ -1000,20 +1022,24 @@ export struct CameraPage {
 
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 8 })
+      // 用 padding 而不是 contentStartOffset：后者会把初始位置直接推到内容顶部，
+      // 「整页上移直到相机到顶」这一段就没有了。padding 会随滚动一起离开。
+      .padding({ left: 16, right: 16, top: titleBarTotalVp() + 8 })
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
     .align(Alignment.Top)
-    // 抽屉的相对位移由滚动驱动：滚到倒影高度时刚好把倒影盖完
-    .onScroll((_x: number, y: number) => {
-      const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y));
+    // 第一段（0 → 顶部内边距）整页上移，把相机顶到屏幕顶；
+    // 第二段（顶部内边距 → +48）抽屉才相对相机上移，把倒影盖完。
+    .onScroll(() => {
+      // onScroll 的第二个参数是「本帧滚动增量」，不是累计位置（实测每帧 1~2vp），
+      // 拿它算 lift 会永远得 0。这里直接问 Scroller 要当前偏移。
+      const y = this.scroller.currentOffset().yOffset;
+      const lift = Math.max(0, Math.min(DRAWER_MAX_LIFT, y - (titleBarTotalVp() + 8)));
       if (Math.abs(lift - this.drawerLift) > 0.5) {
         this.drawerLift = lift;
       }
     })
-    // 标题栏浮在内容之上，首屏内容按其高度内缩；滚动时从标题栏下方穿过
-    .contentStartOffset(titleBarTotalVp())
   }
 }
 

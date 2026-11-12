@@ -374,6 +374,9 @@ export struct MainScreen {
             [$r('app.color.bg_page_fade'), 1.0]
           ]
         })
+        // 相机页要「完全透明」：标题与右上角胶囊直接浮在内容上，不压色。
+        // 画廊 / 设置页保持原来的渐隐，内容滚到标题后面仍然会被压淡。
+        .opacity(this.visualTab === 1 ? 0 : 1)
 
       Column() {
         // 标题停在状态栏下方（渐隐区顶部），衰减在标题下方继续
@@ -878,7 +881,7 @@ export struct MainScreen {
       .clip(false)
       // 内容区的渐进磨砂：模糊强度从顶部到底部连续衰减到 0，
       // 没有硬边（backdropBlur 做不到这一点，会在标题栏下边缘留一条线）
-      .linearGradientBlur(GlassEffect.blurRadius(96), {
+      .linearGradientBlur(this.visualTab === 1 ? 0 : GlassEffect.blurRadius(96), {
         // fractionStops 的每一档是 [模糊程度, 模糊位置]，位置必须严格递增；
         // 之前最后一档停在 0.18，0.18→1 没有定义，模拟器上会画出三角碎片。
         // 调试开关打开时半径归零（模拟器 GPU 画不出磨砂效果时的纯色兜底）。
