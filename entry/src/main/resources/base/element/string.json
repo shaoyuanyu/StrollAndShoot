@@ -1319,6 +1319,14 @@
     {
       "name": "camera_guide_title",
       "value": "连接步骤"
+    },
+    {
+      "name": "camera_group_device",
+      "value": "设备信息"
+    },
+    {
+      "name": "camera_group_actions",
+      "value": "操作"
     }
   ]
 }

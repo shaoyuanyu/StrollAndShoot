@@ -6,7 +6,6 @@ import { CameraLinkMode } from '../model/CameraLinkMode';
 import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeMedia } from '../utils/CameraStandee';
-import { CameraModelStore } from '../model/CameraModelStore';
 import { WindowUtils } from '../utils/WindowUtils';
 /**
  * 四选一的四项。图标是「视觉语言」：文字要逐字读，图标扫一眼就知道是哪种链路
@@ -27,19 +26,23 @@ const REFLECTION_HEIGHT = 76;
 /**
  * 相机页。
  *
- * 版面按「先选链路，再看这条链路的状态和做法」组织：
+ * **整页只有一套容器语言**：页面底色上是 24vp 圆角的白卡，卡与卡之间用分组小标题
+ * 拉开节奏（和设置页同一套）。1.46.0 之前立牌是通栏、无背板、无边距，下面再压一张
+ * 缩进 16vp 的卡，两种尺度并排，用户反馈「立牌和别的组件没有任何交流」。
  *
- * 1. 顶部四选一胶囊（USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA）——页面级的链路开关，
- *    不塞进卡片，避免「卡片里的控件」这种层级错位；
- * 2. 一张状态卡：只讲**当前模式**的连接状态与操作，别的模式的状态不出现在这里；
- * 3. 卡片底部是当前模式的三步引导（相机侧怎么设），替代原来那一大段灰字。
+ * 现在的组织：
+ *
+ * 1. **相机卡**：立牌（图 + 倒影）是这张卡的「封面」，卡片自己就是立牌的背板。
+ *    倒影淡出到的颜色由 `bg_surface` 给出，所以物体是被「压」在这张卡上，而不是
+ *    浮在页面上；封面的下沿直接接状态头，看照片就知道这台机器现在什么状态。
+ *    — 分隔线 — 下面是「换一种连接方式」：四选一胶囊 + 当前模式一句话 + 专属控件。
+ * 2. **连接步骤**：分组小标题 + 三步引导卡（相机侧怎么设）。
+ * 3. **设备信息 / 操作**：已连接时才出现。
  *
  * 沉浸光感规则：内容区的 `Button` 与分段按钮都拿不到系统材质（官方《组件适配
  * 沉浸光感》只对 Navigation 标题栏、底部 TabBar，以及 Select / Toggle / Slider
  * 这类「按钮与选择类」全页面生效）。所以主操作仍然放在标题栏里（见
  * MainScreen.NormalTitleRow），本页只负责状态、模式专属控件与说明。
- * 分段按钮改用 App 自己的选中色（primary_soft + primary），不再用系统默认的
- * 实底蓝块——否则一屏里标题栏主操作与分段选中项两处高亮，没有主次。
  */
 @ComponentV2
 export struct CameraPage {
@@ -226,16 +229,16 @@ export struct CameraPage {
   // 组件
   // ------------------------------------------------------------------
 
-  /**
-   * 四选一胶囊。
-   *
-   * 官方胶囊分段按钮的默认外观是「灰底轨道 + 系统蓝选中块」，放在深色卡片里
-   * 比周围所有控件都重，还会和标题栏的主操作抢注意力。这里只保留官方组件的
-   * 结构与动效，配色换成 App 已有的一套：
-   * - 轨道用 `filter_chip_bg`（与卡片里的内嵌块同色）；
-   * - 选中项用 `primary_soft` + `primary` 文字，和画廊的「N 张」胶囊、
-   *   设置页的选中态完全一致。
-   */
+  /** 分组小标题：与设置页同一套（13fp 次级色，左缩进 4）。 */
+  @Builder
+  GroupTitle(title: ResourceStr) {
+    Text(title)
+      .fontSize(FontSize.Section)
+      .fontColor($r('app.color.text_secondary'))
+      .width('100%')
+      .padding({ left: 4, top: 6 })
+  }
+
   /**
    * 四选一：官方胶囊分段按钮 + 每段一个图标。
    *
@@ -262,58 +265,113 @@ export struct CameraPage {
       itemSymbolFontSize: LengthMetrics.fp(18),
       itemSymbolFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
       itemSelectedSymbolFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
-      itemMinHeight: LengthMetrics.vp(56),
+      itemMinHeight: LengthMetrics.vp(52),
       buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page'))
     })
       .width('100%')
   }
 
-  /** 三步引导的一条：编号 + 一句话。 */
+  /** 三步引导的一条：编号徽章 + 一句话。 */
   @Builder
   StepRow(index: number) {
     Row({ space: 10 }) {
       Text(`${index + 1}`)
-        .fontSize(FontSize.Caption)
-        .fontWeight(FontWeight.Medium)
+        .fontSize(FontSize.Micro)
         .fontColor($r('app.color.primary'))
-        .width(14)
+        .textAlign(TextAlign.Center)
+        .width(18)
+        .height(18)
+        .lineHeight(18)
+        .borderRadius(pillRadius(18))
+        .backgroundColor($r('app.color.primary_soft'))
+        .flexShrink(0)
       Text(this.stepText(index))
         .fontSize(FontSize.Caption)
         .lineHeight(18)
-        .fontColor($r('app.color.text_tertiary'))
+        .fontColor($r('app.color.text_secondary'))
         .layoutWeight(1)
     }
     .width('100%')
     .alignItems(VerticalAlign.Top)
   }
 
-  /** 当前模式的说明 + 相机侧的三步引导。 */
+  /** 连接步骤：小标题 + 一张说明卡（先一句话说清这个模式，再是相机侧的三步）。 */
   @Builder
-  GuideBlock() {
-    Column({ space: 8 }) {
-      Text(this.modeDesc())
-        .fontSize(FontSize.Caption)
-        .lineHeight(18)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
-      this.StepRow(0)
-      this.StepRow(1)
-      this.StepRow(2)
-      if (this.guideNote() !== '') {
-        Text(this.guideNote())
-          .fontSize(FontSize.Micro)
-          .lineHeight(16)
-          .fontColor($r('app.color.text_tertiary'))
+  GuideSection() {
+    Column({ space: 10 }) {
+      this.GroupTitle($r('app.string.camera_guide_title'))
+      Column({ space: 12 }) {
+        // 模式说明放在说明书开头，而不是相机卡末尾：它讲的是「这个模式怎么用」，
+        // 和下面三步是同一件事，留在卡片底部只会变成一句孤零零的脚注。
+        Text(this.modeDesc())
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_secondary'))
           .width('100%')
+        Column({ space: 10 }) {
+          this.StepRow(0)
+          this.StepRow(1)
+          this.StepRow(2)
+          if (this.guideNote() !== '') {
+            Text(this.guideNote())
+              .fontSize(FontSize.Micro)
+              .lineHeight(16)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
       }
+      .width('100%')
+      .padding(16)
+      .alignItems(HorizontalAlign.Start)
+      .backgroundColor($r('app.color.bg_surface'))
+      .borderRadius(Radius.Card)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
   }
 
-  /** 当前模式在卡里有没有专属控件（只有 USB 没有，它全靠标题栏那颗按钮）。 */
-  private hasModeControls(): boolean {
-    return this.svc.linkMode !== CameraLinkMode.USB;
+  /** 状态头：圆点 + 一句完整的话 +（已连接时）照片数 / 蓝牙断开口。 */
+  @Builder
+  StatusHeader() {
+    Row({ space: 10 }) {
+      Row()
+        .width(8).height(8)
+        .borderRadius(pillRadius(8))
+        .backgroundColor(this.headlineColor())
+        .flexShrink(0)
+      Text(this.headline())
+        .fontSize(FontSize.CardTitle)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .layoutWeight(1)
+        .maxLines(2)
+      if (this.svc.connected && this.svc.photoCount > 0) {
+        Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.primary'))
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+          .backgroundColor($r('app.color.primary_soft'))
+          .borderRadius(Radius.Chip)
+          .flexShrink(0)
+      }
+      // 蓝牙模式的「取消 / 断开」跟状态同一行：状态头已经说明蓝牙断到哪一步，
+      // 动作就该贴着它，不再单独占一行。
+      if (this.svc.linkMode === CameraLinkMode.BLE
+        && (this.svc.bleConnecting || this.svc.bleConnected || this.svc.bleReconnecting)) {
+        Text(this.svc.bleConnecting
+          ? $r('app.string.camera_ble_cancel')
+          : $r('app.string.camera_ble_disconnect'))
+          .fontSize(FontSize.Caption)
+          .fontColor(this.svc.bleConnecting
+            ? $r('app.color.text_secondary') : $r('app.color.button_danger'))
+          .flexShrink(0)
+          .onClick(() => { this.onDisconnectBle(); })
+      }
+    }
+    .width('100%')
   }
 
   /** 蓝牙前置行：AP / STA 模式都要先有蓝牙。 */
@@ -549,114 +607,180 @@ export struct CameraPage {
   }
 
   /**
-   * 连接卡。
+   * 相机卡：立牌当封面，下面是「现在什么状态」与「换一种连接方式」。
    *
-   * 全卡只讲当前模式一件事：状态头（唯一一处「未连接 / 已连接」）、
-   * 模式专属控件、三步引导。卡内不再套一层实底块——设置页的层级是
-   * 「页面底 → 卡片」两级，相机页以前多一层灰块，深色下发闷。
+   * 封面没有自己的背板——**卡片就是背板**。倒影的渐隐落点与卡片底色同为
+   * `bg_surface`，所以物体是被压在这张卡上；卡片再统一 24vp 圆角与 16vp 内边距，
+   * 立牌于是和其它卡处在同一套尺度里，不再是通栏的一条「海报」。
    */
   @Builder
-  ConnectionCard() {
-    Column({ space: 14 }) {
-      // 链路选择是这张卡的第一行：它是「这张卡在讲哪条链路」的标题，
-      // 摆到卡外会变成一根孤立的控件条。
-      this.ModePicker()
-
-      Divider().color($r('app.color.divider'))
-
-      Row({ space: 10 }) {
-        Row()
-          .width(8).height(8).borderRadius(pillRadius(8))
-          .backgroundColor(this.headlineColor())
-        Text(this.headline())
-          .fontSize(FontSize.CardTitle)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .layoutWeight(1)
-          .maxLines(2)
-        if (this.svc.connected && this.svc.photoCount > 0) {
-          Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
-            .fontSize(FontSize.Caption)
-            .fontColor($r('app.color.primary'))
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor($r('app.color.primary_soft'))
-            .borderRadius(Radius.Chip)
-        }
-        // 蓝牙模式的「取消 / 断开」跟状态同一行：状态头已经说明蓝牙断到哪一步，
-        // 动作就该贴着它，不再单独占一行。
-        if (this.svc.linkMode === CameraLinkMode.BLE
-          && (this.svc.bleConnecting || this.svc.bleConnected || this.svc.bleReconnecting)) {
-          Text(this.svc.bleConnecting
-            ? $r('app.string.camera_ble_cancel')
-            : $r('app.string.camera_ble_disconnect'))
-            .fontSize(FontSize.Caption)
-            .fontColor(this.svc.bleConnecting
-              ? $r('app.color.text_secondary') : $r('app.color.button_danger'))
-            .flexShrink(0)
-            .onClick(() => { this.onDisconnectBle(); })
-        }
+  CameraCard() {
+    Column() {
+      if (this.svc.cameraModel !== '') {
+        this.CameraCover()
       }
-      .width('100%')
+      Column({ space: 12 }) {
+        this.StatusHeader()
 
-      if (this.svc.connected) {
-        Text(this.svc.cameraName)
-          .fontSize(FontSize.Body)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-      }
-
-      if (this.svc.scanTotal > 0) {
-        Column({ space: 6 }) {
-          Progress({
-            value: this.svc.scanProgress,
-            total: this.svc.scanTotal,
-            type: ProgressType.Linear
-          })
-            .width('100%').height(3)
-            .color($r('app.color.primary'))
-            .backgroundColor($r('app.color.divider'))
-          Row() {
-            Text(this.svc.scanPhaseText || $r('app.string.camera_scanning_fallback'))
-              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
-            Blank()
-            Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
-              .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
+        if (this.svc.scanTotal > 0) {
+          Column({ space: 6 }) {
+            Progress({
+              value: this.svc.scanProgress,
+              total: this.svc.scanTotal,
+              type: ProgressType.Linear
+            })
+              .width('100%').height(3)
+              .color($r('app.color.primary'))
+              .backgroundColor($r('app.color.divider'))
+            Row() {
+              Text(this.svc.scanPhaseText || $r('app.string.camera_scanning_fallback'))
+                .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
+              Blank()
+              Text(`${this.svc.scanProgress}/${this.svc.scanTotal}`)
+                .fontSize(FontSize.Caption).fontColor($r('app.color.text_secondary'))
+            }
+            .width('100%')
           }
           .width('100%')
         }
-        .width('100%')
-      }
 
-      if (this.svc.scanStatsText) {
-        Text(this.svc.scanStatsText)
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
-      }
+        // 照片数已经在状态头右侧的胶囊里了，这行统计再报一遍只是重复；
+        // 只有拿不到胶囊（未连接、或者连上了但还没照片）时才补这一行。
+        if (this.svc.scanStatsText !== '' && !(this.svc.connected && this.svc.photoCount > 0)) {
+          Text(this.svc.scanStatsText)
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
 
-      // 失败原因统一写进 lastScanError，切换模式时清空，所以这里显示的一定
-      // 属于当前模式。以前切到 USB 还挂着上一轮的「蓝牙连接失败」。
-      if (this.svc.lastScanError !== '') {
-        Text(this.svc.lastScanError)
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.status_error'))
-          .width('100%')
-      }
+        // 失败原因统一写进 lastScanError，切换模式时清空，所以这里显示的一定
+        // 属于当前模式。以前切到 USB 还挂着上一轮的「蓝牙连接失败」。
+        if (this.svc.lastScanError !== '') {
+          Text(this.svc.lastScanError)
+            .fontSize(FontSize.Caption)
+            .lineHeight(18)
+            .fontColor($r('app.color.status_error'))
+            .width('100%')
+        }
 
-      if (this.hasModeControls()) {
+        // 分隔线把这张卡分成两半：线上是「这台机器现在怎么样」，
+        // 线下是「换一种连接方式」——四选一胶囊 + 当前模式的专属控件。
         Divider().color($r('app.color.divider'))
-      }
 
-      this.ModeControls()
+        this.ModePicker()
+
+        this.ModeControls()
+      }
+      .width('100%')
+      .padding({
+        left: 16,
+        right: 16,
+        top: this.svc.cameraModel !== '' ? 12 : 16,
+        bottom: 16
+      })
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding(16)
-    .alignItems(HorizontalAlign.Start)
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
+    // 圆角裁剪：封面那层径向光的矩形边界落在卡片四角上，不裁会露出直角
+    .clip(true)
+  }
+
+  /**
+   * 封面：当前（或上次）连接的相机商品图 + 倒影。
+   *
+   * 只有两样东西：机身后面一圈很淡的径向光（`hero_glow`，深色 14% 白、浅色
+   * 不可见；黑机身压在深色卡上会糊，光负责把轮廓托出来），以及机身下方一层
+   * 倒影。断开时只有图片与倒影变淡。
+   *
+   * 型号名与序列号都在标题栏（`MainScreen.NormalTitleRow`），封面只留产品。
+   */
+  @Builder
+  CameraCover() {
+    Column() {
+      Image(cameraStandeeMedia(this.svc.cameraModel))
+        .width('100%')
+        .height(STANDEE_HEIGHT)
+        .objectFit(ImageFit.Contain)
+        .interpolation(ImageInterpolation.High)
+        .draggable(false)
+        .opacity(this.svc.connected ? 1 : 0.72)
+        .animation({ duration: 260, curve: Curve.EaseOut })
+      this.StandeeReflection()
+    }
+    .width('100%')
+    .padding({ top: 14 })
+    .radialGradient({
+      center: ['50%', '44%'],
+      radius: 210,
+      // 外圈用卡片底色的透明版，避免径向渐变中段发灰
+      colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.bg_surface_fade'), 1]]
+    })
+  }
+
+  /** 当前生效的深/浅色（跟随 `setColorMode()` 之后的实际配置）。 */
+  private isDarkTheme(): boolean {
+    return WindowUtils.isDarkMode(this.getUIContext().getHostContext());
+  }
+
+  /**
+   * 倒影强度。
+   *
+   * 两个主题都画倒影（一致性），但底色越亮、同样的不透明度看起来越「脏」：
+   * 深色底给 0.7，浅色底压到 0.25。断开时再乘 0.7，和主图的 0.72 呼应。
+   */
+  private reflectionOpacity(): number {
+    // 产品图的机身本来就黑（倒影那条带平均亮度只有 29/255），0.26 落在纯黑上
+    // 等于看不见，0.5 在真机上仍然偏淡；浅色底反过来，同样的值会显脏，
+    // 所以两档差得很多。
+    const base = this.isDarkTheme() ? 0.7 : 0.25;
+    return this.svc.connected ? base : base * 0.7;
+  }
+
+  /**
+   * 立牌倒影：同一张图上下翻转，塞进一个只有半高的裁剪盒里。
+   *
+   * 裁剪盒与图片同宽、`alignContent: Top`，所以盒子露出的正好是被翻转后的
+   * 「上半截」＝原图的下半截，接在原图脚下就是镜像。两个必须注意的点：
+   * - 图片不位移：素材已裁到「机身实心底＝画布底」，镜像线正好落在机身底边上；
+   * - 渐变的第二档取 0.34 而不是直接线性到底，纯线性时平均不透明度只剩一半，
+   *   倒影会淡到看不见。
+   */
+  @Builder
+  StandeeReflection() {
+    Stack({ alignContent: Alignment.Top }) {
+      Image(cameraStandeeMedia(this.svc.cameraModel))
+        .width('100%')
+        .height(STANDEE_HEIGHT)
+        .objectFit(ImageFit.Contain)
+        .interpolation(ImageInterpolation.High)
+        .draggable(false)
+        .scale({ x: 1, y: -1 })
+        .translate({ y: 0 })
+        .opacity(this.reflectionOpacity())
+      Column()
+        .width('100%')
+        .height('100%')
+        // 起手两档必须用 `bg_surface_fade`（卡片底色的「全透明版」），不能用
+        // '#00000000'：线性渐变按「非预乘」插值，从透明黑渐变到不透明浅色会在
+        // 中段经过一段灰——浅色下就是一条全宽灰带（深色下恰好是黑，看不出来，
+        // 所以只在浅色暴露）。只有 RGB 保持一致、只让 alpha 变，才是纯淡出。
+        .linearGradient({
+          angle: 180,
+          colors: [
+            [$r('app.color.bg_surface_fade'), 0],
+            [$r('app.color.bg_surface_fade'), 0.34],
+            [$r('app.color.bg_surface'), 1]
+          ]
+        })
+    }
+    .width('100%')
+    .height(REFLECTION_HEIGHT)
+    // 渐变遮罩的收尾色必须与「这块下面的背板」完全同色，否则会把背板涂出一块
+    // 带硬边的矩形。这里显式铺一层 bg_surface，让遮罩和卡片由构造保证同色。
+    .backgroundColor($r('app.color.bg_surface'))
+    .clip(true)
   }
 
   @Builder
@@ -672,7 +796,8 @@ export struct CameraPage {
       CameraInfoRow({ label: $r('app.string.camera_info_photo_count'), value: `${this.svc.photoCount}` })
       CameraInfoRow({
         label: $r('app.string.camera_info_connection'),
-        value: this.svc.wireless ? `Wi-Fi · ${this.svc.wifiHost}` : $r('app.string.camera_connection_ptp')
+        value: this.svc.wireless ? `Wi-Fi · ${this.svc.wifiHost}` : $r('app.string.camera_connection_ptp'),
+        last: true
       })
     }
     .width('100%')
@@ -752,149 +877,24 @@ export struct CameraPage {
     .borderRadius(Radius.Card)
   }
 
-  /**
-   * 页首立牌：当前（或上次）连接的相机商品图。
-   *
-   * **没有背板**。上一版给这块铺了 `hero_bg` 通栏色，结果和页面底色差了一档，
-   * 反而更割裂——产品图不该自带一块「底板」。现在整块背景透明，只有两样东西：
-   *
-   * 1. 机身后面一圈**很淡的径向光**（`hero_glow`，深色 14% 白、浅色不可见）。
-   *    黑机身压黑底会糊，光负责把轮廓托出来；径向渐变没有边界，不会画出方框；
-   * 2. 机身下方一层**倒影**，向下淡出到页面底色——物体被「压」在页面上，
-   *    这块因此和下面的卡片连成一体，而不是浮在上面的一张图。
-   *
-   * 型号名与序列号都在标题栏（`MainScreen.NormalTitleRow`），页首只留产品。
-   * 断开时只有图片与倒影变淡，其余不变。
-   */
-  @Builder
-  StandeeHero() {
-    if (this.svc.cameraModel !== '') {
-      Column() {
-        Column() {
-          Image(cameraStandeeMedia(this.svc.cameraModel))
-            .width('100%')
-            .height(STANDEE_HEIGHT)
-            .objectFit(ImageFit.Contain)
-            .interpolation(ImageInterpolation.High)
-            .draggable(false)
-            .opacity(this.svc.connected ? 1 : 0.72)
-            .animation({ duration: 260, curve: Curve.EaseOut })
-          this.StandeeReflection()
-        }
-        .width('100%')
-        .padding({ top: 12, bottom: 4 })
-      }
-      .width('100%')
-      .radialGradient({
-        center: ['50%', '46%'],
-        radius: 210,
-        // 同上：外圈用页面底色的透明版，避免径向渐变中段发灰
-        colors: [[$r('app.color.hero_glow'), 0], [$r('app.color.bg_page_fade'), 1]]
-      })
-    }
-  }
-
-  /** 当前生效的深/浅色（跟随 `setColorMode()` 之后的实际配置）。 */
-  private isDarkTheme(): boolean {
-    return WindowUtils.isDarkMode(this.getUIContext().getHostContext());
-  }
-
-  /**
-   * 倒影强度。
-   *
-   * 两个主题都画倒影（一致性），但底色越亮、同样的不透明度看起来越「脏」：
-   * 深色底给 0.26，浅色底压到 0.16。断开时再乘 0.7，和主图的 0.72 呼应。
-   */
-  private reflectionOpacity(): number {
-    // 深色 0.7、浅色 0.25：产品图的机身本来就黑（倒影那条带平均亮度只有
-    // 29/255），0.26 落在纯黑上等于看不见，0.5 在真机上仍然偏淡；浅色底反过来，
-    // 同样的值会显脏，所以两档差得很多。
-    const base = this.isDarkTheme() ? 0.7 : 0.25;
-    return this.svc.connected ? base : base * 0.7;
-  }
-
-  /**
-   * 立牌倒影：同一张图上下翻转，塞进一个只有半高的裁剪盒里。
-   *
-   * 裁剪盒与图片同宽、`alignContent: Top`，所以盒子露出的正好是被翻转后的
-   * 「上半截」＝原图的下半截，接在原图脚下就是镜像。两个必须注意的点：
-   * - 图片要往上挪 12vp：原图底部自带投影，镜像后会在倒影顶端糊成一条灰带；
-   * - 渐变的第二档取 0.34 而不是直接线性到底，纯线性时平均不透明度只剩一半，
-   *   倒影会淡到看不见。
-   */
-  @Builder
-  StandeeReflection() {
-    Stack({ alignContent: Alignment.Top }) {
-      Image(cameraStandeeMedia(this.svc.cameraModel))
-        .width('100%')
-        .height(STANDEE_HEIGHT)
-        .objectFit(ImageFit.Contain)
-        .interpolation(ImageInterpolation.High)
-        .draggable(false)
-        .scale({ x: 1, y: -1 })
-        // 素材已裁到「机身实心底＝画布底」且底座保持不透明，镜像线正好落在
-        // 机身底边上，不需要位移（挪一点反而会在中间露出一行背景）
-        .translate({ y: 0 })
-        // 产品图只有 780px 宽，铺到这个尺寸要放大 1.3 倍，放大后压缩块的边角会
-        // 透出来；倒影本来就该「隐隐约约」，加一点模糊最省事也最像反光。
-        .opacity(this.reflectionOpacity())
-      Column()
-        .width('100%')
-        .height('100%')
-        // 起手两档必须用 `bg_page_fade`（页面底色的「全透明版」），不能用
-        // '#00000000'：线性渐变是按「非预乘」插值的，从透明黑渐变到不透明浅色
-        // 会在中段经过一段灰——浅色下就是一条全宽灰带（深色下恰好是黑，看不出来，
-        // 所以只在浅色暴露）。只有 RGB 保持一致、只让 alpha 变，才是纯淡出。
-        .linearGradient({
-          angle: 180,
-          colors: [
-            [$r('app.color.bg_page_fade'), 0],
-            [$r('app.color.bg_page_fade'), 0.34],
-            [$r('app.color.bg_page'), 1]
-          ]
-        })
-    }
-    .width('100%')
-    .height(REFLECTION_HEIGHT)
-    // 渐变遮罩的收尾色必须与「这块下面的背板」完全同色，否则会把背板涂出一块
-    // 带硬边的矩形（1.44.1 立牌有白色背板、遮罩却涂 bg_page，浅色下就是一块
-    // 灰斑，而且只出现在倒影区域）。这里显式铺一层 bg_page 把背板固定住，
-    // 让遮罩和背板由构造保证同色。
-    .backgroundColor($r('app.color.bg_page'))
-    .clip(true)
-  }
-
   build() {
     Scroll(this.scroller) {
-      Column({ space: 16 }) {
-        // 立牌通栏：它自己负责底部渐隐到页面底色，所以这里不给左右边距
-        this.StandeeHero()
-        Column({ space: 16 }) {
-          this.ConnectionCard()
-          // 引导独立成一组：卡里只放「现在能做什么」，做法放在卡外用分组小标题，
-          // 免得一张卡里同时堆控件和说明书（和设置页的「小标题 + 卡片」同一套）。
-          Column({ space: 10 }) {
-            Text($r('app.string.camera_guide_title'))
-              .fontSize(FontSize.Section)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-            this.GuideBlock()
-          }
-          .width('100%')
-          .padding({ left: 4, right: 4, top: 4 })
-          if (this.svc.pairingRequired) {
-            this.PairingCard()
-          }
-          if (this.svc.connected) {
-            this.DeviceCard()
-            this.ActionsCard()
-          }
+      Column({ space: 10 }) {
+        // 相机卡没有分组标题：整页讲的就是这一台相机，标题栏里已经写着型号。
+        this.CameraCard()
+        this.GuideSection()
+        if (this.svc.pairingRequired) {
+          this.PairingCard()
         }
-        .width('100%')
-        .padding({ left: 16, right: 16 })
+        if (this.svc.connected) {
+          this.GroupTitle($r('app.string.camera_group_device'))
+          this.DeviceCard()
+          this.GroupTitle($r('app.string.camera_group_actions'))
+          this.ActionsCard()
+        }
       }
       .width('100%')
-      .padding({ bottom: 96 })
+      .padding({ left: 16, right: 16, top: 8, bottom: 96 })
     }
     .width('100%').height('100%')
     .scrollBar(BarState.Off)
@@ -909,6 +909,7 @@ export struct CameraPage {
 struct CameraInfoRow {
   @Param label: ResourceStr = '';
   @Param value: ResourceStr = '';
+  @Param last: boolean = false;
 
   build() {
     Row() {
@@ -927,7 +928,7 @@ struct CameraInfoRow {
     }
     .width('100%')
     .height(RowHeight.Single)
-    .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+    .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
   }
 }
 

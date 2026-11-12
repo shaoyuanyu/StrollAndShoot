@@ -1319,6 +1319,14 @@
     {
       "name": "camera_guide_title",
       "value": "Steps"
+    },
+    {
+      "name": "camera_group_device",
+      "value": "Device info"
+    },
+    {
+      "name": "camera_group_actions",
+      "value": "Actions"
     }
   ]
 }

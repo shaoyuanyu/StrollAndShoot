@@ -97,6 +97,10 @@
       "value": "#00F1F3F5"
     },
     {
+      "name": "bg_surface_fade",
+      "value": "#00FFFFFF"
+    },
+    {
       "name": "nav_bg_mid",
       "value": "#8CF1F3F5"
     },

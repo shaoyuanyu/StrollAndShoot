@@ -799,10 +799,10 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 #### 颜色资源
 
-颜色资源共 47 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
+颜色资源共 49 条（`base/element/color.json` 与 `dark/element/color.json` 各一份，含 `start_window_background`），分四组：
 
 - 品牌与语义：`primary`、`primary_light`、`primary_soft`、`status_connected`、`status_disconnected`、`status_error`、`button_danger`
-- 背景、材质与文本：`bg_page`、`bg_surface`、`bg_debug_log`、`thumbnail_placeholder`、`glass_bg`、`nav_bg`、`nav_bg_mid`、`nav_bg_weak`、`bg_page_fade`、`progress_track`、`scrim`、`filter_chip_bg`、`card_border`、`divider`、`text_primary`、`text_secondary`、`text_tertiary`、`text_on_primary`、`text_on_dark`、`log_text`
+- 背景、材质与文本：`bg_page`、`bg_surface`、`bg_page_fade`、`bg_surface_fade`、`bg_debug_log`、`thumbnail_placeholder`、`glass_bg`、`nav_bg`、`nav_bg_mid`、`nav_bg_weak`、`progress_track`、`scrim`、`filter_chip_bg`、`card_border`、`divider`、`text_primary`、`text_secondary`、`text_tertiary`、`text_on_primary`、`text_on_dark`、`log_text`
 - 预览器专用（跟随深浅色；浅色为页面底、深色为纯黑）：`viewer_backdrop`、`viewer_scrim`、`viewer_scrim_top`、`viewer_scrim_clear`、`viewer_banner_bg`、`viewer_text_on_dark_80`、`viewer_text_on_dark_70`、`viewer_chrome_text`、`viewer_chrome_text_secondary`、`viewer_glass_button`、`viewer_chrome`、`viewer_chrome_motion`、`viewer_material_tint`、`viewer_placeholder_bg`、`viewer_placeholder_thumb`、`viewer_placeholder_image`、`viewer_text_secondary`、`viewer_text_tertiary`、`viewer_accent`
 
 设计语言为 HarmonyOS 沉浸光感：

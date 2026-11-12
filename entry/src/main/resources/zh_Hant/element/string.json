@@ -1319,6 +1319,14 @@
     {
       "name": "camera_guide_title",
       "value": "連線步驟"
+    },
+    {
+      "name": "camera_group_device",
+      "value": "裝置資訊"
+    },
+    {
+      "name": "camera_group_actions",
+      "value": "操作"
     }
   ]
 }
