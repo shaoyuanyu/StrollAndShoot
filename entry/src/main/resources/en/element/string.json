@@ -1321,6 +1321,10 @@
       "value": "Steps"
     },
     {
+      "name": "camera_group_mode",
+      "value": "Connection"
+    },
+    {
       "name": "camera_group_device",
       "value": "Device info"
     },

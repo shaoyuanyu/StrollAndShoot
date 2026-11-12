@@ -1321,6 +1321,10 @@
       "value": "連線步驟"
     },
     {
+      "name": "camera_group_mode",
+      "value": "連線方式"
+    },
+    {
       "name": "camera_group_device",
       "value": "裝置資訊"
     },

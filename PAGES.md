@@ -130,7 +130,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 1. **立牌属于相机卡**，不再自带一层通栏背板。卡片就是它的背板，倒影淡出到
    `bg_surface`，物体因此被「压在这张卡上」（见下）；
 2. **状态头紧贴封面下沿**，看照片就知道这台机器现在什么状态；分隔线以下是
-   「换一种连接方式」（四选一胶囊 + 模式专属控件）；
+   「换一种连接方式」（四选一 + 模式专属控件）；
 3. **每个分组 = 小标题 + 卡**，和设置页的「外观 / 画廊 / 定位记录」同一套；
    卡与卡之间 `Column({ space: 10 })`，分组标题 13fp 次级色、左缩进 4、上留 6。
 
@@ -235,33 +235,39 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 图片由尼康所有，仅用于在个人应用内标明「连的是哪台机器」。
 
-#### 四选一：胶囊分段控件 + 每段一个图标（1.44.3）
+#### 四选一：页签型分段控件，只有文字（1.49.0）
 
-试过三个版本，最终形态是**官方 `CapsuleSegmentButtonV2` + 每项一个符号图标**：
+这个控件改了四轮，每一轮都在回答「它在卡里该有多重」：
 
-1. 默认分段控件（只有文字）→ 用户反馈「过于扁平、四个选项界限模糊」；
-2. 拆成 4 个独立 `Button` → 用户反馈「更难看」；
-3. 回到分段控件 + 图标 → 图标就是缺的那层视觉语言。
+1. 纯文字分段控件（1.44.0 之前）→ 选项连成一片，界限模糊；
+2. `CapsuleSegmentButtonV2` + 每项一个符号图标（1.44.3）→ 用户反馈
+   「细节太粗糙，一看就是 AI 做的」。图标是四种互不相干的隐喻（插头 / 蓝牙符文 /
+   电波 / 路由器），系统符号里没有同一支笔画的成套图标，18fp 下粗细差两三倍，
+   摆在 12fp 文字上方就是拼凑；实心主色块 73×52 又比页面真正的操作还抢眼；
+3. 四个独立 `Button` + 只给选中项描边 → 一个框加三个裸文字，看起来是
+   「一个按钮 + 三个字」，比第 2 版更散；
+4. **现在**：官方 `TabSegmentButtonV2`，**去掉全部图标**，主色只落在文字上。
 
-| 项 | 图标 |
-|---|---|
-| USB | `sys.symbol.charg_cable` |
-| 蓝牙 | `sys.symbol.bluetooth` |
-| Wi-Fi AP | `sys.symbol.wifi` |
-| Wi-Fi STA | `sys.symbol.wifi_router` |
+| 参数 | 取值 | 说明 |
+|---|---|---|
+| `buttonBackgroundColor` | `bg_page` | 轨道，比卡片暗一档 |
+| `itemSelectedBackgroundColor` | `bg_surface` | 选中项从轨道浮起，回到卡片亮度 |
+| `itemFontColor` / `itemSelectedFontColor` | `text_secondary` / `primary` | |
+| `itemFontSize` / `itemSelectedFontSize` | `FontSize.Section`（13） | 12 太局促；14 时 `Wi-Fi STA` 会顶满两段 |
+| `itemFontWeight` / `itemSelectedFontWeight` | Regular / Medium | |
+| `itemMinHeight` / `buttonMinHeight` | 36 / 44 | 原来是 52 的双行，现在单行 |
+| `itemBorderRadius` / `buttonBorderRadius` | 18 / 22 | 内嵌 4vp，圆角跟着小一档 |
 
-图标通过 `SegmentButtonV2ItemOptions.symbol` 传，配 `itemSymbolFontSize` 18fp、
-`itemSymbolFontColor` / `itemSelectedSymbolFontColor` 跟随文字色。
+**两种主题下都是「选中项更亮」**：浅色 `#F1F3F5` 浮 `#FFFFFF`，深色 `#000000` 浮
+`#1C1C1E`。选中胶囊因此与卡片同色——它在视觉上不是「卡片上的一块白」，而是
+「从轨道里抬到卡片那一层」，不靠阴影也立得住。
 
-配色仍是「凹槽 + 凸起」：
+选择器上方配一行分组小标题「连接方式」（`camera_group_mode`，`FontSize.Caption` +
+`text_tertiary`，与选择器间距 8vp，比卡片内常规的 12vp 紧一档）：选择器没有边框
+也没有底，没有这行字就只是四段普通文字。
 
-| 参数 | 取值 |
-|---|---|
-| `buttonBackgroundColor` | `bg_page`（比卡片暗一档） |
-| `itemSelectedBackgroundColor` | `primary` 实底 |
-| `itemSelectedFontColor` / `itemSelectedSymbolFontColor` | `text_on_primary` |
-| `itemFontSize` / `itemSelectedFontSize` | `FontSize.Caption` |
-| `itemMinHeight` | 52vp（图标在文字上方，比纯文字高；1.46.0 从 56 收到 52） |
+**不要加回图标**：`Wi-Fi AP` 与 `Wi-Fi STA` 的区别不是任何一张图能画出来的，
+四个图标只会把控件重新拉回「双行 + 不统一笔画」的老问题。
 
 内容区拿不到沉浸光感（官方限制），这里不用材质。`ColorMetrics` / `LengthMetrics`
 会报 `Function may throw exceptions` 告警，与 `WindowShot` 同类，可接受。
@@ -316,7 +322,7 @@ NavDestination，标签页容器。持有标签状态、下载进度、已下载
 
 - 卡内**不再套一层实底块**。设置页是「页面底 → 卡片」两级，相机页以前多一层 `filter_chip_bg` 灰块，深色下发闷；现在是「卡片 → hairline 分隔」。
 - **卡片统一 24vp 圆角、16vp 内边距，立牌那张卡也一样**；相机卡要 `clip(true)`，否则封面那层径向光的矩形四角会露出直角。
-- 相机卡内部：`Column({ space: 12 })`，封面在上、下面依次是状态头、扫描进度、错误、`Divider`、四选一、模式专属控件。封面上边距 14vp，内容区上边距 12vp（**没有立牌**时改为 16vp）。
+- 相机卡内部：`Column({ space: 12 })`，封面在上、下面依次是状态头、扫描进度、错误、`Divider`、「连接方式」小标题 + 四选一、模式专属控件。封面上边距 14vp，内容区上边距 12vp（**没有立牌**时改为 16vp）。
 - 行高 56vp；状态头 16fp Medium、正文 15fp、步骤与说明 12fp、note 10fp。
 - 已连接时状态头右侧是照片数胶囊（`primary_soft` + `primary`）；此时不再显示 `scanStatsText`（「照片 38 张 | 扫描完成」），否则一张卡里同一个数字出现两遍。
 - 根节点 `Scroll` 用 `.contentStartOffset(titleBarTotalVp())` 避让标题栏，内容 `padding({ left: 16, right: 16, top: 8, bottom: 96 })`（底部 96 给悬浮页签让位）。

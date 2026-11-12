@@ -3,19 +3,24 @@ import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
-import { CapsuleSegmentButtonV2, ColorMetrics, LengthMetrics, SegmentButtonV2Items } from '@kit.ArkUI';
+import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2 } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { WindowUtils } from '../utils/WindowUtils';
 /**
- * 四选一的四项。图标是「视觉语言」：文字要逐字读，图标扫一眼就知道是哪种链路
- * （线 / 蓝牙符号 / Wi-Fi / 路由器），也顺带把四个选项在视觉上分开。
+ * 四选一的四项，顺序与 `CameraLinkMode` 的枚举值一一对应。
+ *
+ * **只有文字，没有图标**（1.49.0）。四种链路本来就是四种互不相干的隐喻：
+ * 线缆 / 蓝牙符号 / 电波 / 路由器。系统符号里没有同一支笔画的成套图标，
+ * 摆在一起就是现在这个样子——USB 是实心插头、蓝牙是单线、Wi-Fi 是三根粗弧、
+ * STA 是线框方盒，粗细差两三倍，18fp 下尤其明显，越看越像拼凑。
+ * 而「Wi-Fi AP」与「Wi-Fi STA」的区别本来也不是任何一张图能画出来的，只能靠字。
  */
 const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
-  { text: $r('app.string.camera_mode_usb'), symbol: $r('sys.symbol.charg_cable') },
-  { text: $r('app.string.camera_mode_ble'), symbol: $r('sys.symbol.bluetooth') },
-  { text: $r('app.string.camera_mode_ap'), symbol: $r('sys.symbol.wifi') },
-  { text: $r('app.string.camera_mode_sta'), symbol: $r('sys.symbol.wifi_router') }
+  { text: $r('app.string.camera_mode_usb') },
+  { text: $r('app.string.camera_mode_ble') },
+  { text: $r('app.string.camera_mode_ap') },
+  { text: $r('app.string.camera_mode_sta') }
 ]);
 
 /**
@@ -243,33 +248,44 @@ export struct CameraPage {
   }
 
   /**
-   * 四选一：官方胶囊分段按钮 + 每段一个图标。
+   * 四选一：官方页签型分段按钮（灰轨道 + 浮起的选中胶囊）。
    *
-   * 试过拆成四个独立 Button，用户反馈「更难看」，退回分段控件。分段控件原本的
-   * 问题是「四个选项连成一片、只有文字没有视觉语言」，所以这里给每项配一个
-   * 符号图标：线 / 蓝牙 / Wi-Fi / 路由器，扫一眼就能分辨，也顺带把四段分开。
+   * 试过三种形态：
+   * - `CapsuleSegmentButtonV2`（选中项实心主色）：一整块 73×52 的纯蓝，比下面
+   *   真正的操作还抢眼，而它只是「换一种连接方式」的次级开关；
+   * - 四段独立胶囊（只给选中项描边）：只有一个框、其余三个是裸文字，
+   *   看起来是「一个按钮 + 三个字」，比改进前更散；
+   * - 现在这个：轨道给整体感，选中项从轨道上浮起来（浅色 `bg_page` 浮
+   *   `bg_surface`，深色纯黑浮 `#1C1C1E`，都是「选中更亮」），主色只落在
+   *   13fp 的文字上，不再占一块面积。
    *
-   * 配色沿用「凹槽 + 凸起」：轨道用 `bg_page`（比卡片暗一档），选中项主色实底、
-   * 图标与文字反白。注意内容区拿不到沉浸光感（官方限制），这里不用材质。
+   * 内容区拿不到沉浸光感（官方限制），这里不用材质。
    */
   @Builder
   ModePicker() {
-    CapsuleSegmentButtonV2({
+    TabSegmentButtonV2({
       items: MODE_ITEMS,
       selectedIndex: this.svc.linkMode,
       $selectedIndex: (index: number) => { this.onSelectMode(index); },
-      itemFontSize: LengthMetrics.fp(FontSize.Caption),
-      itemSelectedFontSize: LengthMetrics.fp(FontSize.Caption),
+      itemFontSize: LengthMetrics.fp(FontSize.Section),
+      itemSelectedFontSize: LengthMetrics.fp(FontSize.Section),
       itemFontWeight: FontWeight.Regular,
       itemSelectedFontWeight: FontWeight.Medium,
       itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
-      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
-      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.primary')),
-      itemSymbolFontSize: LengthMetrics.fp(18),
-      itemSymbolFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
-      itemSelectedSymbolFontColor: ColorMetrics.resourceColor($r('app.color.text_on_primary')),
-      itemMinHeight: LengthMetrics.vp(52),
-      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page'))
+      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.primary')),
+      itemPadding: {
+        top: LengthMetrics.vp(0),
+        bottom: LengthMetrics.vp(0),
+        start: LengthMetrics.vp(4),
+        end: LengthMetrics.vp(4)
+      },
+      itemMinHeight: LengthMetrics.vp(36),
+      itemBorderRadius: LengthMetrics.vp(18),
+      buttonMinHeight: LengthMetrics.vp(44),
+      buttonPadding: LengthMetrics.vp(4),
+      buttonBorderRadius: LengthMetrics.vp(22),
+      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_page')),
+      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_surface'))
     })
       .width('100%')
   }
@@ -667,10 +683,21 @@ export struct CameraPage {
         }
 
         // 分隔线把这张卡分成两半：线上是「这台机器现在怎么样」，
-        // 线下是「换一种连接方式」——四选一胶囊 + 当前模式的专属控件。
+        // 线下是「换一种连接方式」——四选一 + 当前模式的专属控件。
         Divider().color($r('app.color.divider'))
 
-        this.ModePicker()
+        // 选择器自己不带标题，轨道又很浅，单独摆在分隔线下面容易读成「四段文字」。
+        // 给它一行小标题，才知道这是一组可点的选项；两者间距 8vp（比卡片里 12vp 的
+        // 常规间距紧一档），读成一组而不是两个并列元素。
+        Column({ space: 8 }) {
+          Text($r('app.string.camera_group_mode'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+          this.ModePicker()
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
 
         this.ModeControls()
       }
