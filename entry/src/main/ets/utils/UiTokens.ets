@@ -92,3 +92,19 @@ export const CardShadow: ShadowOptions = {
   offsetX: 0,
   offsetY: 5
 };
+
+/**
+ * 相机页「相机卡」的投影：比 `CardShadow` 更软、更深一档。
+ *
+ * 它是页面的主体（深色封面 + 白抽屉 + 立牌倒影），而 `CardShadow` 是给设置页
+ * 那种「白底上一张白卡」准备的——差值只有 13 时 6% 就够把卡托起来。这张卡
+ * 左右各有 16vp 空隙、上面还有 130vp 页面底色，投影是它唯一的浮起线索，
+ * 6% 在深色封面这侧完全看不出边界。18→28 的模糊半径让影子摊得更开，
+ * 不像贴了一圈硬边描边。
+ */
+export const HeroCardShadow: ShadowOptions = {
+  radius: 28,
+  color: '#1A000000',
+  offsetX: 0,
+  offsetY: 8
+};

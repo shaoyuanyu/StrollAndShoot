@@ -1,6 +1,6 @@
 import { CameraService } from '../services/CameraService';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
-import { CardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
+import { HeroCardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2 } from '@kit.ArkUI';
@@ -108,6 +108,31 @@ const REFLECTION_BOX = REFLECTION_HEIGHT + REFLECTION_GROW_MAX;
 const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
 /** 倒影渐变的「保持透明」段长度（vp）：这一段完全透出镜像，之后才开始淡出。 */
 const REFLECTION_FADE_HOLD = 16;
+
+/*
+ * 下面三个常数是「立体感」的三层光，合起来讲一个光源在正上方的故事：
+ * 顶边吃到光（`COVER_RIM_HEIGHT`）、立牌把地面压暗一小片（`STANDEE_SHADOW_HEIGHT`）、
+ * 深色面板与抽屉的接缝处压一层落影（`PANEL_SHADOW_HEIGHT`）。
+ *
+ * 为什么只能靠光而不是「材质」：沉浸光感在内容区不生效（官方《沉浸光感总览》：
+ * 除弹窗类接口与 Toggle / Slider / Select 外，其他组件只在 Navigation/NavDestination
+ * 标题栏或横向 Tabs 的底部 TabBar 里生效）。而且这张抽屉背后就是页面底色——
+ * 一块纯色，模糊与折射都没有东西可采样，即便能用也不会比现在好看。
+ */
+
+/** 卡片顶边受光带的高度（vp）：一条极窄的白光，收进卡片圆角。 */
+const COVER_RIM_HEIGHT = 2;
+/** 立牌底座的接触阴影高度（vp），画在倒影上、从底边往下淡出。 */
+const STANDEE_SHADOW_HEIGHT = 18;
+/**
+ * 接触阴影宽度相对立牌盒子的比例。
+ *
+ * 立牌素材左右各有 40–67vp 透明余量，按盒子满宽画会比机身宽出一大截，
+ * 看着像地面上一条横线；0.72 落在机身两肩以内，是「影子」而不是「地平线」。
+ */
+const STANDEE_SHADOW_WIDTH_RATIO = 0.72;
+/** 深色面板底部落在抽屉上的投影高度（vp），跟着抽屉顶边走。 */
+const PANEL_SHADOW_HEIGHT = 24;
 
 /**
  * 相机页。
@@ -964,7 +989,7 @@ export struct CameraPage {
     // 抽屉顶部圆角需要的深色由相机区自己多铺一个圆角来提供（见 COVER_ROUND）。
     .backgroundColor($r('app.color.bg_surface'))
     .borderRadius(Radius.Card)
-    .shadow(CardShadow)
+    .shadow(HeroCardShadow)
     .clip(true)
   }
 
@@ -1011,9 +1036,49 @@ export struct CameraPage {
       }
       .width('100%')
       .padding({ top: COVER_TOP_PAD })
+
+      // 面板底部落影：面板与抽屉的交界不是一刀切，接缝上方 24vp 压暗，
+      // 像抽屉从面板底下抽出来、缝里进不去光。它跟着抽屉顶边走，所以下拉时
+      // 影子跟着往下滑，永远贴在接缝上方。
+      // 用 `offset` 而不是 `position`：offset 不参与布局，下拉时只有绘制在动。
+      Column()
+        .width('100%')
+        .height(PANEL_SHADOW_HEIGHT)
+        .offset({ y: this.panelShadowOffset() })
+        .linearGradient({
+          angle: 180,
+          colors: [[$r('app.color.shadow_fade'), 0], [$r('app.color.shadow_soft'), 1]]
+        })
+        .hitTestBehavior(HitTestMode.None)
+
+      // 顶边受光：最上沿 2vp 白光。深色面板是「一块面」，加了这条边才是「一块板」：
+      // 光从上方来，边缘先吃到光。画在内容之上，由卡片的 `clip` 收进 24vp 圆角。
+      Column()
+        .width('100%')
+        .height(COVER_RIM_HEIGHT)
+        .linearGradient({
+          angle: 180,
+          colors: [[$r('app.color.cover_rim'), 0], [$r('app.color.cover_rim_fade'), 1]]
+        })
+        .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     .backgroundColor($r('app.color.cover_bg'))
+  }
+
+  /**
+   * 落影层的 `offset`：影子底边永远压在抽屉顶边上。
+   *
+   * 抽屉在布局上紧跟在封面之后（封面高 = 立牌 + 整个倒影盒子），再用负 `offset`
+   * 把它拉回 `COVER_HEIGHT`，所以静止时顶边正好落在封面视觉底边上；下拉时它在卡内
+   * 继续打开（`drawerPullShift()`），影子跟着往下滑。
+   *
+   * **刻意不算 `drawerLift`（第二段的向上收）**：那一段抽屉是把盖子往上滑、把倒影
+   * 盖住，影子要是跟着往上走，24vp 的暗带就压到机身底座上去了（第二段末抽屉顶边
+   * 正好落在底座线上）。让它留在静止位置，抽屉自己会把它盖掉。
+   */
+  private panelShadowOffset(): number {
+    return COVER_HEIGHT + this.drawerPullShift() - PANEL_SHADOW_HEIGHT;
   }
 
   /**
@@ -1105,6 +1170,18 @@ export struct CameraPage {
             [$r('app.color.cover_bg'), 1]
           ]
         })
+
+      // 底座接触阴影：立牌压在台面上，脚下一小片被压暗。画在倒影**之上**、
+      // 从底边往下淡出——只盖倒影不盖机身，于是立牌是「踩」在台面上，不是浮着。
+      // 倒影盒子顶边正好是机身底边（镜像线），所以这一层天然对齐底座。
+      Column()
+        .width(this.standeeWidth() * STANDEE_SHADOW_WIDTH_RATIO)
+        .height(STANDEE_SHADOW_HEIGHT)
+        .linearGradient({
+          angle: 180,
+          colors: [[$r('app.color.shadow_soft'), 0], [$r('app.color.shadow_fade'), 1]]
+        })
+        .hitTestBehavior(HitTestMode.None)
     }
     .width('100%')
     // 盒子高度恒定（= 翻转图自身高度）：抽屉用 offset 抵消预留段，下拉时露出来。

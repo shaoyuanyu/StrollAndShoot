@@ -207,6 +207,22 @@
     {
       "name": "hero_glow",
       "value": "#24FFFFFF"
+    },
+    {
+      "name": "cover_rim",
+      "value": "#1FFFFFFF"
+    },
+    {
+      "name": "cover_rim_fade",
+      "value": "#00FFFFFF"
+    },
+    {
+      "name": "shadow_soft",
+      "value": "#40000000"
+    },
+    {
+      "name": "shadow_fade",
+      "value": "#00000000"
     }
   ]
 }
