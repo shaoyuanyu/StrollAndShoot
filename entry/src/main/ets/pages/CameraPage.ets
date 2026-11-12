@@ -38,20 +38,13 @@ const REFLECTION_HEIGHT = 48;
 const COVER_HEIGHT = 14 + STANDEE_HEIGHT + REFLECTION_HEIGHT;
 
 /**
- * 贴顶（第三段）时，立牌底边与抽屉顶边之间保留的深色边距（vp）。
+ * 抽屉在第二段最多上收多少 vp：正好等于倒影高度。
  *
- * 上下都没有空间之后，机身直接顶在白面边上会显得「被按住」；留一小条深色，
- * 立牌才像落在台面上。这一段原本是「被抽屉盖住的倒影」，现在改成**抽屉只上拉到
- * 机身底边下方 `COVER_BOTTOM_GAP`**，剩下的倒影由 `reflectionOpacity()` 在第二段
- * 里淡到 0——所以贴顶时既没有倒影、又不贴边。
+ * 贴顶时抽屉顶边落在**机身底边**上（1.62.10 起不再留深色边距，用户对比后觉得
+ * 贴齐更干净），倒影也正好被收干净；`reflectionOpacity()` 在同一段里把它淡到 0，
+ * 于是「倒影消失」和「抽屉收位」同时完成，接缝处不会出现半截淡掉的镜像。
  */
-const COVER_BOTTOM_GAP = 4;
-
-/**
- * 抽屉在第二段最多上拉多少 vp：刚好把机身下方的倒影收掉，**少走
- * `COVER_BOTTOM_GAP`**，给机身留一条深色边距。
- */
-const DRAWER_MAX_LIFT = REFLECTION_HEIGHT - COVER_BOTTOM_GAP;
+const DRAWER_MAX_LIFT = REFLECTION_HEIGHT;
 /**
  * 相机区底色要比内容区多铺一个圆角高度。
  *
@@ -793,9 +786,9 @@ export struct CameraPage {
   }
 
   /**
-   * 抽屉盒子的高度：从相机区下沿一直到卡片底边，再加 `DRAWER_MAX_LIFT`（44）。
+   * 抽屉盒子的高度：从相机区下沿一直到卡片底边，再加 `DRAWER_MAX_LIFT`（48）。
    *
-   * 那 44vp 是第二段抽屉上收的量：静止时多出来的这一截被屏幕裁掉（看不见），
+   * 那 48vp 是第二段抽屉上收的量：静止时多出来的这一截被屏幕裁掉（看不见），
    * 上收之后正好补满卡片底部。于是抽屉里的**可视高度恒定**，不会因为抽屉
    * 正在上移而一会儿多一会儿少——第三段的可滚总量才算得准。
    */
@@ -804,7 +797,7 @@ export struct CameraPage {
   }
 
   /**
-   * 第二段的进度（0..1）：`drawerLift` 从 0 走到 `DRAWER_MAX_LIFT` 的那 42vp。
+   * 第二段的进度（0..1）：`drawerLift` 从 0 走到 `DRAWER_MAX_LIFT` 的那 48vp。
    *
    * 只有这一段（相机已经贴住屏幕顶、抽屉还在往上收）才让立牌面板横过来撑满、
    * 倒影淡出、白面收到通栏；第一段（整页上移）与下拉回弹都不动这些。
@@ -1243,8 +1236,8 @@ export struct CameraPage {
    */
   private reflectionOpacity(): number {
     const base = this.svc.connected ? 0.7 : 0.7 * 0.7;
-    // 第二段里跟着抽屉一起淡出：贴顶时抽屉只走到机身底边下方 `COVER_BOTTOM_GAP`，
-    // 剩下那一小段倒影不再靠抽屉盖，必须自己淡到 0，否则机身下面会露出一小片镜像。
+    // 第二段里跟着抽屉一起淡出：抽屉收位与倒影淡出同时完成，接缝处不会出现
+    // 「白面已经贴到机身、下面还挂着半截镜像」的硬切。
     return base * (1 - this.stage2Progress());
   }
 
@@ -1491,7 +1484,7 @@ export struct CameraPage {
       .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.START })
       .align(Alignment.Top)
       // 第一段（0 → stick）：整页上移，把相机顶到屏幕顶、只留 COVER_TOP_GAP；
-      // 第二段（stick-44 → stick）：抽屉相对相机上收 44，机身下留 4vp 深色边距；
+      // 第二段（stick-48 → stick）：抽屉相对相机上收 48，正好收到机身底边；
       // 第三段（stick 之后）：相机不动，抽屉内容自己滚。
       .onScrollStop(() => {
         // 惯性结束补一帧：最后一帧如果没进 onScroll，三个位移会停在倒数第二个
