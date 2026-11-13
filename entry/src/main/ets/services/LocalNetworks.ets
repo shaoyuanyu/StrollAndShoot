@@ -234,16 +234,22 @@ export async function collectLocalNetworks(): Promise<LocalNetworkInfo> {
   };
 }
 
+/**
+ * 一句话快照，只进日志（相机页不再常驻显示本机网络）。
+ *
+ * SSID 放最前面：拿它跟相机那边连的网络核对，比一串点分地址更好认。
+ * 地址跟在后面，多个地址用 `/` 并排；热点是推断出来的，单独一句并注明。
+ */
 function buildSummary(addresses: string[], ssid: string, hotspotActive: boolean,
                       hotspotSubnet: string): string {
   const parts: string[] = [];
+  if (ssid !== '') {
+    parts.push(`Wi-Fi「${ssid}」`);
+  }
   if (addresses.length > 0) {
     parts.push(addresses.join(' / '));
   } else {
     parts.push('无 IP');
-  }
-  if (ssid !== '') {
-    parts.push(`Wi-Fi「${ssid}」`);
   }
   if (hotspotActive) {
     parts.push(hotspotSubnet !== '' ? `热点 ${hotspotSubnet}.x（推断）` : '热点已开');

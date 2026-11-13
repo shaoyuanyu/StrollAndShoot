@@ -430,6 +430,13 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 - 虚拟相机的身份是 `<厂商>_<型号>_MOCK-0001`（未知型号时是 `Mock_Virtual_PTP_Camera_MOCK-0001`），它的缩略图缓存会落到真实缓存目录里，可用于验证缓存与快速扫描。**切换模拟型号会换一份缓存标识**，各型号互不干扰。
 - 型号存在 `SettingsStore.mockCameraModel`（默认空串 = 未知型号），真实机型名一律取 `cameraStandeeLabel()`，不要手写（手写拼错会落到「认不出」分支）。
 - 开关状态持久化在 `SettingsStore.mockCameraEnabled`。改完开关或重装包后，需要重新到「相机」页点一次「搜索相机」。
+- **模拟相机现在也走「已配对相机」那一套**（1.65.0）：连上之后 `CameraService.rememberMockCamera()`
+  会把它按普通记录写进 `SavedCameraStore`（`isMock: true`，key 用 `MOCK-0001`），于是重启后
+  标题、立牌、当前相机都还停在同一台，不用每轮重连；`rememberActive()` 永远不会被它触发
+  （模拟相机没有蓝牙配对那一步）。切到模拟记录时 `activate()` 不写 `BleIdentityStore`，
+  而是把蓝牙活动身份清掉——否则相机页会把它显示成「已配对」的蓝牙相机。
+- **模拟设备必须和真机分得出来**：已连接时设备信息第一行是「设备来源 = 模拟相机（调试包）」
+  （`svc.mockSession()`），「已配对相机」页里它带「模拟」胶囊。截图对外时不要漏掉这一行。
 - 验证完记得关掉开关，否则会与真实相机状态混淆。
 
 ### 相机页状态预演（仅调试包）
@@ -720,7 +727,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 #### 导航骨架
 
 - `pages/Index.ets` 是唯一入口（`@Entry`），内部用 ArkUI 原生 **`Navigation`** + `NavPathStack`，隐藏系统导航栏（`hideNavBar(true)`），并注册自定义转场 `customNavContentTransition`。
-- `route_map.json` 注册 NavDestination：`MainScreen`、`PhotoViewerScreen`、`GpsManagementPage`、`GpsTrackViewerPage`、`CacheManagementPage`。
+- `route_map.json` 注册 NavDestination：`MainScreen`、`PhotoViewerScreen`、`GpsManagementPage`、`GpsTrackViewerPage`、`CacheManagementPage`、`PairedCamerasPage`。
 - 二级页（缓存管理、定位记录、轨迹全屏）都走 `route_map.json` 的 NavDestination，用 `NavPathStack.pushPath` / `pop`，不是 `@Entry`，也不再用 `router.*`。
 - `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。
 

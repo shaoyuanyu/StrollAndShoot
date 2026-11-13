@@ -22,6 +22,13 @@ export interface SavedCamera {
   identitySerial?: string;
   modelKey: string;
   lastConnectedAt: number;
+  /**
+   * 调试包的模拟相机（`MockPtpSession`）。
+   *
+   * 它没有蓝牙身份，也不能被当成真机：切到它时不能写 `BleIdentityStore`，
+   * 界面上要显式标出「模拟」。缺省（undefined）就是真机，旧记录照旧读。
+   */
+  isMock?: boolean;
 }
 
 /**
@@ -137,11 +144,17 @@ export class SavedCameraStore {
   activate(key: string): boolean {
     const rec = this.find(key);
     if (rec === null) return false;
-    const active = BleIdentityStore.getInstance();
-    const identitySerial = rec.identitySerial !== undefined && rec.identitySerial !== ''
-      ? rec.identitySerial : rec.serial;
-    active.save(rec.deviceId, rec.cameraName, rec.identityDevice,
-      rec.identityNonce, identitySerial);
+    if (rec.isMock === true) {
+      // 模拟相机没有蓝牙身份：留着上一台真机的身份，会让相机页把它显示成
+      // 「已配对」的蓝牙相机。这里直接把活动身份收干净。
+      BleIdentityStore.getInstance().clear();
+    } else {
+      const active = BleIdentityStore.getInstance();
+      const identitySerial = rec.identitySerial !== undefined && rec.identitySerial !== ''
+        ? rec.identitySerial : rec.serial;
+      active.save(rec.deviceId, rec.cameraName, rec.identityDevice,
+        rec.identityNonce, identitySerial);
+    }
     this.currentKey = rec.key;
     const model = CameraModelStore.getInstance();
     model.clear();
@@ -154,6 +167,62 @@ export class SavedCameraStore {
   beginNew(): void {
     BleIdentityStore.getInstance().clear();
     this.currentKey = '';
+  }
+
+  /**
+   * 记下一台**模拟相机**（仅调试包）。
+   *
+   * 模拟相机走的是 USB/PTP，没有蓝牙配对那一步，所以 `rememberActive()` 永远
+   * 不会被它触发——重启之后标题、立牌、当前相机全都退回「相机」，每轮测试都得
+   * 重新搜一次，和真机流程对不上。这里给它建一条普通记录（`isMock` 标记），
+   * 于是一次配对之后重启也能回到同一台。
+   */
+  rememberMock(modelKey: string, serial: string, name: string): SavedCamera | null {
+    const key = serial !== '' ? serial : name;
+    if (key === '') return null;
+    const rec: SavedCamera = {
+      key,
+      deviceId: '',
+      cameraName: name,
+      identityDevice: 0,
+      identityNonce: 0,
+      serial,
+      modelKey,
+      lastConnectedAt: Date.now(),
+      isMock: true
+    };
+    const next = this.cameras.slice();
+    const idx = this.indexOf(rec);
+    if (idx >= 0) {
+      next[idx] = rec;
+    } else {
+      next.push(rec);
+    }
+    this.cameras = next;
+    this.currentKey = key;
+    this.lastConnectedKey = key;
+    return rec;
+  }
+
+  /**
+   * 删掉一条配对记录。
+   *
+   * 删的是当前这台时，活动身份一起收掉，并回退到最近连接过的那台（还有的话）；
+   * 相机侧不知道自己被忘了，重新配对即可再用。
+   */
+  remove(key: string): boolean {
+    const idx = this.indexOfKey(key);
+    if (idx < 0) return false;
+    const next = this.cameras.slice();
+    next.splice(idx, 1);
+    this.cameras = next;
+    if (this.lastConnectedKey === key) this.lastConnectedKey = '';
+    if (this.currentKey !== key) return true;
+    this.currentKey = '';
+    BleIdentityStore.getInstance().clear();
+    const sorted = this.sorted();
+    if (sorted.length > 0) this.activate(sorted[0].key);
+    return true;
   }
 
   /** 配对成功后把活动身份写入仓库，并更新「上次连接」。 */

@@ -179,12 +179,16 @@ export default class EntryAbility extends UIAbility {
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
     UsbAttachWatcher.getInstance().setAppForeground(true);
+    // 回前台释放「保持相机会话」的长时任务；传输自己的引用仍在时任务不撤。
+    CameraService.getInstance().onAppForeground();
   }
 
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
     UsbAttachWatcher.getInstance().setAppForeground(false);
+    // 相机还连着：申请长时任务，避免进程被挂起后 USB / TCP 会话断掉。
+    CameraService.getInstance().onAppBackground();
     this.flushPersistence();
   }
 }

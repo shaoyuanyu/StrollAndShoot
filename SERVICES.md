@@ -25,7 +25,9 @@
 
 - `module.json5` 的 `abilities[].backgroundModes` 已声明 `location` + `dataTransfer`；
 - `CameraService.beginTransferTask()` / `endTransferTask()` 用**引用计数**申请 / 释放 `BackgroundMode.DATA_TRANSFER`（扫描与下载可能同时进行，最后一个结束才取消），日志 `后台传输长时任务已申请 / 已取消`；
-- **系统限制**：一个 UIAbility 同时只允许一个长时任务（API 20 及以前）。定位长时任务在跑时，传输任务会申请失败（日志 `后台传输长时任务申请失败`），此时退后台会被挂起；要并存需改用 API 21+ 的 `startBackgroundRunning(context, ContinuousTaskRequest)` 多任务接口。
+- **相机连着时退到后台也会持有同一任务**（1.64.1 二轮）：`EntryAbility.onBackground()` 调 `CameraService.onAppBackground()`，若 `connected` 且还没持有，就加一份 `sessionKeepAlive` 引用并申请长时任务；`onForeground()` 释放。这样进程不会被挂起，USB PTP / Wi-Fi TCP 会话能继续活着。官方指南建议把申请推迟到 `onBackground`，前台就不会常驻一条长时任务通知；`disconnectInternal()` 也会释放这份引用。
+- 申请 / 释放与传输共用引用计数，但 `beginTransferTask()` 用 `transferTaskStarting` 防并发重复申请，并在申请完成后再查一次引用数（退后台后马上回前台时，任务可能刚申请完就已经没有引用了，需要立刻收掉）；`stopTransferTask()` 先把 `transferTaskOn` 置 false 再停，避免并发 stop 同一任务。
+- **系统限制**：一个 UIAbility 同时只允许一个长时任务（API 20 及以前）。定位长时任务在跑时，传输任务会申请失败（日志 `后台传输长时任务申请失败`），此时退后台会被挂起；要并存需改用 API 21+ 的 `startBackgroundRunning(context, ContinuousTaskRequest)` 多任务接口。相机保活与定位同时需要时同样受这条限制；定位任务本身已经在保进程，所以相机连接一般不会因此丢。
 
 通知栏进度环走的是**系统预置通知模板**，不是自绘：
 
@@ -402,6 +404,24 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 展示序列号（BLE 名尾段），`SavedCamera.identitySerial` 是 `BleIdentityStore.serial`
 那份 stage4 身份序列号；`activate()` 时不要把展示序列号写进活动身份。
 
+*模拟相机的记录与删除（1.65.0）*
+
+- `SavedCamera.isMock?: boolean` 标出调试包的虚拟相机。它走 USB/PTP，**没有蓝牙配对
+  那一步**，`rememberActive()` 永远不会被它触发；不补一条记录的话，冷启动后标题、
+  立牌、当前相机都退回「相机」，每轮测试都要重新搜一次。
+- `SavedCameraStore.rememberMock(modelKey, serial, name)` 建/更新这条记录（key 优先用
+  `MOCK-0001` 序列号），由 `CameraService.rememberMockCamera()` 在 USB 会话建立
+  （`ensureUsbSession` 末尾）与机型/序列号识别时调用；`sessionIsMock` 为假时直接返回。
+  同一个「key|机型|广播名」只记一行日志，连接过程中机型分几步到位不会刷屏。
+- `activate()` 遇到 `isMock` **不写 `BleIdentityStore`，反而把它清掉**：留着上一台真机
+  的身份，相机页会把这台模拟机显示成「已配对」的蓝牙相机。
+- `updateCurrentMeta()` 重建记录时必须带上传入记录的 `isMock`，否则一次机型/序列号
+  更新就会把标记丢掉。
+- `remove(key)` 删除一条记录：删的是当前那台就清活动身份，并回退到最近连接过的那台
+  （`sorted()[0]`）。相机侧不知道自己被忘了，重新配对即可再用。
+- 界面上的「显式区分」：`CameraService.mockSession()` 供相机页在设备信息里写
+  「设备来源 = 模拟相机（调试包）」，`PairedCamerasPage` 用 `isMock` 画「模拟」胶囊。
+
 *容易踩的三个坑*
 
 - **回链后必须先拉服务表**：`bond` 之后 GATT 服务缓存是空的，不先 `getServices()`
@@ -584,11 +604,39 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 *切换链路模式要清场*
 
 `setLinkMode(mode)` 除了落盘，还会清空 `lastScanError` / `bleHint` / `wifiHint` /
-`networkSummary` / `wirelessStage` / `wirelessFailed` / `bleCameras` / 扫描统计
+`wirelessStage` / `wirelessFailed` / `bleCameras` / `wifiCameras` / 扫描统计
 （`scanStatsText` / `scanPhaseText` / `scanProgress` / `scanTotal`）——这些都描述
 上一模式的现场，留着会串味（切到 USB 还挂着蓝牙失败、AP 模式还显示手机当前 Wi-Fi）。
-进入 STA 时顺带调 `refreshNetworkSnapshot()` 摸一遍本机网络，「本机网络」一行立刻
-可见；`initLinkMode()` 恢复的是 STA 时同样补一次。
+进入 STA 时顺带调 `refreshNetworkSnapshot()` 摸一遍本机网络，为之后的搜索准备好
+`wifiHint`；页面不显示网络摘要，快照只写日志。`initLinkMode()` 恢复的是 STA 时
+同样补一次。
+
+*切模式 = 取消在途搜索（1.64.1）*
+
+`setLinkMode()` 先递增 `linkEpoch`，再调 `cancelInFlightLink()`：
+
+- `stopBleScan()`：停 BLE 广播扫描、清计时器；
+- `stopWifiScan()`：停 mDNS 浏览、取消网段扫描、兑现 mDNS 窗口 promise；
+- `cancelWifiReconnect()`：撤掉排队中的无线自动重连；
+- 正在进行的 AP 热点交接调 `apJoiner.leave()`：取消 `join()` 轮询，手机如果已经
+  上了相机热点也一并退出（否则切到 STA 后手机还挂在没有外网的热点上）；
+- 正在首配的 BLE 连接调 `bleLink.disconnect()`：配对层的取消标记会在关键 await
+  后让流程停住；
+- 自动无线 / AP 交接 / USB 会话的 `await` 链没法从外面打断，靠代次检查收尾。
+
+这些流程在入口记下当时的 `linkEpoch`，在每个关键 `await` 之后用
+`epochCurrent(epoch)` 对一次。代次变了就**静默返回**：不写 `statusText` /
+`lastScanError` / `wirelessFailed` / `wirelessStage`，不把旧模式扫到的相机或失败
+结论带进新模式；已经建立的会话由 `abortWifiConnect()`（关 TCP / PTP 会话、复位
+`wireless` / `connected` / `wifiSession`）或 `abortStaleUsbSession()` 关掉。
+
+两个扫描器的回调只创建一次、跨多轮复用，所以另存字段对代次：
+`bleScanEpoch` / `wifiScanEpoch` 等于当前 `linkEpoch` 时才收结果；`wifiScanGen`
+再区分「第几轮」，避免切模式后旧一轮的收尾把新一轮刚置上的 `wifiScanning`
+清掉。`stopBleScan()` / `stopWifiScan()` 会把对应 epoch 置 -1。
+
+这样用户手点的搜索、以及其它在途的自动连接，都可以在切模式时立刻中断，
+页面停在新模式的空闲态。
 
 *无线进度、失败与断开状态*
 
@@ -598,6 +646,10 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 - `connectWifi()` 成功时清掉 `wirelessFailed` / `wirelessStage` / `bleHint` /
   `lastScanError`：Wi-Fi 已经接管照片通道，上一轮的蓝牙失败/等待提示都属于过去时，
   否则会出现「已连接」旁边挂着「蓝牙连接失败」。
+- `wifiConnecting` 覆盖 `connectWifi()` 的整个异步过程（`wifiAutoConnecting` 只
+  覆盖自动链路）。手填 IP 直接调 `connectWifi()` 时，页面靠它显示「正在连接
+  Wi-Fi 相机 <地址>…」并禁用主操作；`wifiConnectSeq` 让重叠连接请求的 finally
+  不互相清掉这个标记。
 - `disconnect()` / `disconnectBle()` 用 `disconnecting` 标志包住整个异步过程
   （try/finally），并在结束时清掉本模式的进度、统计与错误；`MainScreen`
   切换模式时另写 `switchingTo`，页面据此显示「正在断开 / 正在切换」。
@@ -642,9 +694,12 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 
 扫不到相机分两种：**网络前提不成立**（没有可用网络、Wi-Fi 与热点都没开）与
 **相机那边的事**（没进 Wi-Fi 模式、被客户端隔离、上一个会话还挂在 15740 上）。
-`scanWifiCameras()` 先摸一遍本机网络写进 `networkSummary`，再把
+`scanWifiCameras()` 先摸一遍本机网络，把一句话摘要写进日志，再把
 `networkHint()` 的结论写进 `wifiHint`；两台都为空时补一句「同一网络里没有
-发现相机，确认相机已进入连接至智能设备」。相机页把这两行原样显示。
+发现相机，确认相机已进入连接至智能设备」。摘要格式是「Wi-Fi「SSID」· 地址 1 /
+地址 2 · 热点 …」——SSID 放最前，地址跟在后面，多个地址用 `/` 并排，没有地址时
+写「无 IP」。**这个摘要只进日志与失败提示，不在相机页常驻**：STA 的自动发现
+不需要用户先读懂本机 IP，网络名在系统控制中心就能看到。
 
 *`0x2004` 凭据解密：`services/NikonWifiCredentials.ets`*
 

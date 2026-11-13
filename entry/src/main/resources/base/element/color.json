@@ -209,6 +209,14 @@
       "value": "#24FFFFFF"
     },
     {
+      "name": "standee_placeholder_fill",
+      "value": "#0FFFFFFF"
+    },
+    {
+      "name": "standee_placeholder_border",
+      "value": "#24FFFFFF"
+    },
+    {
       "name": "cover_rim",
       "value": "#1FFFFFFF"
     },

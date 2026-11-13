@@ -64,6 +64,19 @@
           "value": "%d 條日誌"
         }
       ]
+    },
+    {
+      "name": "paired_camera_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d 台"
+        },
+        {
+          "quantity": "other",
+          "value": "%d 台"
+        }
+      ]
     }
   ]
 }

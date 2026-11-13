@@ -209,6 +209,14 @@
       "value": "#24FFFFFF"
     },
     {
+      "name": "standee_placeholder_fill",
+      "value": "#0FFFFFFF"
+    },
+    {
+      "name": "standee_placeholder_border",
+      "value": "#24FFFFFF"
+    },
+    {
       "name": "action_neutral_fill",
       "value": "#2C2C2E"
     }

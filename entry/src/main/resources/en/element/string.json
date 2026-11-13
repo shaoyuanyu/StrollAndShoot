@@ -157,10 +157,6 @@
       "value": "Waiting for Wi-Fi"
     },
     {
-      "name": "camera_conn_network",
-      "value": "This phone: %s"
-    },
-    {
       "name": "camera_conn_guide",
       "value": "The app uses the camera's own Wi-Fi hotspot: tapping “View photos” wakes the camera over Bluetooth and then joins its hotspot automatically. On the camera just pick AP mode once under Network menu → Connect to smart device → Wi-Fi connection (not STA); no further camera-side steps."
     },
@@ -174,11 +170,7 @@
     },
     {
       "name": "camera_wifi_host_placeholder",
-      "value": "Camera IP, e.g. 192.168.1.5"
-    },
-    {
-      "name": "camera_wifi_connect",
-      "value": "Connect"
+      "value": "Camera IP address"
     },
     {
       "name": "camera_ble_title",
@@ -513,12 +505,24 @@
       "value": "No camera found on this network"
     },
     {
-      "name": "camera_sta_manual_hide",
-      "value": "Hide"
+      "name": "camera_sta_manual_lead",
+      "value": "Can't connect?"
     },
     {
-      "name": "camera_sta_manual_show",
-      "value": "Manual IP"
+      "name": "camera_sta_manual_action",
+      "value": "Try a fixed IP"
+    },
+    {
+      "name": "camera_ip_sheet_title",
+      "value": "Camera IP"
+    },
+    {
+      "name": "camera_ip_sheet_hint",
+      "value": "Enter the IP shown on the camera. The phone must be on the same network."
+    },
+    {
+      "name": "camera_wifi_connect",
+      "value": "Connect"
     },
     {
       "name": "gallery_scanning_title",
@@ -1365,8 +1369,20 @@
       "value": "Connection steps"
     },
     {
+      "name": "camera_guide_title",
+      "value": "Connection guide"
+    },
+    {
+      "name": "camera_guide_modes_title",
+      "value": "Connection modes"
+    },
+    {
+      "name": "camera_guide_modes_intro",
+      "value": "Each connection type supports a different set of features. A check mark means it works."
+    },
+    {
       "name": "camera_guide_view_steps",
-      "value": "View steps"
+      "value": "View guide"
     },
     {
       "name": "camera_new",
@@ -1459,6 +1475,94 @@
     {
       "name": "settings_standee_none",
       "value": "None"
+    },
+    {
+      "name": "camera_guide_col_feature",
+      "value": "Feature"
+    },
+    {
+      "name": "camera_guide_feature_photos",
+      "value": "Browse and import photos"
+    },
+    {
+      "name": "camera_guide_feature_clock",
+      "value": "Clock and location sync"
+    },
+    {
+      "name": "camera_guide_feature_pair",
+      "value": "Needs Bluetooth pairing first"
+    },
+    {
+      "name": "camera_guide_feature_park",
+      "value": "Stays on connect screen"
+    },
+    {
+      "name": "camera_guide_feature_same_net",
+      "value": "Same network as phone"
+    },
+    {
+      "name": "camera_guide_feature_online",
+      "value": "Phone stays online"
+    },
+    {
+      "name": "camera_title_with_serial",
+      "value": "%1$s (%2$s)"
+    },
+    {
+      "name": "camera_paired_title",
+      "value": "Paired cameras"
+    },
+    {
+      "name": "camera_paired_empty",
+      "value": "No paired cameras yet. Connect one and it will show up here."
+    },
+    {
+      "name": "camera_paired_hint",
+      "value": "Pick one to make it current, then tap Connect on the camera page."
+    },
+    {
+      "name": "camera_paired_current",
+      "value": "Current"
+    },
+    {
+      "name": "camera_paired_switched",
+      "value": "Switched to %1$s"
+    },
+    {
+      "name": "camera_paired_need_disconnect",
+      "value": "Disconnect the current camera first"
+    },
+    {
+      "name": "camera_paired_last_used",
+      "value": "Last connected %1$s"
+    },
+    {
+      "name": "camera_paired_delete_title",
+      "value": "Delete this camera?"
+    },
+    {
+      "name": "camera_paired_delete_message",
+      "value": "Only the pairing record on the phone is removed. The camera keeps its own pairing."
+    },
+    {
+      "name": "camera_mock_badge",
+      "value": "Simulated"
+    },
+    {
+      "name": "settings_section_camera",
+      "value": "Camera"
+    },
+    {
+      "name": "settings_paired_cameras",
+      "value": "Paired cameras"
+    },
+    {
+      "name": "camera_info_mock",
+      "value": "Source"
+    },
+    {
+      "name": "camera_info_mock_value",
+      "value": "Simulated camera (debug build)"
     }
   ]
 }

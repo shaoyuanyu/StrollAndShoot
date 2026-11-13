@@ -24,6 +24,11 @@
       "name": "GpsTrackViewerPage",
       "pageSourceFile": "src/main/ets/pages/GpsTrackViewerPage.ets",
       "buildFunction": "GpsTrackViewerPageBuilder"
+    },
+    {
+      "name": "PairedCamerasPage",
+      "pageSourceFile": "src/main/ets/pages/PairedCamerasPage.ets",
+      "buildFunction": "PairedCamerasPageBuilder"
     }
   ]
 }

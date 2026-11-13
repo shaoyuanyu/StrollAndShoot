@@ -27,6 +27,21 @@ const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
   { text: $r('app.string.camera_mode_sta') }
 ]);
 
+/** 说明面板两页的标题。 */
+const GUIDE_TAB_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
+  { text: $r('app.string.camera_guide_steps') },
+  { text: $r('app.string.camera_guide_modes_title') }
+]);
+
+/**
+ * 「连接模式」支持表：功能列宽与行高（vp）。
+ *
+ * 功能列固定 104vp（最长的一条是 7 个汉字 ≈ 84vp），四个模式列均分剩下的
+ * 宽度：365.7vp 的机器上每列约 57vp，「Wi-Fi STA」在 12fp 下约 50vp，排得下。
+ */
+const GUIDE_FEATURE_COL = 104;
+const GUIDE_ROW_HEIGHT = 34;
+
 /**
  * 模式选择器的高度（vp）。连接后选择器被锁定，点击时整条左右震动，
  * 震动位移作用在同一行上、不改变高度。
@@ -137,6 +152,50 @@ const REFLECTION_BOX = REFLECTION_HEIGHT + REFLECTION_GROW_MAX;
  * 取小一点就会出现「倒影还没露完，抽屉已经停住」的硬边。
  */
 const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
+
+/*
+ * 顶边下拉刷新（1.65.0，第二轮）。
+ *
+ * **手势与下拉编排一行不改**：初始位置继续下拉时 `currentOffset()` 变负，
+ * `pullDown` 跟着长，卡面走 1/3、卡内抽屉开 2/3、立牌倒影被拉长——全是既有行为。
+ * 新增的只有「松手之后」这一段：
+ *
+ * - 松手高度不到最大下拉的 [REFRESH_TRIGGER_RATIO]（80%）→ 什么都不做，
+ *   继续跟着弹簧回弹（和以前完全一致）；
+ * - 到了阈值 → 手指抬起那一刻定格，用**一条** `animateTo` 把「下拉量」收回到 0：
+ *   卡面与抽屉完整回弹到原位，系统刷新指示器贴在卡面正上方、跟着一起落到
+ *   「标题栏与卡面之间」那段空白里继续转；
+ * - [REFRESH_FAKE_MS] 之后（现在没有实质刷新动作，先写死 2s）指示器淡出，
+ *   其余组件早已在原位，不需要再动。
+ *
+ * 这样「回弹」和「进入刷新」是同一条动画，不会出现「先弹回原位、再冒出一个转圈
+ * 把卡面挤下去」的两段。指示器用官方 `SwipeRefresherV2`（系统加载动效）。
+ */
+const REFRESH_TRIGGER_RATIO = 0.8;
+/** 触发刷新所需的下拉量（vp）= 最大下拉的 80%。 */
+const REFRESH_THRESHOLD_VP = TOP_PULL_MAX * REFRESH_TRIGGER_RATIO;
+/**
+ * 刷新指示器：**不占布局**，画在标题栏与卡面之间那段空白里（1.65.0 第二轮第三版，
+ * 用户要求）。松手后卡面与抽屉**完整回弹到原位**，指示器留在卡面正上方继续转，
+ * 刷完淡出——回弹行程因此拿到卡面的 48vp 加抽屉的 144vp，比「卡面被顶下去一行」
+ * 那版长得多。指示器 22vp 必须塞得进那段空白（模拟器上约 48vp，见 `REFRESH_ICON`）。
+ */
+/** 刷新动作时长（ms）：现在没有实质动作，写死 2s。 */
+const REFRESH_FAKE_MS = 2000;
+/** 「松手回弹到原位」与「指示器淡出」的动画时长（ms）。 */
+const REFRESH_ANIM_MS = 260;
+/**
+ * 指示器的**盒子**尺寸（vp）：`LoadingProgress` 实际画出来的圆约是盒子的 2/3，
+ * 盒子 27 → 视觉直径约 **18vp**（用户指定的尺寸；22 的盒子只有 13vp，太小）。
+ *
+ * 用系统 `LoadingProgress` 而不是 `SwipeRefresherV2`：后者自带尺寸固定 13vp 左右，
+ * 想放大只能给容器加 `scale`，而 `scale` 是渲染变换，会按 1x 栅格化再放大、边缘发虚
+ * （实测）。`LoadingProgress` 的 `width/height` 直接可给，放大后仍然清晰。
+ */
+const REFRESH_ICON = 27;
+/** 指示器底边与卡面上沿的间距（vp）：图标永远贴在卡面正上方、与卡面同速移动。 */
+const REFRESH_ICON_GAP = 4;
+
 /** 倒影渐变的「保持透明」段长度（vp）：这一段完全透出镜像，之后才开始淡出。 */
 const REFLECTION_FADE_HOLD = 16;
 /**
@@ -252,13 +311,41 @@ export struct CameraPage {
   @Event onSelectMode: (mode: number) => void = (_m: number) => {};
   /** 锁定确认后：先断开当前连接，再切到新模式（由 MainScreen 串行执行）。 */
   @Event onSwitchMode: (mode: number) => void = (_m: number) => {};
+  /**
+   * 吸附的分页点：`[0, stick]`。
+   *
+   * **贴在末端的那一页要往里让开 2vp**（1.65.0 修）：抽屉内容装得下时
+   * （`innerScrollSpan() === 0`）可滚距离正好等于 `stick`，分页点因此落在可滚
+   * 距离的端点上。官方文档只要求取值在 `[0, 可滚距离]` 内，但实测落在端点上时
+   * **整条 `scrollSnap` 都不生效**——第一段/第二段松手停在半路，没有任何吸附。
+   * 让开 2vp 之后它落在范围内部，吸附恢复；少这 2vp 肉眼看不出来。
+   *
+   * 有第三段（内容比抽屉高）时可滚距离大于 `stick`，分页点本来就在内部，仍用
+   * 精确的 `stick`，贴顶那一帧才是严丝合缝的。
+   */
+  private snapPages(): number[] {
+    const stick = stickScrollVp();
+    const max = this.maxScrollY();
+    return [0, max - stick > 2 ? stick : Math.max(1, stick - 2)];
+  }
+
+  /**
+   * 顶边下拉刷新（1.65.0）。
+   *
+   * 界面这一层只管手势、阈值与动画：现在没有实质刷新动作，加载动画时长写死
+   * `REFRESH_FAKE_MS`（2s）。这个回调是给后续接「重新扫描相机」留的口子——
+   * 动作要接的时候在 MainScreen 里实现即可，页面不用动；它不影响动画时长。
+   */
+  @Event onRefresh: () => void = () => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
-  /** STA 的手动 IP 默认收起：主要操作是状态头的自动搜索。 */
-  @Local staManualOpen: boolean = false;
-  /** 半模态步骤面板是否打开。 */
+  /** 指定相机 IP 的半模态是否打开。 */
+  @Local ipSheetOpen: boolean = false;
+  /** 半模态说明面板是否打开。 */
   @Local guideSheetOpen: boolean = false;
+  /** 说明面板当前页：0 = 连接步骤，1 = 连接模式。 */
+  @Local guideTab: number = 0;
 
   /**
    * 抽屉状态。
@@ -292,6 +379,18 @@ export struct CameraPage {
    * 松手后跟着原生弹簧衰减回 0，不需要自己写动画。
    */
   @Local pullDown: number = 0;
+
+  /**
+   * 下拉刷新（1.65.0）。
+   *
+   * - `pullProgress`：本次下拉进度（0..1，1 = `TOP_PULL_MAX`），指示器随它淡入；
+   * - `refreshing`：刷新中（由 `onTopTouch()` 置真，`REFRESH_FAKE_MS` 后置假）；
+   * - `refreshFade`：刷新结束那一下的淡出（1→0），让指示器不是硬消失。
+   * 刷新时卡面与抽屉**回原位**，所以不再需要「撑开一行」的位移量。
+   */
+  @Local pullProgress: number = 0;
+  @Local refreshing: boolean = false;
+  @Local refreshFade: number = 1;
 
   /**
    * 模式选择器的锁定反馈（1.64.0 第二轮）。
@@ -413,6 +512,9 @@ export struct CameraPage {
       return this.svc.scanning ? CameraPhase.Loading : CameraPhase.Connected;
     }
     if (this.svc.bleConnecting || this.svc.bleReconnecting) return CameraPhase.Connecting;
+    // 手填 IP 的 `connectWifi()`：没有这个标记，页面会一直停在「未连接」，
+    // 用户按了键盘「前往」也看不到反应（`wifiAutoConnecting` 只管自动链路）。
+    if (this.svc.wifiConnecting) return CameraPhase.Connecting;
     if (this.svc.scanning || this.svc.bleScanning || this.svc.wifiScanning) {
       return CameraPhase.Searching;
     }
@@ -507,6 +609,11 @@ export struct CameraPage {
       if (this.svc.wifiAutoConnecting) {
         return m === CameraLinkMode.AP
           ? $r('app.string.camera_status_linking_ap') : $r('app.string.camera_status_linking_sta');
+      }
+      // 手填 IP：`connectWifi()` 已经写好了「正在连接 Wi-Fi 相机 <地址>」。
+      if (this.svc.wifiConnecting) {
+        return this.svc.statusText !== ''
+          ? this.svc.statusText : $r('app.string.camera_status_linking');
       }
       return $r('app.string.camera_status_relinking');
     }
@@ -617,6 +724,8 @@ export struct CameraPage {
       return true;
     }
     if (phase !== CameraPhase.Connecting) return false;
+    // 手填 IP 的连接不能取消，也不能在连接中再点一次搜索。
+    if (this.svc.wifiConnecting) return true;
     if (this.svc.bleConnecting) return false;
     return !(this.svc.linkMode === CameraLinkMode.BLE && this.svc.bleReconnecting);
   }
@@ -1009,7 +1118,10 @@ export struct CameraPage {
       }
       .width('100%')
       .alignItems(VerticalAlign.Top)
-      .onClick(() => { this.guideSheetOpen = true; })
+      .onClick(() => {
+        this.guideTab = 0;
+        this.guideSheetOpen = true;
+      })
 
     }
     .width('100%')
@@ -1023,6 +1135,11 @@ export struct CameraPage {
    * 一大片白；AP 有两张图，给高一点，打开后不用先滚一屏。都还能上拉到 LARGE。
    */
   private guideSheetHeight(): number {
+    // 「连接模式」页比步骤页高：表头 + 六行功能表 + 说明，切页时面板跟着长高；
+    // 回「连接步骤」再按当前模式收回去。
+    if (this.guideTab === 1) {
+      return 420;
+    }
     if (this.svc.linkMode === CameraLinkMode.USB) {
       return 240;
     }
@@ -1113,51 +1230,198 @@ export struct CameraPage {
     .alignItems(HorizontalAlign.Start)
   }
 
+  /**
+   * 「连接模式」表格的一格。
+   *
+   * 支持就打勾、不支持留空（用户要的就是这张勾选表：「按连接模式把所有功能列成
+   * 一张表，该模式支持的打勾，不支持的空着」）。当前模式那一列不下底色——四列
+   * 只有 60 多 vp 宽，底色会把表切碎——改成表头那格用主色 + 中等字重。
+   */
+  @Builder
+  GuideCheckCell(mode: number, supported: boolean) {
+    Stack() {
+      if (supported) {
+        SymbolGlyph($r('sys.symbol.checkmark'))
+          .fontSize(14)
+          .fontColor([this.svc.linkMode === mode
+            ? $r('app.color.primary') : $r('app.color.text_primary')])
+      }
+    }
+    .layoutWeight(1)
+    .height('100%')
+  }
+
+  /** 表格的一行：左侧功能名，右侧四个模式的支持标记。 */
+  @Builder
+  GuideFeatureRow(label: ResourceStr, usb: boolean, ble: boolean, ap: boolean,
+                  sta: boolean, last: boolean) {
+    Row() {
+      Text(label)
+        .fontSize(FontSize.Caption)
+        .lineHeight(16)
+        .fontColor($r('app.color.text_primary'))
+        .width(GUIDE_FEATURE_COL)
+        .padding({ right: 8 })
+      this.GuideCheckCell(0, usb)
+      this.GuideCheckCell(1, ble)
+      this.GuideCheckCell(2, ap)
+      this.GuideCheckCell(3, sta)
+    }
+    .width('100%')
+    .height(GUIDE_ROW_HEIGHT)
+    .border({ width: { bottom: last ? 0 : 0.5 }, color: $r('app.color.divider') })
+  }
+
+  /** 表头的一格：四种模式名，当前模式那格用主色标出来。 */
+  @Builder
+  GuideModeHeader(mode: number, label: Resource) {
+    Text(label)
+      .fontSize(FontSize.Caption)
+      .fontWeight(this.svc.linkMode === mode ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.svc.linkMode === mode
+        ? $r('app.color.primary') : $r('app.color.text_secondary'))
+      .textAlign(TextAlign.Center)
+      .layoutWeight(1)
+      .maxLines(1)
+  }
+
+  /**
+   * 功能 × 连接模式的支持表。
+   *
+   * 行是功能、列是模式：一眼能看出「哪种连接能做什么」。每一条都对应真实行为，
+   * 不是文案上的区分——照片传输只走 USB / Wi-Fi，蓝牙那一条是校时与位置注入；
+   * AP 会让手机加入相机热点（上网中断、还要把相机停在连接画面），STA 则是相机
+   * 加入手机所在网络（相机要能被这个网络找到）。
+   */
+  @Builder
+  GuideModesTable() {
+    Column() {
+      Row() {
+        Text($r('app.string.camera_guide_col_feature'))
+          .fontSize(FontSize.Caption)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_tertiary'))
+          .width(GUIDE_FEATURE_COL)
+        this.GuideModeHeader(0, $r('app.string.camera_mode_usb'))
+        this.GuideModeHeader(1, $r('app.string.camera_mode_ble'))
+        this.GuideModeHeader(2, $r('app.string.camera_mode_ap'))
+        this.GuideModeHeader(3, $r('app.string.camera_mode_sta'))
+      }
+      .width('100%')
+      .height(GUIDE_ROW_HEIGHT)
+      .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_photos'),
+        true, false, true, true, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_clock'),
+        false, true, true, true, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_pair'),
+        false, true, true, false, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_park'),
+        false, true, true, false, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_same_net'),
+        false, false, false, true, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_online'),
+        true, true, false, true, true)
+    }
+    .width('100%')
+  }
+
   @Builder
   GuideSheet() {
     Column({ space: 0 }) {
-      Text($r('app.string.camera_guide_steps'))
+      Text($r('app.string.camera_guide_title'))
         .fontSize(FontSize.Title)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
         .padding({ top: 4, bottom: 2 })
 
-      Scroll() {
-        Column({ space: 20 }) {
-          if (this.svc.linkMode !== CameraLinkMode.USB && this.bleKnown()) {
-            // 已配对过：首配的相机菜单步骤不再适用，面板只留一句重连动作。
-            this.GuideSheetStep('', this.guideSummary(), -1)
-          } else if (this.svc.linkMode === CameraLinkMode.USB) {
-            this.GuideSheetStep($r('app.string.camera_guide_on_camera'),
-              $r('app.string.camera_guide_usb_1'), -1)
-            this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
-              $r('app.string.camera_guide_usb_2'), -1)
-          } else if (this.svc.linkMode === CameraLinkMode.BLE) {
-            this.GuideSheetStep($r('app.string.camera_guide_on_camera'),
-              $r('app.string.camera_guide_ble_1'), 0)
-            this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
-              $r('app.string.camera_guide_ble_2'), -1)
-          } else if (this.svc.linkMode === CameraLinkMode.AP) {
-            this.GuideSheetCameraStep(
-              $r('app.string.camera_guide_ap_1'),
-              $r('app.string.camera_guide_ap_screen'), 0)
-            this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
-              $r('app.string.camera_guide_ap_2'), 1)
-          } else {
-            this.GuideSheetCameraStep(
-              $r('app.string.camera_guide_sta_2'),
-              $r('app.string.camera_guide_sta_screen'), 0)
+      TabSegmentButtonV2({
+        items: GUIDE_TAB_ITEMS,
+        selectedIndex: this.guideTab,
+        $selectedIndex: (index: number) => {
+          if (index !== this.guideTab) this.guideTab = index;
+        },
+        itemFontSize: LengthMetrics.fp(FontSize.Section),
+        itemSelectedFontSize: LengthMetrics.fp(FontSize.Section),
+        itemFontWeight: FontWeight.Regular,
+        itemSelectedFontWeight: FontWeight.Bold,
+        itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
+        itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.primary')),
+        itemPadding: {
+          top: LengthMetrics.vp(0),
+          bottom: LengthMetrics.vp(0),
+          start: LengthMetrics.vp(4),
+          end: LengthMetrics.vp(4)
+        },
+        itemMinHeight: LengthMetrics.vp(32),
+        itemBorderRadius: LengthMetrics.vp(16),
+        buttonMinHeight: LengthMetrics.vp(40),
+        buttonPadding: LengthMetrics.vp(4),
+        buttonBorderRadius: LengthMetrics.vp(20),
+        buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.control_track')),
+        itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_surface')),
+        enableStateAnimation: true
+      })
+        .width('100%')
+        .padding({ top: 10, bottom: 2 })
+
+      if (this.guideTab === 0) {
+        Scroll() {
+          Column({ space: 20 }) {
+            if (this.svc.linkMode !== CameraLinkMode.USB && this.bleKnown()) {
+              // 已配对过：首配的相机菜单步骤不再适用，面板只留一句重连动作。
+              this.GuideSheetStep('', this.guideSummary(), -1)
+            } else if (this.svc.linkMode === CameraLinkMode.USB) {
+              this.GuideSheetStep($r('app.string.camera_guide_on_camera'),
+                $r('app.string.camera_guide_usb_1'), -1)
+              this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
+                $r('app.string.camera_guide_usb_2'), -1)
+            } else if (this.svc.linkMode === CameraLinkMode.BLE) {
+              this.GuideSheetStep($r('app.string.camera_guide_on_camera'),
+                $r('app.string.camera_guide_ble_1'), 0)
+              this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
+                $r('app.string.camera_guide_ble_2'), -1)
+            } else if (this.svc.linkMode === CameraLinkMode.AP) {
+              this.GuideSheetCameraStep(
+                $r('app.string.camera_guide_ap_1'),
+                $r('app.string.camera_guide_ap_screen'), 0)
+              this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
+                $r('app.string.camera_guide_ap_2'), 1)
+            } else {
+              this.GuideSheetCameraStep(
+                $r('app.string.camera_guide_sta_2'),
+                $r('app.string.camera_guide_sta_screen'), 0)
+            }
           }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding({ top: 14, bottom: 32 })
         }
         .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ top: 14, bottom: 32 })
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+      } else {
+        Scroll() {
+          Column({ space: 0 }) {
+            Text($r('app.string.camera_guide_modes_intro'))
+              .fontSize(FontSize.Caption)
+              .lineHeight(18)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+            this.GuideModesTable()
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding({ top: 14, bottom: 32 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
       }
-      .width('100%')
-      .layoutWeight(1)
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')
@@ -1179,6 +1443,12 @@ export struct CameraPage {
    * 主操作永远是「当前这一步」：未连接是「搜索 / 配对 / 连接」，进行中禁用，
    * 已连接变中性底的「断开连接」。它也是页面上**唯一**的断开入口——同一张卡里
    * 出现两个「断开」只会让人犹豫点哪个。
+   *
+   * **指定 IP 入口并进状态头的第二行**（1.65.0）：它以前是状态头下面另起的一行，
+   * 中间还隔着 `Column` 的 12vp 间距，看着像两个互不相干的模块；现在它是状态头
+   * 自己的副行，和状态文案在同一条竖线上。为了让两行合起来只占**一颗主操作胶囊**
+   * 的高度（卡片不因此变高），有副行、没有阶段详情时标题让位成 `Section` 小字，
+   * 标题 → 副行成为 13/12 的两行节奏。
    */
   @Builder
   StatusHeader() {
@@ -1197,9 +1467,10 @@ export struct CameraPage {
       }
       Column({ space: 3 }) {
         Text(this.headline())
-          .fontSize(FontSize.CardTitle)
+          .fontSize(this.compactHeadline() ? FontSize.Section : FontSize.CardTitle)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
+          .fontColor(this.compactHeadline()
+            ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
           .width('100%')
           .maxLines(2)
         if (this.detail() !== '') {
@@ -1209,6 +1480,9 @@ export struct CameraPage {
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
             .maxLines(3)
+        }
+        if (this.staIpLinkVisible()) {
+          this.StaManualIpLink()
         }
       }
       .layoutWeight(1)
@@ -1237,6 +1511,17 @@ export struct CameraPage {
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
+    .bindSheet($$this.ipSheetOpen, this.IpSheet(), this.ipSheetOptions())
+  }
+
+  /**
+   * 标题要不要让位成小字：只「副行就是指定 IP 入口、且没有阶段详情」时。
+   *
+   * 失败状态下详情行（失败原因）还要占一到三行，标题保持 `CardTitle` 才有主次；
+   * 空闲/已配对时第二行只有一条次级入口，标题缩一档，两行就合成一颗胶囊的高度。
+   */
+  private compactHeadline(): boolean {
+    return this.staIpLinkVisible() && this.detail() === '';
   }
 
   /**
@@ -1333,81 +1618,149 @@ export struct CameraPage {
     }
   }
 
-  /** STA 空闲且不在搜索/交接时，才显示网络元信息与手动 IP。 */
-  private staMetaVisible(): boolean {
-    return this.svc.linkMode === CameraLinkMode.STA && !this.wifiConnected()
-      && !(this.svc.apJoining || this.svc.wifiAutoConnecting
-        || this.svc.wifiReconnecting || this.svc.wifiScanning);
+  /** STA 空闲或失败时，在状态头下方显示「无法连接？试试指定 IP」。 */
+  private staIpLinkVisible(): boolean {
+    if (this.svc.linkMode !== CameraLinkMode.STA || this.wifiConnected()) return false;
+    const phase = this.phase();
+    return phase === CameraPhase.Idle || phase === CameraPhase.Failed;
   }
 
-  /** STA 的网络摘要 + 手动 IP：紧贴四选一下方，一行收起。 */
+  /** 打开指定 IP 面板；没有输入过时用上次成功的地址预填。 */
+  private openIpSheet(): void {
+    if (this.wifiInput === '' && this.svc.wifiHost !== '') {
+      this.wifiInput = this.svc.wifiHost;
+    }
+    this.ipSheetOpen = true;
+  }
+
+  /** 提交指定 IP：先收起面板与键盘，连接进度与失败都交给状态头。 */
+  private submitManualIp(): void {
+    const host = this.wifiInput.trim();
+    if (host === '' || this.svc.scanning || this.svc.wifiConnecting) return;
+    this.getUIContext().getFocusController().clearFocus();
+    this.ipSheetOpen = false;
+    this.onConnectWifi(host);
+  }
+
+  /**
+   * 指定 IP 半模态的样式。
+   *
+   * **标题区交给系统**（1.65.0）：`SheetOptions.title` + `showClose` 会把标题、
+   * 副标题与关闭按钮排在半模态自己预留的标题区里，那个区域已经按 24vp 圆角与
+   * 拖拽条算好了边距。此前是自己往内容里画标题和「取消」，字就顶在圆角弧里，
+   * 和上面的拖拽条挤成一团，怎么调 padding 都像贴着头皮写上去的。
+   *
+   * **键盘弹起时不能有「输入框下面的东西」**：半模态避让只保证获得焦点的输入框
+   * 露在键盘上方（够用就停），所以「输入框 + 下面一整颗提交按钮」的排法在被键盘
+   * 顶起来时，按钮一定落在键盘后面（`TRANSLATE_AND_RESIZE` 会把面板裁到输入框
+   * 那么高，`TRANSLATE_AND_SCROLL` 只是少抬一点，两种都试过）。因此提交按钮改成
+   * 输入框**同一行**的行尾胶囊：整块交互都在输入框这一行里，键盘一起来它跟着上移，
+   * 不需要任何额外的避让计算。
+   */
+  private ipSheetOptions(): SheetOptions {
+    const opts: SheetOptions = {
+      height: SheetSize.FIT_CONTENT,
+      preferType: SheetType.BOTTOM,
+      dragBar: true,
+      showClose: true,
+      title: { title: $r('app.string.camera_ip_sheet_title') },
+      keyboardAvoidMode: SheetKeyboardAvoidMode.TRANSLATE_AND_SCROLL
+    };
+    if (GlassEffect.isEnabled()) {
+      opts.systemMaterial = GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THICK
+      }));
+    } else {
+      opts.backgroundColor = $r('app.color.bg_surface');
+    }
+    return opts;
+  }
+
+  /**
+   * 指定相机 IP 的半模态内容。
+   *
+   * 只剩「一句说明 + 输入框 + 主按钮」三件事：标题、关闭按钮都由系统标题区承担，
+   * 内容区不重复。三项之间 12vp，底部 24vp 收口。
+   */
   @Builder
-  StaNetworkRow() {
-    Column({ space: 8 }) {
+  IpSheet() {
+    Column({ space: 12 }) {
+      Text($r('app.string.camera_ip_sheet_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      // 输入框 + 行尾「连接」：同一行是键盘避让的关键，见 ipSheetOptions 的注释。
       Row({ space: 8 }) {
-        if (this.svc.networkSummary !== '') {
-          Text($r('app.string.camera_conn_network', this.svc.networkSummary))
-            .fontSize(FontSize.Micro)
-            .lineHeight(16)
-            .fontColor($r('app.color.text_tertiary'))
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        } else {
-          Blank()
-        }
-        Row({ space: 2 }) {
-          Text(this.staManualOpen
-            ? $r('app.string.camera_sta_manual_hide')
-            : $r('app.string.camera_sta_manual_show'))
-            .fontSize(FontSize.Micro)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_secondary'))
-          SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(12)
-            .fontColor([$r('app.color.text_tertiary')])
-            .rotate({ angle: this.staManualOpen ? 180 : 0 })
-        }
-        .padding({ top: 6, bottom: 6, left: 6 })
-        .onClick(() => { this.staManualOpen = !this.staManualOpen; })
+        TextInput({
+          placeholder: $r('app.string.camera_wifi_host_placeholder'),
+          text: this.wifiInput
+        })
+          .layoutWeight(1)
+          .height(48)
+          .fontSize(FontSize.Body)
+          .fontColor($r('app.color.text_primary'))
+          .placeholderFont({ size: FontSize.Body })
+          .placeholderColor($r('app.color.text_tertiary'))
+          .caretColor($r('app.color.primary'))
+          .maxLength(15)
+          .borderRadius(Radius.Chip)
+          // 材质上是半透明底 + 细描边；直接用 bg_page 会变成一块实心灰。
+          .backgroundColor($r('app.color.filter_chip_bg'))
+          .border({ width: 0.5, color: $r('app.color.card_border') })
+          .padding({ left: 12, right: 12 })
+          .enterKeyType(EnterKeyType.Go)
+          .onChange((value: string) => { this.wifiInput = value; })
+          .onSubmit(() => { this.submitManualIp(); })
+
+        Button($r('app.string.camera_wifi_connect'))
+          .height(48)
+          .padding({ left: 18, right: 18 })
+          .fontSize(FontSize.Body)
+          .fontWeight(FontWeight.Medium)
+          .borderRadius(pillRadius(48))
+          .backgroundColor(this.wifiInput.trim() !== ''
+            ? $r('app.color.primary') : $r('app.color.control_track'))
+          .fontColor(this.wifiInput.trim() !== ''
+            ? $r('app.color.text_on_primary') : $r('app.color.text_tertiary'))
+          .enabled(this.wifiInput.trim() !== '' && !this.svc.scanning && !this.svc.wifiConnecting)
+          .onClick(() => { this.submitManualIp(); })
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
-
-      if (this.staManualOpen) {
-        Row({ space: 8 }) {
-          TextInput({
-            placeholder: $r('app.string.camera_wifi_host_placeholder'),
-            text: this.wifiInput
-          })
-            .height(40)
-            .layoutWeight(1)
-            .fontSize(FontSize.Body)
-            .borderRadius(Radius.Chip)
-            .backgroundColor($r('app.color.bg_page'))
-            .onChange((value: string) => { this.wifiInput = value; })
-            .onSubmit(() => {
-              if (this.wifiInput.trim() !== '' && !this.svc.scanning) {
-                this.onConnectWifi(this.wifiInput.trim());
-              }
-            })
-          Button($r('app.string.camera_wifi_connect'))
-            .height(40)
-            .fontSize(FontSize.Body)
-            .borderRadius(pillRadius(40))
-            .backgroundColor(this.wifiInput.trim() !== ''
-              ? $r('app.color.primary') : $r('app.color.filter_chip_bg'))
-            .fontColor(this.wifiInput.trim() !== ''
-              ? $r('app.color.text_on_primary') : $r('app.color.text_tertiary'))
-            .enabled(!this.svc.scanning && this.wifiInput.trim() !== '')
-            .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
-        }
-        .width('100%')
-      }
     }
     .width('100%')
+    .padding({ left: 16, right: 16, top: 4, bottom: 20 })
     .alignItems(HorizontalAlign.Start)
   }
+
+  /**
+   * 状态头第二行：指定 IP 的次级入口，整行可点。
+   *
+   * 它是状态头的一部分（1.65.0 起），不再自己带外边距与上下 padding：行高固定
+   * 18vp，等于阶段详情行的高度，所以「标题 + 入口」和「标题 + 详情」一样高。
+   */
+  @Builder
+  StaManualIpLink() {
+    Row({ space: 4 }) {
+      Text($r('app.string.camera_sta_manual_lead'))
+        .fontSize(FontSize.Caption)
+        .fontColor($r('app.color.text_tertiary'))
+      Text($r('app.string.camera_sta_manual_action'))
+        .fontSize(FontSize.Caption)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary'))
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(10)
+        .fontColor([$r('app.color.primary')])
+    }
+    .height(18)
+    .padding({ right: 8 })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => { this.openIpSheet(); })
+  }
+
 
   /** STA 状态区：已连接地址、发现但未连上的相机、错误/提示。 */
   @Builder
@@ -1723,10 +2076,6 @@ export struct CameraPage {
       // 四选一：不再配一句模式说明，模式差异交给下面的相机操作说明。
       this.ModePicker()
 
-      if (this.staMetaVisible()) {
-        this.StaNetworkRow()
-      }
-
       this.ModeControls()
 
       // 连接引导：页面只留一句摘要，完整步骤和相机画面进系统半模态。
@@ -1818,30 +2167,43 @@ export struct CameraPage {
       Column() {
         // 卡面交叉淡入淡出：上一层旧图 1→0，新图 0→1；同型号换序列号时
         // effectiveStandeeKey 不变，不会白闪一下。
-        Stack({ alignContent: Alignment.Bottom }) {
-          if (this.standeePreviousKey !== '') {
-            Image(cameraStandeeMedia(this.standeePreviousKey))
-              .width(this.standeeWidthFor(this.standeePreviousKey))
-              .height(STANDEE_HEIGHT)
-              .objectFit(ImageFit.Contain)
-              .interpolation(ImageInterpolation.High)
-              .draggable(false)
-              .opacity((this.linked() ? 1 : 0.72) * (1 - this.standeeCrossfade))
+        Stack({ alignContent: Alignment.Center }) {
+          Stack({ alignContent: Alignment.Bottom }) {
+            if (this.standeePreviousKey !== '') {
+              Image(cameraStandeeMedia(this.standeePreviousKey))
+                .width(this.standeeWidthFor(this.standeePreviousKey))
+                .height(STANDEE_HEIGHT)
+                .objectFit(ImageFit.Contain)
+                .interpolation(ImageInterpolation.High)
+                .draggable(false)
+                .opacity((this.linked() ? 1 : 0.72) * (1 - this.standeeCrossfade))
+            }
+            if (this.standeeCurrentKey !== '') {
+              Image(cameraStandeeMedia(this.standeeCurrentKey))
+                .width(this.standeeWidthFor(this.standeeCurrentKey))
+                .height(STANDEE_HEIGHT)
+                .objectFit(ImageFit.Contain)
+                .interpolation(ImageInterpolation.High)
+                .draggable(false)
+                .opacity((this.linked() ? 1 : 0.72) * this.standeeCrossfade)
+            }
           }
-          if (this.standeeCurrentKey !== '') {
-            Image(cameraStandeeMedia(this.standeeCurrentKey))
-              .width(this.standeeWidthFor(this.standeeCurrentKey))
-              .height(STANDEE_HEIGHT)
-              .objectFit(ImageFit.Contain)
-              .interpolation(ImageInterpolation.High)
-              .draggable(false)
-              .opacity((this.linked() ? 1 : 0.72) * this.standeeCrossfade)
+          .width('100%')
+          .height(STANDEE_HEIGHT)
+
+          // 没有立牌时舞台上放一块淡圆牌（见 StandeePlaceholder 注释）。
+          if (!this.hasStandee()) {
+            this.StandeePlaceholder()
           }
         }
         .width('100%')
         .height(STANDEE_HEIGHT)
 
-        this.StandeeReflection()
+        // 没有立牌就没有倒影：倒影盒子的渐变是为镜像服务的，在一张空舞台上
+        // 它只是一条把下半截压暗的横带——用户看到的「脏」就是它。
+        if (this.hasStandee()) {
+          this.StandeeReflection()
+        }
       }
       .width('100%')
       .padding({ top: COVER_TOP_PAD })
@@ -1933,14 +2295,18 @@ export struct CameraPage {
     return Math.min(1, visible / REFLECTION_BOX);
   }
 
-  /** 整张深色卡片的下移量：抽屉行程的 `CARD_PULL_RATIO`。 */
+  /** 整张深色卡片的下移量：手指下拉的 `CARD_PULL_RATIO`（1/3，与 1.62.x 起一致）。 */
   private cardPullShift(): number {
     return this.pullDown * CARD_PULL_RATIO;
   }
 
-  /** 抽屉在**卡片内部**再打开多少：总行程减去卡片自己已经走掉的那段。 */
+  /**
+   * 抽屉在**卡片内部**再打开多少 = 下拉总量减去卡片自己走过的那段。
+   *
+   * 刷新时 `pullDown` 归零，它自然也是 0：抽屉收回卡面、倒影收干净。
+   */
   private drawerPullShift(): number {
-    return this.pullDown - this.cardPullShift();
+    return this.pullDown * (1 - CARD_PULL_RATIO);
   }
 
   /**
@@ -1955,6 +2321,47 @@ export struct CameraPage {
     // 第二段里跟着抽屉一起淡出：抽屉收位与倒影淡出同时完成，接缝处不会出现
     // 「白面已经贴到机身、下面还挂着半截镜像」的硬切。
     return base * (1 - this.stage2Progress());
+  }
+
+  /**
+   * 舞台上现在有没有「这一台」的立牌。
+   *
+   * 只看当前 key，不看正在淡出的上一张：从某台相机切到「连接新相机」时
+   * `standeePreviousKey` 会一直留着上一台的 key（它只是淡出到 0），
+   * 若把它算进来，空舞台就永远切不到占位圆牌，倒影盒子那层渐变还会一直
+   * 压在下半截上（看起来就是「脏」）。
+   */
+  private hasStandee(): boolean {
+    return this.standeeCurrentKey !== '';
+  }
+
+  /**
+   * 没有立牌时的舞台占位。
+   *
+   * 认不出机型（Z fc / ZR 这类没有商品图，或调试包选了「未知型号」）或者用户把
+   * 默认立牌设成「不显示」时，封面原本只剩一块深色板加一圈径向光；卡的上半截
+   * 空在那里，看着像图片没加载出来。这里放一块很淡的圆牌：不假装自己是某台
+   * 相机，但让这块舞台有个落点，圆心正好压在径向光的中心。
+   *
+   * 圆牌不参与倒影（见 `CameraCover`）：它是「没有产品」的状态，不是一件立在
+   * 台面上的产品。
+   */
+  @Builder
+  StandeePlaceholder() {
+    Column() {
+      SymbolGlyph($r('sys.symbol.camera'))
+        .fontSize(38)
+        .fontColor([Color.White])
+        .opacity(0.34)
+    }
+    .width(96)
+    .height(96)
+    .borderRadius(pillRadius(96))
+    .backgroundColor($r('app.color.standee_placeholder_fill'))
+    .border({ width: 0.5, color: $r('app.color.standee_placeholder_border') })
+    .justifyContent(FlexAlign.Center)
+    // 与立牌同一个「断开时变暗」口径；从有立牌切过来时跟着同一个 crossfade 淡入
+    .opacity((this.linked() ? 1 : 0.72) * this.standeeCrossfade)
   }
 
   /**
@@ -2043,6 +2450,14 @@ export struct CameraPage {
   @Builder
   DeviceRows() {
     Column() {
+      // 模拟相机（调试包）：整条流程与真机一样，光看品牌/型号分不出来，
+      // 所以在设备信息里显式写一行来源，测试截图不会把结论当真机结果。
+      if (this.svc.mockSession()) {
+        CameraInfoRow({
+          label: $r('app.string.camera_info_mock'),
+          value: $r('app.string.camera_info_mock_value')
+        })
+      }
       CameraInfoRow({ label: $r('app.string.camera_info_brand'), value: this.svc.deviceManufacturer || $r('app.string.common_unknown') })
       CameraInfoRow({ label: $r('app.string.camera_info_model'), value: this.svc.cameraName || $r('app.string.common_unknown') })
       CameraInfoRow({ label: $r('app.string.camera_info_serial'), value: this.svc.deviceSerialNumber || $r('app.string.common_none') })
@@ -2220,7 +2635,8 @@ export struct CameraPage {
       // 自由滑动」，去掉它第三段就废了（抽屉内容一松手就弹回开头）。
       .scrollSnap({
         snapAlign: ScrollSnapAlign.START,
-        snapPagination: [0, stickScrollVp()],
+        // 分页点见 snapPages()：贴在末端的那一页必须让开 2vp，否则整条吸附失效
+        snapPagination: this.snapPages(),
         enableSnapToStart: true,
         enableSnapToEnd: false
       })
@@ -2232,9 +2648,129 @@ export struct CameraPage {
       .onScroll(() => {
         this.syncFromScroll();
       })
+
+      // 下拉刷新指示器画在滚动层之上：它只在露出来的那条缝里，不会盖住卡片。
+      // 必须在 Stack 的子节点里（属性链之前），否则会被当成 build() 的第二个根节点。
+      if (this.refreshIndicatorShown()) {
+        this.RefreshIndicator()
+      }
       }
     .width('100%').height('100%')
+    // 顶边下拉松手判定：手指抬起那一刻就决定要不要进刷新（见 onTopTouch）。
+    // 挂在不接收手势的外层 Stack 上，只观察、不拦截。
+    .onTouch((e: TouchEvent) => { this.onTopTouch(e.type); })
     .bindSheet($$this.guideSheetOpen, this.GuideSheet(), this.guideSheetOptions())
+  }
+
+  /**
+   * 手指从顶边下拉后松开（1.65.0）。
+   *
+   * 判定放在**手指抬起那一刻**（根 `Stack` 的 `onTouch`），不是 `onScrollStop`：
+   * 松手后顶边弹簧会先把偏移弹回 0，等 `onScrollStop` 再判就已经晚了——那正是
+   * 「先回原地、再被挤下去」两段动画的成因。
+   *
+   * 只有拉过 `REFRESH_THRESHOLD_VP`（最大下拉的 80%）才进刷新；不够就什么都不做，
+   * 交给弹簧回弹（与以前完全一致）。
+   */
+  private onTopTouch(type: TouchType): void {
+    if (type !== TouchType.Up && type !== TouchType.Cancel) return;
+    if (this.refreshing) return;
+    if (this.pullDown < REFRESH_THRESHOLD_VP) return;
+    this.beginRefresh();
+  }
+
+  /**
+   * 进入刷新：**一条**动画把下拉量收回到 0。
+   *
+   * 起点就是松手那一帧的 `pullDown`（卡面 1/3、抽屉 2/3 开着），终点是原位——
+   * 所以卡面与抽屉是一起完整回弹的（卡面 48vp、抽屉 144vp 的行程），
+   * 指示器全程贴在卡面正上方，跟着一起落到「标题栏与卡面之间」那段空白里。
+   * 刷新过程中不再跟随滚动偏移（`syncFromScroll` 里跳过），弹簧归零不可见。
+   */
+  private beginRefresh(): void {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    this.refreshFade = 1;
+    Haptics.tap();
+    this.onRefresh();
+    animateTo({ duration: REFRESH_ANIM_MS, curve: Curve.EaseOut }, () => {
+      this.pullDown = 0;
+      this.pullProgress = 0;
+    });
+    setTimeout(() => { this.endRefresh(); }, REFRESH_FAKE_MS);
+  }
+
+  /** 刷新动作结束（现在没有实质动作，就是 2s 之后）：指示器淡出，其余已在原位。 */
+  private endRefresh(): void {
+    animateTo({ duration: REFRESH_ANIM_MS, curve: Curve.EaseInOut }, () => {
+      this.refreshFade = 0;
+    });
+    setTimeout(() => { this.refreshing = false; }, REFRESH_ANIM_MS);
+  }
+
+  /** 指示器要不要画：只要它按卡面下移量算出来的透明度大于 0 就挂载。 */
+  private refreshIndicatorShown(): boolean {
+    return this.refreshIndicatorOpacity() > 0.01;
+  }
+
+  /** 指示器横向居中：这里是全屏坐标（不是标题栏 builder 的坐标系）。 */
+  private refreshIndicatorX(): number {
+    const w = WindowUtils.windowWidthPx > 0
+      ? this.getUIContext().px2vp(WindowUtils.windowWidthPx) : 360;
+    return (w - REFRESH_ICON) / 2;
+  }
+
+  /**
+   * 指示器纵向位置：**贴在卡面上沿正上方**（固定间距）。
+   *
+   * 不能用「标题栏与卡面的中点」：卡面每上移 1vp，中点只上移 0.5vp，
+   * 收行时卡面会追上图标并压过去（1.65.0 第二轮实测的「撞上」）。
+   * 锚在卡面上沿之后，图标与卡面同速移动，永远不会被撞到；
+   * 显隐由 `refreshIndicatorOpacity()` 按卡面下移量淡出。
+   */
+  private refreshIndicatorY(): number {
+    const cardTop = titleBarTotalVp() + 8 + this.cardPullShift();
+    return cardTop - REFRESH_ICON_GAP - REFRESH_ICON;
+  }
+
+  /**
+   * 指示器透明度：随「卡面下移量」淡入淡出。
+   *
+   * 卡面下移到 20vp 时完全显现，收行回到 8vp 时完全消失——
+   * 所以刷新结束、卡面回到原位的过程中图标是**边淡出边被卡面追上**的，
+   * 不会出现「卡面撞在还在转的图标上」。
+   */
+  private refreshIndicatorOpacity(): number {
+    // 刷新中卡面已经回到原位（卡面位移为 0），显隐必须由 `refreshing` 接管，
+    // 否则指示器会在松手回弹的同一帧淡没
+    if (this.refreshing) return this.refreshFade;
+    const shift = this.cardPullShift();
+    return Math.max(0, Math.min(1, (shift - 8) / 12));
+  }
+
+  /**
+   * 下拉刷新指示器：**官方** `SwipeRefresherV2`（系统加载动效）。
+   *
+   * 只用它的「加载中」形态（`isLoading`），位置、显隐由我们自己按下拉量算：
+   * 官方的 `Refresh` 容器会把整页下移，那会改掉本页既有的下拉编排（卡面 1/3、
+   * 卡内抽屉 2/3、倒影拉长），所以容器不用、只用它的指示器组件。
+   * 组件本身不要挂通用属性（官方说明：会挂到自动生成的 __Common__ 节点上），
+   * 尺寸、透明度、位置都加在外层容器上。
+   */
+  @Builder
+  RefreshIndicator() {
+    Column() {
+      LoadingProgress()
+        .width(REFRESH_ICON)
+        .height(REFRESH_ICON)
+        .color($r('app.color.text_secondary'))
+    }
+    .width(REFRESH_ICON)
+    .height(REFRESH_ICON)
+    .justifyContent(FlexAlign.Center)
+    .position({ x: this.refreshIndicatorX(), y: this.refreshIndicatorY() })
+    .opacity(this.refreshIndicatorOpacity())
+    .hitTestBehavior(HitTestMode.None)
   }
 
   /**
@@ -2269,10 +2805,18 @@ export struct CameraPage {
       this.scrollOver = shift;
     }
 
-    // 顶边下拉：倒影长度 + 抽屉下移量，都取这一份（上限 TOP_PULL_MAX）
-    const pull = y < 0 ? Math.min(TOP_PULL_MAX, -y) : 0;
-    if (Math.abs(pull - this.pullDown) > 0.2) {
-      this.pullDown = pull;
+    // 顶边下拉：倒影长度 + 抽屉下移量，都取这一份（上限 TOP_PULL_MAX）。
+    // 刷新中（以及收行动画中）**不跟随偏移**：那段位移由 beginRefresh/endRefresh
+    // 的同一条动画接管，弹簧归零不可见。
+    if (!this.refreshing) {
+      const pull = y < 0 ? Math.min(TOP_PULL_MAX, -y) : 0;
+      if (Math.abs(pull - this.pullDown) > 0.2) {
+        this.pullDown = pull;
+      }
+      const progress = Math.min(1, pull / TOP_PULL_MAX);
+      if (Math.abs(progress - this.pullProgress) > 0.01) {
+        this.pullProgress = progress;
+      }
     }
 
     // 抽屉内容 = 第三段总量，clamp 住，滚到底不露白

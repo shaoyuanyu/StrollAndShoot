@@ -64,6 +64,19 @@
           "value": "%d log lines"
         }
       ]
+    },
+    {
+      "name": "paired_camera_count",
+      "value": [
+        {
+          "quantity": "one",
+          "value": "%d camera"
+        },
+        {
+          "quantity": "other",
+          "value": "%d cameras"
+        }
+      ]
     }
   ]
 }

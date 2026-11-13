@@ -157,10 +157,6 @@
       "value": "等待無線"
     },
     {
-      "name": "camera_conn_network",
-      "value": "本機網路：%s"
-    },
-    {
       "name": "camera_conn_guide",
       "value": "預設走相機自己的 Wi-Fi 熱點：點「檢視照片」會先用藍牙喚醒相機，再自動連上它的熱點。相機端只需在「網路選單 → 連接至智慧型裝置 → Wi-Fi 連線」選一次 AP 模式（不要選 STA），之後不用再碰相機選單。"
     },
@@ -174,11 +170,7 @@
     },
     {
       "name": "camera_wifi_host_placeholder",
-      "value": "相機 IP，如 192.168.1.5"
-    },
-    {
-      "name": "camera_wifi_connect",
-      "value": "連線"
+      "value": "相機 IP 位址"
     },
     {
       "name": "camera_ble_title",
@@ -513,12 +505,24 @@
       "value": "同一網路裡沒有發現相機"
     },
     {
-      "name": "camera_sta_manual_hide",
-      "value": "收起"
+      "name": "camera_sta_manual_lead",
+      "value": "無法連線？"
     },
     {
-      "name": "camera_sta_manual_show",
-      "value": "手動 IP"
+      "name": "camera_sta_manual_action",
+      "value": "試試指定 IP"
+    },
+    {
+      "name": "camera_ip_sheet_title",
+      "value": "指定相機 IP"
+    },
+    {
+      "name": "camera_ip_sheet_hint",
+      "value": "輸入相機螢幕上顯示的 IP 位址，手機需與相機在同一網路。"
+    },
+    {
+      "name": "camera_wifi_connect",
+      "value": "連線"
     },
     {
       "name": "gallery_scanning_title",
@@ -1365,8 +1369,20 @@
       "value": "連線步驟"
     },
     {
+      "name": "camera_guide_title",
+      "value": "連線說明"
+    },
+    {
+      "name": "camera_guide_modes_title",
+      "value": "連線模式"
+    },
+    {
+      "name": "camera_guide_modes_intro",
+      "value": "每種連線方式能做的事不一樣，勾選表示可用。"
+    },
+    {
       "name": "camera_guide_view_steps",
-      "value": "查看步驟"
+      "value": "查看說明"
     },
     {
       "name": "camera_new",
@@ -1459,6 +1475,94 @@
     {
       "name": "settings_standee_none",
       "value": "不顯示"
+    },
+    {
+      "name": "camera_guide_col_feature",
+      "value": "功能"
+    },
+    {
+      "name": "camera_guide_feature_photos",
+      "value": "瀏覽與匯入照片"
+    },
+    {
+      "name": "camera_guide_feature_clock",
+      "value": "校時與位置注入"
+    },
+    {
+      "name": "camera_guide_feature_pair",
+      "value": "首次需藍牙配對"
+    },
+    {
+      "name": "camera_guide_feature_park",
+      "value": "相機停在連線頁"
+    },
+    {
+      "name": "camera_guide_feature_same_net",
+      "value": "相機在同一網路"
+    },
+    {
+      "name": "camera_guide_feature_online",
+      "value": "手機上網不中斷"
+    },
+    {
+      "name": "camera_title_with_serial",
+      "value": "%1$s（%2$s）"
+    },
+    {
+      "name": "camera_paired_title",
+      "value": "已配對相機"
+    },
+    {
+      "name": "camera_paired_empty",
+      "value": "還沒有配對過的相機。連上一台之後，它會出現在這裡。"
+    },
+    {
+      "name": "camera_paired_hint",
+      "value": "點一台把它設為目前相機，之後到相機頁點「連接相機」。"
+    },
+    {
+      "name": "camera_paired_current",
+      "value": "目前"
+    },
+    {
+      "name": "camera_paired_switched",
+      "value": "已切換到 %1$s"
+    },
+    {
+      "name": "camera_paired_need_disconnect",
+      "value": "請先中斷目前連線"
+    },
+    {
+      "name": "camera_paired_last_used",
+      "value": "上次連線 %1$s"
+    },
+    {
+      "name": "camera_paired_delete_title",
+      "value": "刪除這台相機？"
+    },
+    {
+      "name": "camera_paired_delete_message",
+      "value": "只刪除手機端的配對記錄；相機那邊的配對還在，重新配對即可再用。"
+    },
+    {
+      "name": "camera_mock_badge",
+      "value": "模擬"
+    },
+    {
+      "name": "settings_section_camera",
+      "value": "相機"
+    },
+    {
+      "name": "settings_paired_cameras",
+      "value": "已配對相機"
+    },
+    {
+      "name": "camera_info_mock",
+      "value": "裝置來源"
+    },
+    {
+      "name": "camera_info_mock_value",
+      "value": "模擬相機（除錯包）"
     }
   ]
 }

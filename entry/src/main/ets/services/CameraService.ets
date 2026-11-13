@@ -146,6 +146,8 @@ export class CameraService {
   private session: PtpTransport = new PtpScheduler(new PtpSession());
   /** 当前 session 是不是调试用的假相机，用来判断是否需要换回真实 USB。 */
   private sessionIsMock: boolean = false;
+  /** 上一次写进「已配对相机」的模拟相机签名：同一条记录只记一次日志。 */
+  private mockLogged: string = '';
   private log: AppLog = new AppLog();
 
   // State
@@ -187,12 +189,20 @@ export class CameraService {
    * UI 要能把「蓝牙好了，正在接无线」讲出来，而不是显示成两张互不相干的卡。
    */
   @Trace wifiAutoConnecting: boolean = false;
+  /**
+   * 正在建立一次 Wi-Fi 会话（手动 IP 直连或自动链路里的 `connectWifi()`）。
+   *
+   * `wifiAutoConnecting` 只覆盖自动链路；手填 IP 走的是 `MainScreen.onConnectWifi`
+   * → `connectWifi()`，没有这个标记页面会一直停在「未连接」，用户按了键盘
+   * 「前往」也看不到任何反应（1.64.1）。
+   */
+  @Trace wifiConnecting: boolean = false;
+  /** 第几次 Wi-Fi 连接尝试：重叠请求的 finally 不能互相清掉「连接中」。 */
+  private wifiConnectSeq: number = 0;
   /** 无线会话掉线后正在自动重连。 */
   @Trace wifiReconnecting: boolean = false;
   /** 扫不到相机时的原因（空串 = 网络没问题，是相机那边的事）。 */
   @Trace wifiHint: string = '';
-  /** 本机网络一句话快照（地址 / SSID / 热点），诊断与 UI 提示都用。 */
-  @Trace networkSummary: string = '';
   /**
    * 蓝牙回不来时的提示。
    *
@@ -205,6 +215,15 @@ export class CameraService {
   private nsdScanner: NsdScanner | null = null;
   private subnetScanner: SubnetScanner | null = null;
   private wifiScanTimer: number = -1;
+  /**
+   * 当前 mDNS 浏览属于哪个链路代次；-1 表示没有浏览。
+   *
+   * `NsdScanner` 的回调只创建一次、跨多次扫描复用，不能把某一轮的 epoch
+   * 捕获进闭包；用字段对 `linkEpoch`，切模式后迟到的回调直接丢掉。
+   */
+  private wifiScanEpoch: number = -1;
+  /** 第几轮 mDNS 浏览：切模式后旧一轮的收尾不能把新一轮的标记清掉。 */
+  private wifiScanGen: number = 0;
   /**
    * mDNS 浏览窗口的结束回调。
    *
@@ -252,6 +271,22 @@ export class CameraService {
    */
   @Trace linkMode: number = DEFAULT_LINK_MODE;
   /**
+   * 链路选择的代次（1.64.1）。
+   *
+   * 切模式是一次**显式取消**：正在跑的 BLE 搜索、mDNS / 网段扫描、自动无线
+   * 连接都必须立刻收手。它们的 `await` 链没法从外面真正打断，所以入口记下
+   * 代次、在每个 `await` 之后对一次——代次变了就静默返回，不写状态、不报错、
+   * 不把旧模式的结果带进新模式。
+   *
+   * 只有 `setLinkMode()` 会递增。切相机（标题栏下拉）不换链路，搜索照常完成。
+   */
+  private linkEpoch: number = 0;
+
+  /** 本次异步流程是否还属于当前链路选择。 */
+  private epochCurrent(epoch: number): boolean {
+    return epoch === this.linkEpoch;
+  }
+  /**
    * 相机页顶部立牌用哪个型号（见 `utils/CameraStandee.ets`）。
    *
    * `''` 表示还没认出过机型——此时整个立牌区块不渲染。连接后又断开时保留上一次
@@ -298,6 +333,13 @@ export class CameraService {
   private bleScanner: BleScanner | null = null;
   private bleLink: BleCameraLink | null = null;
   private bleScanTimer: number = -1;
+  /**
+   * 当前这轮 BLE 扫描属于哪个链路代次；-1 表示没有扫描。
+   *
+   * 回调只会在构造 `BleScanner` 时创建一次，不能把某一轮的 epoch 捕获进去，
+   * 所以用字段对 `linkEpoch`。切模式时 `stopBleScan()` 会把它置 -1。
+   */
+  private bleScanEpoch: number = -1;
   /** 存储是否可读（GetStorageIDs 成功）。 */
   @Trace usable: boolean = false;
   /** 最近一次扫描失败的原因，供 toast 与状态卡显示。 */
@@ -682,6 +724,15 @@ export class CameraService {
    */
   private transferTaskRefs: number = 0;
   private transferTaskOn: boolean = false;
+  private transferTaskStarting: boolean = false;
+  /**
+   * 退到后台时额外持有的一份「保持相机会话」任务。
+   *
+   * 相机连着时退到后台，系统会挂起进程，USB / TCP 会话随之中断。进后台时
+   * 借传输长时任务把进程留在后台，回前台释放（传输自己的引用不受影响）。
+   * 与 `beginTransferTask()` 共用引用计数，避免与扫描/下载抢同一个任务。
+   */
+  private sessionKeepAlive: boolean = false;
   /** 通知栏进度环（系统 downloadTemplate）的定时刷新句柄与当前进度。 */
   private noticeTimerId: number = -1;
   private noticeCurrent: number = 0;
@@ -832,9 +883,10 @@ export class CameraService {
   private async beginTransferTask(): Promise<void> {
     this.transferTaskRefs++;
     this.startNoticeTimer();
-    if (this.transferTaskOn || this.context === null) {
+    if (this.transferTaskOn || this.transferTaskStarting || this.context === null) {
       return;
     }
+    this.transferTaskStarting = true;
     try {
       const info: wantAgent.WantAgentInfo = {
         wants: [{
@@ -850,10 +902,16 @@ export class CameraService {
         backgroundTaskManager.BackgroundMode.DATA_TRANSFER, wa);
       this.transferTaskOn = true;
       this.log.add('后台传输长时任务已申请');
+      // 申请完成前最后一个引用已经释放（进后台后马上回前台）：立刻收掉。
+      if (this.transferTaskRefs <= 0) {
+        await this.stopTransferTask();
+      }
     } catch (err) {
       // 与定位长时任务冲突（同一 UIAbility 同时只允许一个）或系统拒绝时不要打断传输，
       // 只是退到后台后可能被挂起。
       this.log.add(`后台传输长时任务申请失败: ${(err as BusinessError).message}`);
+    } finally {
+      this.transferTaskStarting = false;
     }
   }
 
@@ -862,18 +920,56 @@ export class CameraService {
     if (this.transferTaskRefs > 0) {
       this.transferTaskRefs--;
     }
-    if (this.transferTaskRefs > 0 || !this.transferTaskOn || this.context === null) {
+    if (this.transferTaskRefs > 0) {
       return;
     }
+    await this.stopTransferTask();
+  }
+
+  /** 真正释放系统长时任务；先翻 `transferTaskOn`，防止并发 stop 同一任务。 */
+  private async stopTransferTask(): Promise<void> {
+    if (!this.transferTaskOn || this.context === null) {
+      return;
+    }
+    this.transferTaskOn = false;
     try {
       await backgroundTaskManager.stopBackgroundRunning(this.context);
       this.log.add('后台传输长时任务已取消');
     } catch (err) {
       this.log.add(`后台传输长时任务取消失败: ${(err as BusinessError).message}`);
     }
-    this.transferTaskOn = false;
     this.stopNoticeTimer();
     await TransferNotice.cancel();
+  }
+
+  /**
+   * 应用切到后台：相机会话还在就申请长时任务。
+   *
+   * 官方长时任务指南建议把申请推迟到 `onBackground`，这样前台不会常驻一条
+   * 长时任务通知；回前台由 `onAppForeground()` 释放。传输自己的引用计数
+   * 不受影响。
+   */
+  onAppBackground(): void {
+    if (!this.connected || this.sessionKeepAlive) {
+      return;
+    }
+    this.sessionKeepAlive = true;
+    this.log.add('退到后台：为保持相机会话申请长时任务');
+    this.beginTransferTask().catch((_e: Error) => {
+      // 申请失败时系统可能仍会保留进程一小段时间，不影响前台
+    });
+  }
+
+  /** 应用回到前台：释放后台保活引用。 */
+  onAppForeground(): void {
+    if (!this.sessionKeepAlive) {
+      return;
+    }
+    this.sessionKeepAlive = false;
+    this.log.add('回到前台：释放相机会话的后台长时任务');
+    this.endTransferTask().catch((_e: Error) => {
+      // 释放失败只影响通知，不影响连接
+    });
   }
 
   async downloadPhotos(
@@ -1448,13 +1544,30 @@ export class CameraService {
       this.reportScanFailure(L10n.tr('camera_status_wifi_empty_host'));
       return false;
     }
+    // 一次 Wi-Fi 连接属于按下它那一刻的链路选择；中途切模式就作废。
+    const epoch = this.linkEpoch;
+    const attempt = ++this.wifiConnectSeq;
+    this.wifiConnecting = true;
+    try {
+      return await this.connectWifiAttempt(target, port, silent, epoch);
+    } finally {
+      // 只让最后一次尝试关闭「连接中」：重叠的连接请求不能互相把状态清掉。
+      if (this.wifiConnectSeq === attempt) this.wifiConnecting = false;
+    }
+  }
+
+  /** `connectWifi()` 的主体；`wifiConnecting` 的起落由外层统一管理。 */
+  private async connectWifiAttempt(target: string, port: number, silent: boolean,
+                                   epoch: number): Promise<boolean> {
     if (this.connected) {
       await this.disconnect();
+      if (!this.epochCurrent(epoch)) return false;
     }
     this.syncSessionMode();
     const wifi = this.makeWifiSession();
     this.wifiSession = wifi;
-    this.session = new PtpScheduler(wifi);
+    const session = new PtpScheduler(wifi);
+    this.session = session;
     this.wireless = true;
     this.wifiHost = target;
     this.wifiPort = port;
@@ -1469,6 +1582,11 @@ export class CameraService {
       label: target
     };
     const ok = await this.session.connect(endpoint, PtpPriority.FOREGROUND);
+    // 连接期间用户切了模式：把刚建立的会话收掉，不把「已连接」写进新模式。
+    if (!this.epochCurrent(epoch)) {
+      await this.abortWifiConnect(session, wifi, target);
+      return false;
+    }
     if (!ok) {
       this.wireless = false;
       this.connected = false;
@@ -1484,6 +1602,10 @@ export class CameraService {
     this.usable = false;
     this.statusText = L10n.tr('camera_status_connected');
     const deviceInfo = await this.session.getDeviceInfo();
+    if (!this.epochCurrent(epoch)) {
+      await this.abortWifiConnect(session, wifi, target);
+      return false;
+    }
     if (deviceInfo) {
       this.deviceManufacturer = deviceInfo.manufacturer;
       this.deviceSerialNumber = deviceInfo.serialNumber;
@@ -1514,8 +1636,12 @@ export class CameraService {
     this.startBleVisibilityProbe();
 
     // 相机在「连接向导」里等主机注册时，会先开 15740 让我们连上，再等
-    // 0x952B/0x935A 确认；不确认就 10 秒后自行收线，且 Wi-Fi 配置不落盘。
+    // 0x952B/0x935A 确认；不确认就 10 秒后自己收线，且 Wi-Fi 配置不落盘。
     const code = await wifi.getPairingCode();
+    if (!this.epochCurrent(epoch)) {
+      await this.abortWifiConnect(session, wifi, target);
+      return false;
+    }
     if (code !== null) {
       this.pairingCode = code;
       this.pairingRequired = true;
@@ -1527,6 +1653,39 @@ export class CameraService {
     this.pairingCode = '';
     this.checkCachingState();
     return true;
+  }
+
+  /**
+   * 连接被切模式取消后的收尾：关掉这一次建立的会话，把共享状态复位。
+   *
+   * 只在 `this.session` 仍是这一次创建的会话时复位——新一轮可能已经建了
+   * 自己的会话，不能把它的状态清掉。`suspendBleForWifi()` 已经跑过的话
+   * 把 BLE 的自动重连还回去，新模式还要靠蓝牙唤醒相机。
+   */
+  private async abortWifiConnect(session: PtpTransport, wifi: WifiPtpSession,
+                                 host: string): Promise<void> {
+    this.log.add(`无线连接 ${host} 已被切模式取消`);
+    this.stopBleVisibilityProbe();
+    if (this.bleLink !== null) {
+      this.bleLink.enableAutoReconnect();
+    }
+    try {
+      await session.closeSessionAndPipe();
+    } catch (_e) {
+      // 还没连上就取消时 close 会报错，忽略即可
+    }
+    if (this.session === session) {
+      this.session = new PtpScheduler(new PtpSession());
+      this.wireless = false;
+      this.connected = false;
+      this.usable = false;
+    }
+    if (this.wifiSession === wifi) {
+      this.wifiSession = null;
+    }
+    this.pairingRequired = false;
+    this.pairingCode = '';
+    this.wifiAutoReconnectArmed = false;
   }
 
   /**
@@ -1590,21 +1749,28 @@ export class CameraService {
   async scanWifiCameras(durationMs: number = 8000): Promise<void> {
     const ctx = this.context;
     if (ctx === null || this.wifiScanning) return;
+    const epoch = this.linkEpoch;
+    const gen = ++this.wifiScanGen;
     this.wifiScanning = true;
+    this.wifiScanEpoch = epoch;
     this.wifiCameras = [];
     this.wifiHint = '';
     // 先摸一遍本机网络：扫不到相机时，是「网络前提不成立」还是「相机没进
     // Wi-Fi 模式」，这一步决定了给用户哪句提示。
     const nets = await collectLocalNetworks();
-    this.networkSummary = nets.summary;
+    // 等网络快照期间切了模式：不再启动 mDNS / 网段扫描。
+    if (!this.wifiScanAlive(gen, epoch)) return;
     this.wifiHint = networkHint(nets);
     this.log.add(`本机网络: ${nets.summary}`);
     if (this.nsdScanner === null) {
       this.nsdScanner = new NsdScanner(ctx,
         (camera: WifiCameraInfo) => {
+          // 回调复用：只认「当前仍是 Wi-Fi 浏览，且仍属于当前链路选择」。
+          if (this.wifiScanEpoch !== this.linkEpoch) return;
           this.mergeWifiCamera(camera, 'mDNS');
         },
         (name: string) => {
+          if (this.wifiScanEpoch !== this.linkEpoch) return;
           this.wifiCameras = this.wifiCameras.filter((c: WifiCameraInfo) => c.name !== name);
         },
         (msg: string) => { this.log.add(msg); });
@@ -1614,6 +1780,7 @@ export class CameraService {
     } catch (err) {
       this.log.add(`mDNS 启动失败: ${(err as Error).message}`);
     }
+    if (!this.wifiScanAlive(gen, epoch)) return;
 
     // mDNS 被客户端隔离挡掉时一个都收不到，同时跑一遍 /24 端口扫描兜底。
     if (this.subnetScanner === null) {
@@ -1629,6 +1796,7 @@ export class CameraService {
       }, durationMs);
     });
     const subnetWork = this.subnetScanner.scan().then((found: WifiCameraInfo[]) => {
+      if (!this.wifiScanAlive(gen, epoch)) return;
       for (const camera of found) {
         this.mergeWifiCamera(camera, '网段扫描');
       }
@@ -1636,13 +1804,24 @@ export class CameraService {
       this.log.add(`网段扫描失败: ${err.message}`);
     });
     await Promise.all([mdnsWindow, subnetWork]);
+    // 这一轮已被切模式取消，或者已经开了新一轮：本轮收尾什么都不写。
+    if (!this.wifiScanAlive(gen, epoch)) {
+      this.log.add('Wi-Fi 搜索已被切模式取消');
+      return;
+    }
     this.wifiScanning = false;
+    this.wifiScanEpoch = -1;
     this.wifiScanResolve = null;
     if (this.wifiCameras.length === 0 && this.wifiHint === '') {
       // 网络前提成立却一台都没找到：问题在相机那边（没进 Wi-Fi 模式、
       // 被客户端隔离、或相机把上一个会话还挂在 15740 上）。
       this.wifiHint = '同一网络里没有发现相机。确认相机已进入「连接至智能设备」的 Wi-Fi 模式。';
     }
+  }
+
+  /** 这一轮 Wi-Fi 搜索是否仍是「当前链路选择 + 当前这一轮」。 */
+  private wifiScanAlive(gen: number, epoch: number): boolean {
+    return this.wifiScanning && this.wifiScanGen === gen && this.epochCurrent(epoch);
   }
 
   /**
@@ -1700,6 +1879,7 @@ export class CameraService {
     if (resolve !== null) {
       resolve();
     }
+    this.wifiScanEpoch = -1;
     this.wifiScanning = false;
   }
 
@@ -1720,15 +1900,27 @@ export class CameraService {
   /** 搜索 BLE 相机（实验）。只发现，不配对。 */
   async scanBleCameras(durationMs: number = 8000): Promise<void> {
     if (this.bleScanning) return;
+    // 权限弹窗可能要等用户点很久；期间切了模式就不要再开一轮新扫描。
+    const epoch = this.linkEpoch;
     if (!await this.ensureBlePermission()) {
-      this.reportScanFailure(L10n.tr('camera_status_ble_permission'));
+      // 权限框关掉时可能已经切了模式：别把「没有蓝牙权限」写到新模式头上。
+      if (this.epochCurrent(epoch)) {
+        this.reportScanFailure(L10n.tr('camera_status_ble_permission'));
+      }
+      return;
+    }
+    if (!this.epochCurrent(epoch)) {
+      this.log.add('BLE 搜索已被切模式取消');
       return;
     }
     this.bleScanning = true;
+    this.bleScanEpoch = epoch;
     this.bleCameras = [];
     if (this.bleScanner === null) {
       this.bleScanner = new BleScanner(
         (device: BleCameraDevice) => {
+          // 回调只创建一次，不能捕获某一轮的 epoch；用字段对当前链路代次。
+          if (this.bleScanEpoch !== this.linkEpoch) return;
           if (!this.bleCameras.some((d: BleCameraDevice) => d.deviceId === device.deviceId)) {
             this.bleCameras = this.bleCameras.concat([device]);
           }
@@ -1739,6 +1931,8 @@ export class CameraService {
     if (this.bleScanTimer >= 0) clearTimeout(this.bleScanTimer);
     this.bleScanTimer = setTimeout(() => {
       this.bleScanTimer = -1;
+      // 旧窗口的计时器不能停掉新模式刚开的扫描。
+      if (this.bleScanEpoch !== this.linkEpoch) return;
       if (this.bleScanner !== null) this.bleScanner.stop();
       this.bleScanning = false;
     }, durationMs);
@@ -1751,6 +1945,7 @@ export class CameraService {
       clearTimeout(this.bleScanTimer);
       this.bleScanTimer = -1;
     }
+    this.bleScanEpoch = -1;
     this.bleScanning = false;
   }
 
@@ -1773,6 +1968,7 @@ export class CameraService {
       this.log.add('BLE 正在连接中，忽略重复点击');
       return false;
     }
+    const epoch = this.linkEpoch;
     this.stopBleScan();
     this.bleConnecting = true;
     this.bleConnected = false;
@@ -1791,6 +1987,12 @@ export class CameraService {
       }
       this.bleCameraName = deviceName;
       const ok = await this.bleLink.connect(deviceId);
+      // 连接期间切了模式：这次 BLE 连接属于上一模式，立刻收掉。
+      if (!this.epochCurrent(epoch)) {
+        this.log.add('BLE 连接已被切模式取消（连接阶段）');
+        await this.dropCancelledBleLink();
+        return false;
+      }
       if (!ok) {
         this.bleServices = [];
         if (silent) {
@@ -1802,6 +2004,11 @@ export class CameraService {
       }
       this.bleConnected = true;
       this.bleServices = await this.bleLink.listServices();
+      if (!this.epochCurrent(epoch)) {
+        this.log.add('BLE 连接已被切模式取消（服务枚举后）');
+        await this.dropCancelledBleLink();
+        return false;
+      }
       for (const line of this.bleServices) {
         this.log.add(`GATT ${line}`);
       }
@@ -1818,6 +2025,13 @@ export class CameraService {
         this.log.add('BLE 待机：交接冷却中，这次不把相机推到 Wi-Fi 模式');
       }
       const serial = await this.bleLink.pair(deviceName, canHandover);
+      // 配对期间切了模式：相机那边可能已经认了这台手机，但这次流程到此为止，
+      // 不再继续交接、也不把「配对成功」写进新模式。
+      if (!this.epochCurrent(epoch)) {
+        this.log.add('BLE 配对已被切模式取消');
+        await this.dropCancelledBleLink();
+        return false;
+      }
       if (canHandover) {
         this.lastHandoverAt = Date.now();
       }
@@ -1852,14 +2066,32 @@ export class CameraService {
       this.startBleKeepalive(2500);
       if (canHandover) {
         // 已经把相机推到 Wi-Fi 模式：按当前模式接着收口。
-        this.afterHandover().catch((err: Error) => {
+        this.afterHandover(epoch).catch((err: Error) => {
           this.log.add(`交接收口失败: ${err.message}`);
         });
       }
       return true;
     } finally {
-      this.bleConnecting = false;
+      // 切模式时 `cancelInFlightLink()` 已经把标记清掉；新一轮可能已经重新
+      // 开始连接，旧流程不能把它的 `bleConnecting` 抹成 false。
+      if (this.epochCurrent(epoch)) this.bleConnecting = false;
     }
+  }
+
+  /**
+   * 一次被切模式取消的 BLE 连接，收掉自己那条链路。
+   *
+   * 不能无脑 `disconnect()`：`setLinkMode()` 会把 `bleConnecting` 放掉，用户
+   * 可能已经在新模式里开始了下一轮连接；同一个 `bleLink` 被新一轮占用时，
+   * 旧流程的收尾不能把它一起断掉。
+   */
+  private async dropCancelledBleLink(): Promise<void> {
+    if (this.bleLink === null) return;
+    if (this.bleConnecting) {
+      this.log.add('BLE 旧连接收尾：新一轮已开始，不再动链路');
+      return;
+    }
+    await this.bleLink.disconnect();
   }
 
   /**
@@ -1906,6 +2138,7 @@ export class CameraService {
    */
   async autoConnectBle(silent: boolean = true): Promise<boolean> {
     if (this.bleConnected || this.bleConnecting) return this.bleConnected;
+    const epoch = this.linkEpoch;
     const store = BleIdentityStore.getInstance();
     if (!store.hasIdentity() || store.deviceId.length === 0) {
       // 没有 BLE 身份不代表无线也连不上：上次连过的无线地址还在，值得先试
@@ -1915,16 +2148,19 @@ export class CameraService {
     }
     this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）（仅待机，不切无线）`);
     if (await this.connectBle(store.deviceId, store.cameraName, false, silent)) {
-      return true;
+      return this.epochCurrent(epoch);
     }
+    if (!this.epochCurrent(epoch)) return false;
     // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
     // 重扫一次（休眠相机的广播没有名字，只能靠厂商数据认）。
     this.log.add('BLE 直连未成，按设备号重扫相机');
     const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
+    if (!this.epochCurrent(epoch)) return false;
     for (const dev of devices) {
       if (await this.connectBle(dev.deviceId, dev.name, false, silent)) {
-        return true;
+        return this.epochCurrent(epoch);
       }
+      if (!this.epochCurrent(epoch)) return false;
     }
     // BLE 这条路彻底不通时，无线这半条仍单独试一次（比如蓝牙被系统关了、
     // 但手机还挂在相机所在的热点上）。
@@ -1984,8 +2220,7 @@ export class CameraService {
   private async refreshNetworkSnapshot(): Promise<void> {
     try {
       const nets = await collectLocalNetworks();
-      this.networkSummary = nets.summary;
-      this.wifiHint = networkHint(nets);
+        this.wifiHint = networkHint(nets);
       this.log.add(`本机网络: ${nets.summary}`);
     } catch (_e) {
       // 拿不到网络信息不影响页面，后续搜索时会再试一次
@@ -2050,6 +2285,7 @@ export class CameraService {
     CameraModelStore.getInstance().set(key);
     SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel,
       CameraModelStore.getInstance().serial);
+    this.rememberMockCamera();
     this.log.add(`相机立牌: ${raw} → ${key}`);
   }
 
@@ -2068,6 +2304,7 @@ export class CameraService {
     if (serial === '') return;
     CameraModelStore.getInstance().setSerial(serial);
     SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel, serial);
+    this.rememberMockCamera();
     this.log.add(`机身序列号: ${serial}`);
   }
 
@@ -2119,7 +2356,7 @@ export class CameraService {
   /** 启动时把落盘的模式读回来。 */
   initLinkMode(): void {
     this.linkMode = CameraLinkModeStore.getInstance().mode;
-    // 上次停在 STA：进页面就该看到本机网络，而不是等用户点「搜索」
+    // 上次停在 STA：先把网络快照摸好，点搜索时 `wifiHint` 才有依据
     if (this.linkMode === CameraLinkMode.STA) {
       this.refreshNetworkSnapshot().catch((_e: Error) => { /* 快照失败不影响主流程 */ });
     }
@@ -2132,27 +2369,70 @@ export class CameraService {
     this.log.add(`链路模式切到 ${label}`);
     this.linkMode = mode;
     CameraLinkModeStore.getInstance().set(mode);
+    // 切模式 = 取消在途的一切搜索与自动连接。先换代次再收尾：旧流程在所有
+    // await 点都会看到「已经不是当前链路选择」，于是静默退出（1.64.1）。
+    this.linkEpoch++;
+    this.cancelInFlightLink();
     // 上一轮的失败原因、网络快照都属于上一模式，留着会让人以为当前模式也失败了
     // （以前切到 USB 还挂着「蓝牙连接失败」，AP 模式下还显示手机当前 Wi-Fi）。
     this.lastScanError = '';
     this.bleHint = '';
     this.wifiHint = '';
-    this.networkSummary = '';
     this.wirelessStage = '';
     this.wirelessFailed = '';
     // 配对列表属于上一模式：切过去还留着几台旧设备，看起来像当前模式也扫到了
     this.bleCameras = [];
+    // Wi-Fi 发现的相机同理；STA 的「网络里发现的相机」列表不该跨模式残留。
+    this.wifiCameras = [];
     // 上一模式的扫描统计也一起清：切模式是显式断连，留着「照片 38 张 | 扫描完成」
     // 会让新模式的空态看起来像刚扫完（1.64.0 加锁定切换时发现）。
     this.scanStatsText = '';
     this.scanPhaseText = '';
     this.scanProgress = 0;
     this.scanTotal = 0;
-    // STA 一进模式就先摸一遍本机网络：用户要拿它跟相机那边连的热点对比，
-    // 等点了「搜索」才出现太晚。
+    // STA 一进模式就先摸一遍本机网络：搜索或失败时 `wifiHint` 才有依据。
     if (mode === CameraLinkMode.STA) {
       this.refreshNetworkSnapshot().catch((_e: Error) => { /* 快照失败不影响主流程 */ });
     }
+  }
+
+  /**
+   * 切模式时取消所有在途的发现 / 自动连接。
+   *
+   * 只清「正在做」的标记与计时器，**不碰已配对的 BLE 身份**：切到 AP / STA
+   * 后蓝牙仍要用来唤醒相机。正在首配的 BLE 连接是例外——那是上一模式的
+   * 动作，直接取消（`BleCameraLink` 会在关键 await 后看到取消标记）。
+   *
+   * 自动无线 / AP 交接无法从外面 await 掉，它们靠 `linkEpoch` 在下一个
+   * 检查点收手；这里先把进行中标记放掉，页面才不会继续显示上一模式的
+   * 「正在连接」。
+   */
+  private cancelInFlightLink(): void {
+    this.stopBleScan();
+    this.stopWifiScan();
+    this.cancelWifiReconnect();
+    const wasApJoining = this.apJoining;
+    this.wifiAutoConnecting = false;
+    this.apJoining = false;
+    this.wifiReconnecting = false;
+    this.wirelessStage = '';
+    // 手动 IP / 自动链路的 `connectWifi()` 可能在途：让它的 finally 失效，
+    // 页面立刻回到新模式的空闲态（在途会话由 `abortWifiConnect()` 收掉）。
+    this.wifiConnectSeq++;
+    this.wifiConnecting = false;
+    // USB 扫描不在这里把 `scanning` 置 false：那会让页面看起来已经空闲，
+    // 用户可以再点一次搜索，两轮扫描同时动同一个 PTP 会话。让旧扫描在
+    // `ensureUsbSession()` 之后看到代次变化、自己收尾（通常一瞬间）。
+    if (wasApJoining && this.apJoiner !== null) {
+      // `join()` 的轮询会被 leave() 里的取消标记终止；已经上了热点的话
+      // 这一步同时把手机从没有外网的相机热点上撤下来。
+      this.apJoiner.leave().catch((_e: Error) => { /* 已经不在热点上 */ });
+    }
+    if (this.bleConnecting && this.bleLink !== null) {
+      this.log.add('切模式：取消在途的蓝牙连接');
+      this.bleLink.disconnect().catch((_e: Error) => { /* 取消失败不影响切模式 */ });
+    }
+    this.bleConnecting = false;
   }
 
   /**
@@ -2174,6 +2454,9 @@ export class CameraService {
    */
   async searchByMode(): Promise<void> {
     this.log.add(`按模式搜索：${this.linkMode}`);
+    // 这一轮搜索属于当前链路选择；中途切模式后，后续 await 回来的步骤不能再
+    // 接着跑（否则会在新模式里开一轮旧模式的搜索）。
+    const epoch = this.linkEpoch;
     switch (this.linkMode) {
       case CameraLinkMode.USB:
         await this.scanForCamera(false, true);
@@ -2181,7 +2464,7 @@ export class CameraService {
       case CameraLinkMode.BLE:
         // 用户按的按钮，失败要说出来
         if (!await this.autoConnectBle(false)) {
-          await this.scanBleCameras();
+          if (this.epochCurrent(epoch)) await this.scanBleCameras();
         }
         break;
       case CameraLinkMode.AP:
@@ -2204,6 +2487,7 @@ export class CameraService {
   private async searchWireless(): Promise<void> {
     if (this.connected && this.wireless) return;
     this.wirelessFailed = '';
+    const epoch = this.linkEpoch;
     const store = BleIdentityStore.getInstance();
     const paired = store.hasIdentity() && store.deviceId.length > 0;
     if (this.linkMode === CameraLinkMode.AP) {
@@ -2220,12 +2504,20 @@ export class CameraService {
     // 本来就在手机的网络里，用户点「搜索相机」要的是连上，不是一张列表）。
     if (paired) {
       if (await this.connectBle(store.deviceId, store.cameraName, false)) {
-        if (!await this.autoLinkWifi('search-sta')) this.failStaAutoLink();
+        // BLE 握手期间切了模式：这次唤醒属于上一模式，不能继续连无线。
+        if (!this.epochCurrent(epoch)) return;
+        if (!await this.autoLinkWifi('search-sta')) {
+          if (this.epochCurrent(epoch)) this.failStaAutoLink();
+        }
         return;
       }
+      // 蓝牙没连上不是终点；但切了模式就没有「改为网络发现」这一步了。
+      if (!this.epochCurrent(epoch)) return;
       this.log.add('STA: 蓝牙待机没连上，改为网络发现');
     }
-    if (!await this.autoLinkWifi('search-sta')) this.failStaAutoLink();
+    if (!await this.autoLinkWifi('search-sta')) {
+      if (this.epochCurrent(epoch)) this.failStaAutoLink();
+    }
   }
 
   /**
@@ -2271,6 +2563,7 @@ export class CameraService {
       this.failWireless('相机刚切换过无线，请稍等一会再试');
       return false;
     }
+    const epoch = this.linkEpoch;
     this.apJoining = true;
     this.wirelessFailed = '';
     this.wirelessStage = '';
@@ -2284,9 +2577,16 @@ export class CameraService {
         }
         this.wirelessStage = '正在唤醒相机';
         if (!await this.connectBle(store.deviceId, store.cameraName, false)) {
-          this.failWireless('连不上相机，请确认相机已开机且在附近');
+          if (this.epochCurrent(epoch)) {
+            this.failWireless('连不上相机，请确认相机已开机且在附近');
+          }
           return false;
         }
+      }
+      // BLE 握手中途切了模式：不能继续把相机推到 Wi-Fi。
+      if (!this.epochCurrent(epoch)) {
+        this.log.add('无线交接已被切模式取消');
+        return false;
       }
       // 把相机推到 Wi-Fi（AP 模式 = 起热点；STA 模式 = 入网）
       this.wirelessStage = '正在唤醒相机无线';
@@ -2299,21 +2599,30 @@ export class CameraService {
           this.bleLink.stopKeepalive();
         }
       } catch (err) {
-        this.failWireless('唤醒相机无线失败');
+        if (this.epochCurrent(epoch)) this.failWireless('唤醒相机无线失败');
         this.log.add(`0x2005 写入失败: ${(err as Error).message}`);
         return false;
       }
-      return await this.afterHandover();
+      if (!this.epochCurrent(epoch)) {
+        this.log.add('无线交接已被切模式取消');
+        return false;
+      }
+      return await this.afterHandover(epoch);
     } finally {
-      this.apJoining = false;
-      if (this.connected) this.wirelessStage = '';
+      // 切模式时 `cancelInFlightLink()` 已经清过；新一轮可能已把它置回 true，
+      // 旧流程不能把新流程的标记抹掉。
+      if (this.epochCurrent(epoch)) {
+        this.apJoining = false;
+        if (this.connected) this.wirelessStage = '';
+      }
     }
   }
 
   /** 交接完成（相机已被推到 Wi-Fi）：按模式接着收口。 */
-  private async afterHandover(): Promise<boolean> {
+  private async afterHandover(epoch: number): Promise<boolean> {
+    if (!this.epochCurrent(epoch)) return false;
     if (this.linkMode === CameraLinkMode.AP) {
-      return await this.joinApAndConnect();
+      return await this.joinApAndConnect(epoch);
     }
     return await this.autoLinkWifi('ble-paired');
   }
@@ -2324,7 +2633,8 @@ export class CameraService {
    * 凭据来自 BLE 握手时读到的 `0x2004`（已解密），所以这一步不需要用户
    * 输入任何东西。地址先试网关（两种字节序），再用网段扫描兜底。
    */
-  private async joinApAndConnect(): Promise<boolean> {
+  private async joinApAndConnect(epoch: number): Promise<boolean> {
+    if (!this.epochCurrent(epoch)) return false;
     const creds = this.bleLink === null ? null : this.bleLink.getCredentials();
     if (creds === null) {
       this.failWireless('没拿到相机热点凭据（相机可能没认这次配对）');
@@ -2334,6 +2644,12 @@ export class CameraService {
     this.wirelessStage = '正在连接相机热点';
     const joiner = this.getApJoiner();
     const outcome: ApJoinOutcome = await joiner.join(creds.ssid, creds.password, creds.security);
+    // 加入热点期间切了模式：`cancelInFlightLink()` 已经让 joiner 取消并退出，
+    // 这里不能再写失败文案；手机若已上热点，也把候选配置撤掉。
+    if (!this.epochCurrent(epoch)) {
+      this.leaveCameraHotspot('加入热点期间切了模式');
+      return false;
+    }
     if (!outcome.ok) {
       this.failWireless(outcome.reason);
       this.log.add(`AP: 加入相机热点失败 —— ${outcome.reason}`);
@@ -2341,26 +2657,68 @@ export class CameraService {
     }
     this.wirelessStage = '正在连接照相机';
     for (const host of joiner.candidateHosts()) {
+      if (!this.epochCurrent(epoch)) {
+        this.leaveCameraHotspot('连接照相机期间切了模式');
+        return false;
+      }
       this.log.add(`AP: 试 ${host}:15740`);
       if (await this.connectWifi(host, 15740, true)) {
+        if (!this.epochCurrent(epoch)) {
+          this.leaveCameraHotspot('连接照相机期间切了模式');
+          return false;
+        }
         await this.finishAutoLink();
         return this.connected;
+      }
+      if (!this.epochCurrent(epoch)) {
+        this.leaveCameraHotspot('连接照相机期间切了模式');
+        return false;
       }
     }
     this.log.add('AP: 候选地址都不通，改用网段扫描');
     this.wirelessStage = '正在搜索照相机';
     await this.scanWifiCameras(5000);
+    // `scanWifiCameras()` 在切模式时会提前返回；这里不要再拿旧结果去连。
+    if (!this.epochCurrent(epoch)) {
+      this.leaveCameraHotspot('搜索照相机期间切了模式');
+      return false;
+    }
     const camera = this.pickWifiCamera();
     if (camera === null) {
       this.failWireless(this.wifiHint !== '' ? this.wifiHint : '没有找到照相机');
       return false;
     }
     if (await this.connectWifi(camera.host, camera.port, true)) {
+      if (!this.epochCurrent(epoch)) {
+        this.leaveCameraHotspot('连接照相机期间切了模式');
+        return false;
+      }
       await this.finishAutoLink();
       return this.connected;
     }
+    // 这次连接也可能是被切模式取消的：不能把「连不上照相机」写进新模式。
+    if (!this.epochCurrent(epoch)) {
+      this.leaveCameraHotspot('连接照相机期间切了模式');
+      return false;
+    }
     this.failWireless('连上相机热点，但连不上照相机');
     return false;
+  }
+
+  /**
+   * 切模式时把手机从相机热点上撤下来。
+   *
+   * AP 交接的 `join()` 一旦成功，手机就挂在相机热点上（没有外网）；如果
+   * 这时用户切到 STA 或别的模式而不管它，手机就再也看不到自己的网络了。
+   * `WifiApJoiner.leave()` 会删掉候选配置并等系统切回原网络。
+   */
+  private leaveCameraHotspot(reason: string): void {
+    this.log.add(`AP: ${reason}，退出相机热点`);
+    if (this.apJoiner !== null) {
+      this.apJoiner.leave().catch((_e: Error) => {
+        // 已经不在热点 / 系统切换慢：交给相机侧的 Wi-Fi 待机计时，不影响切模式
+      });
+    }
   }
 
   /** 交接冷却是否已过（BLE/Wi-Fi 互斥，不能连着推）。 */
@@ -2589,20 +2947,27 @@ export class CameraService {
       this.log.add(`自动无线已在进行中，忽略 ${source} 的重复触发`);
       return false;
     }
+    const epoch = this.linkEpoch;
     this.wifiAutoConnecting = true;
     this.wirelessFailed = '';
     try {
       const nets = await collectLocalNetworks();
-      this.networkSummary = nets.summary;
-      this.log.add(`自动无线（${source}）: ${nets.summary}`);
+      // 等网络快照期间切了模式：这一轮直接作废，不写网络快照、不继续连。
+      if (!this.epochCurrent(epoch)) {
+        this.log.add(`自动无线（${source}）已被切模式取消`);
+        return false;
+      }
+        this.log.add(`自动无线（${source}）: ${nets.summary}`);
 
       const store = WifiLinkStore.getInstance();
       if (store.hasHost()) {
         this.log.add(`自动无线: 先试上次地址 ${store.host}:${store.port}`);
         if (await this.connectWifi(store.host, store.port, true)) {
+          if (!this.epochCurrent(epoch)) return false;
           await this.finishAutoLink();
           return true;
         }
+        if (!this.epochCurrent(epoch)) return false;
         this.log.add('自动无线: 上次地址不通，改为扫描');
       }
       if (!allowScan) {
@@ -2613,18 +2978,27 @@ export class CameraService {
       // 上限比一整轮网段扫描还长：命中就提前收工，没命中就让它跑完，
       // 不人为截断搜索（截断会把「慢但能找到」变成「找不到」）。
       const camera = await this.scanUntilCamera(45000);
+      // 搜索途中切了模式：`stopWifiScan()` 已经让这一轮提前收工，不要再拿
+      // 旧模式的结果去连相机、更不要给新模式留一条失败结论。
+      if (!this.epochCurrent(epoch)) {
+        this.log.add(`自动无线（${source}）已被切模式取消`);
+        return false;
+      }
       if (camera === null) {
         this.log.add(`自动无线: 没有发现相机。${this.wifiHint}`);
         return false;
       }
       this.log.add(`自动无线: 命中 ${camera.name} @ ${camera.host}`);
       if (await this.connectWifi(camera.host, camera.port, true)) {
+        if (!this.epochCurrent(epoch)) return false;
         await this.finishAutoLink();
         return true;
       }
       return false;
     } finally {
-      this.wifiAutoConnecting = false;
+      // 只有仍属于当前链路选择时才清标记：切模式时 `cancelInFlightLink()`
+      // 已经清过，而新一轮可能已经把它置回 true，旧流程不能把它抹掉。
+      if (this.epochCurrent(epoch)) this.wifiAutoConnecting = false;
     }
   }
 
@@ -2676,10 +3050,15 @@ export class CameraService {
   /**
    * 建立/复用 USB 会话。无线模式不走这里，直接复用 `connectWifi()` 建好的会话。
    * 返回 false 时由调用方收尾（清 scanning / 已在内部报过错）。
+   *
+   * [epoch] 是这次扫描所属的链路代次：建立会话的每个 await 之后都比一次，
+   * 切了模式就悄悄关掉刚建的会话、不往新模式写任何失败文案。
    */
-  private async ensureUsbSession(): Promise<boolean> {
+  private async ensureUsbSession(epoch: number): Promise<boolean> {
     const cameras = this.sessionIsMock ? MockPtpDevice.findCameras() : PtpSession.findCameras();
     if (cameras.length === 0) {
+      // 枚举本身很快；如果这期间切了模式，不要把「没有相机」写进新模式。
+      if (!this.epochCurrent(epoch)) return false;
       this.connected = false;
       this.cameraName = '';
       this.reportScanFailure(L10n.tr('camera_status_no_camera'));
@@ -2719,17 +3098,23 @@ export class CameraService {
       // Different camera or first connect
       if (this.connected) {
         await this.disconnect();
+        if (!this.epochCurrent(epoch)) return false;
       }
 
       this.statusText = L10n.tr('camera_status_found_camera', cameras[0].productName);
-  
 
       const usbEndpoint: PtpEndpoint = {
         kind: PtpEndpointKind.USB,
         device: cameras[0],
         label: cameras[0].name
       };
-      const ok = await this.session.connect(usbEndpoint);
+      const session = this.session;
+      const ok = await session.connect(usbEndpoint);
+      if (!this.epochCurrent(epoch)) {
+        await this.abortStaleUsbSession(session);
+        this.log.add('USB 连接已被切模式取消');
+        return false;
+      }
       if (!ok) {
         this.connected = false;
         // 0x201E：相机里还留着上一次崩溃时的会话，光重试没有用，要用户拔插一次线。
@@ -2746,7 +3131,12 @@ export class CameraService {
       this.usable = false;
 
       // Fetch PTP device identity for unique camera identification
-      const deviceInfo = await this.session.getDeviceInfo();
+      const deviceInfo = await session.getDeviceInfo();
+      if (!this.epochCurrent(epoch)) {
+        await this.abortStaleUsbSession(session);
+        this.log.add('USB 连接已被切模式取消（取设备信息后）');
+        return false;
+      }
       this.deviceManufacturer = deviceInfo?.manufacturer || cameras[0].manufacturerName || '';
       this.deviceSerialNumber = deviceInfo?.serialNumber || cameras[0].serial || '';
       this.deviceVersion = deviceInfo?.deviceVersion || '';
@@ -2769,7 +3159,30 @@ export class CameraService {
       // Check caching preference for this camera
       this.checkCachingState();
     }
+    // 模拟相机（调试包）：把它记进「已配对相机」，重启后能回到同一台。
+    // 放在这里而不是只放在机型识别里：认不出机型的模拟机（「未知型号」）
+    // 走不到那条分支。
+    this.rememberMockCamera();
     return true;
+  }
+
+  /**
+   * 切换模式时收起一次刚建立、但已不属于当前模式的 USB 会话。
+   *
+   * 只在 `this.session` 仍是这一个会话时才复位：新一轮扫描可能已经建了
+   * 自己的会话，不能把它的状态清掉。
+   */
+  private async abortStaleUsbSession(session: PtpTransport): Promise<void> {
+    try {
+      await session.closeSessionAndPipe();
+    } catch (_e) {
+      // 还没连上 / 已经被下一次断开收掉，忽略
+    }
+    if (this.session === session) {
+      this.session = new PtpScheduler(new PtpSession());
+      this.connected = false;
+      this.usable = false;
+    }
   }
 
   async scanForCamera(quickMode: boolean = true, bypassThrottle: boolean = false): Promise<void> {
@@ -2786,6 +3199,8 @@ export class CameraService {
     this.lastScanStartMs = startedAt;
     this.scanning = true;
     this.log.add('=== 开始扫描 ===');
+    // 这次扫描属于当前链路选择；切模式后 USB 会话不再建立/保留。
+    const epoch = this.linkEpoch;
     // 扫描全程（元数据 + 缩略图）都是 USB 传输，退后台要继续，先申请长时任务
     await this.beginTransferTask();
 
@@ -2805,9 +3220,14 @@ export class CameraService {
         }
         this.statusText = L10n.tr('camera_status_connected');
       } else {
-        const ready = await this.ensureUsbSession();
+        const ready = await this.ensureUsbSession(epoch);
         if (!ready) {
           this.scanning = false;
+          return;
+        }
+        // 会话建立期间切了模式：这次扫描属于上一模式，收尾交给 finally。
+        if (!this.epochCurrent(epoch)) {
+          this.log.add('USB 扫描已被切模式取消');
           return;
         }
       }
@@ -4270,6 +4690,40 @@ export class CameraService {
   }
 
   /**
+   * 当前会话是不是调试包的模拟相机。
+   *
+   * 界面据此显示「模拟」标记：模拟设备走的是与真机完全相同的流程，光看标题和
+   * 设备信息是分不出来的，不标出来容易把测试结果当成真机结论。
+   */
+  mockSession(): boolean {
+    return this.sessionIsMock;
+  }
+
+  /**
+   * 把模拟相机记进「已配对相机」（仅调试包）。
+   *
+   * 模拟相机走 USB/PTP，没有蓝牙配对那一步，`rememberActive()` 永远不会被它触发；
+   * 不补这一条，重启之后标题、立牌、当前相机都退回「相机」，每轮测试都要重新
+   * 搜一次，和真机流程对不上。机型认不出来时也记——那时 modelKey 是空串，
+   * 记录里仍然有序列号。
+   */
+  private rememberMockCamera(): void {
+    if (!this.sessionIsMock) return;
+    const model = CameraModelStore.getInstance();
+    const serial = model.serial !== ''
+      ? model.serial : this.deviceSerialNumber.replace(/^0+/, '');
+    const name = this.cameraName !== '' ? this.cameraName : 'MOCK-PTP-CAMERA';
+    const rec = SavedCameraStore.getInstance().rememberMock(this.cameraModel, serial, name);
+    if (rec === null) return;
+    // 连接过程中机型/序列号是分几步到位的，同一个状态会被调好几次；只在
+    // 「写进去的东西变了」时留一行日志，别刷屏。
+    const signature = `${rec.key}|${this.cameraModel}|${name}`;
+    if (signature === this.mockLogged) return;
+    this.mockLogged = signature;
+    this.log.add(`[Mock] 模拟相机已记入已配对相机: ${rec.key}`);
+  }
+
+  /**
    * 调试开关变化后调用：断开当前相机，让下一次「搜索相机」重新挑选传输实现。
    * 注意不要在这里改 `sessionIsMock`，否则 `syncSessionMode()` 会以为已经切换过
    * 而跳过真正的替换。
@@ -4375,6 +4829,11 @@ export class CameraService {
     if (wasWireless) {
       // BLE 的回接已经由 exitWirelessToBle() 里的密集重扫接手，这里不再排。
       this.stopBleVisibilityProbe();
+    }
+    // 会话已经断开，后台保活不再需要；传输自己的引用仍会把任务留住。
+    if (this.sessionKeepAlive) {
+      this.sessionKeepAlive = false;
+      this.endTransferTask().catch((_e: Error) => { /* 释放失败不影响断开 */ });
     }
   }
 

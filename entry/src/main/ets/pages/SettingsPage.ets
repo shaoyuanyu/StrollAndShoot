@@ -5,6 +5,7 @@ import { SettingsStore } from '../model/SettingsStore';
 import { LanguageStore } from '../model/LanguageStore';
 import { StandeePreferenceStore } from '../model/StandeePreferenceStore';
 import { CameraService } from '../services/CameraService';
+import { SavedCameraStore } from '../services/SavedCameraStore';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { cameraStandeeKeys, cameraStandeeLabel } from '../utils/CameraStandee';
@@ -117,6 +118,7 @@ export struct SettingsPage {
   @Event onCopy: () => void = () => {};
   @Event onOpenGpsManagement: () => void = () => {};
   @Event onOpenCacheManagement: () => void = () => {};
+  @Event onOpenPairedCameras: () => void = () => {};
   settings: SettingsStore = SettingsStore.getInstance();
   /** 应用语言偏好；单独 PersistenceV2 key，默认跟随系统。 */
   @Local languageStore: LanguageStore = LanguageStore.getInstance();
@@ -132,6 +134,8 @@ export struct SettingsPage {
   @Local mockGpsOn: boolean = false;
   @Local mockGpsBusy: boolean = false;
   @Local svc: CameraService = CameraService.getInstance();
+  /** 已配对相机（多相机仓库）：设置页只显示台数，详情在「已配对相机」页。 */
+  @Local cameraStore: SavedCameraStore = SavedCameraStore.getInstance();
 
   aboutToAppear(): void {
     try {
@@ -201,6 +205,12 @@ export struct SettingsPage {
         action: () => { this.applyLanguage(value, previous); }
       }
     });
+  }
+
+  /** 「已配对相机」行下面的台数。 */
+  private pairedCameraText(): string {
+    const count = this.cameraStore.cameras.length;
+    return L10n.plural('paired_camera_count', count, count);
   }
 
   private standeeIndex(): number {
@@ -399,16 +409,47 @@ export struct SettingsPage {
             label: $r('app.string.settings_language'),
             options: LANGUAGE_OPTIONS,
             selectedIndex: this.languageIndex(),
+            last: true,
             onSelect: (index: number) => { this.onLanguageSelect(index); }
           })
+        }
+        .width('100%').padding({ left: 16, right: 16 })
+        .backgroundColor($r('app.color.bg_surface'))
+        .borderRadius(Radius.Card)
+        .shadow(CardShadow)
+
+        // ---- 相机 ----
+        // 「默认立牌」是封面图的选择，和「已配对相机」一样属于相机本身，
+        // 放在这里而不是外观里（1.65.0）。
+        this.GroupTitle($r('app.string.settings_section_camera'))
+        Column() {
           SettingSelectRow({
             label: $r('app.string.settings_default_standee'),
             hint: $r('app.string.settings_default_standee_hint'),
             options: STANDEE_OPTIONS,
             selectedIndex: this.standeeIndex(),
-            last: true,
             onSelect: (index: number) => { this.onStandeeSelect(index); }
           })
+          Row({ space: 8 }) {
+            Column({ space: 2 }) {
+              Text($r('app.string.settings_paired_cameras'))
+                .fontSize(FontSize.CardTitle)
+                .fontColor($r('app.color.text_primary'))
+                .alignSelf(ItemAlign.Start)
+              Text(this.pairedCameraText())
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+                .alignSelf(ItemAlign.Start)
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(IconSize.Body)
+              .fontColor([$r('app.color.text_tertiary')])
+          }
+          .width('100%').height(RowHeight.Double)
+          .onClick(() => { this.onOpenPairedCameras(); })
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))

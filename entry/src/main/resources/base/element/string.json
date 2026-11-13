@@ -157,10 +157,6 @@
       "value": "等待无线"
     },
     {
-      "name": "camera_conn_network",
-      "value": "本机网络：%s"
-    },
-    {
       "name": "camera_conn_guide",
       "value": "默认走相机自己的 Wi-Fi 热点：点「查看照片」会先蓝牙唤醒相机，再自动连上它的热点。相机侧只需在「网络菜单 → 连接至智能设备 → Wi-Fi 连接」里选一次 AP 模式（不要选 STA），之后不用再碰相机菜单。"
     },
@@ -174,11 +170,7 @@
     },
     {
       "name": "camera_wifi_host_placeholder",
-      "value": "相机 IP，如 192.168.1.5"
-    },
-    {
-      "name": "camera_wifi_connect",
-      "value": "连接"
+      "value": "相机 IP 地址"
     },
     {
       "name": "camera_ble_title",
@@ -513,12 +505,24 @@
       "value": "同一网络里没有发现相机"
     },
     {
-      "name": "camera_sta_manual_hide",
-      "value": "收起"
+      "name": "camera_sta_manual_lead",
+      "value": "无法连接？"
     },
     {
-      "name": "camera_sta_manual_show",
-      "value": "手动 IP"
+      "name": "camera_sta_manual_action",
+      "value": "试试指定 IP"
+    },
+    {
+      "name": "camera_ip_sheet_title",
+      "value": "指定相机 IP"
+    },
+    {
+      "name": "camera_ip_sheet_hint",
+      "value": "输入相机屏幕上显示的 IP 地址，手机需与相机在同一网络。"
+    },
+    {
+      "name": "camera_wifi_connect",
+      "value": "连接"
     },
     {
       "name": "gallery_scanning_title",
@@ -1365,8 +1369,20 @@
       "value": "连接步骤"
     },
     {
+      "name": "camera_guide_title",
+      "value": "连接说明"
+    },
+    {
+      "name": "camera_guide_modes_title",
+      "value": "连接模式"
+    },
+    {
+      "name": "camera_guide_modes_intro",
+      "value": "每種連接方式能做的事不一樣，勾選表示可用。"
+    },
+    {
       "name": "camera_guide_view_steps",
-      "value": "查看步骤"
+      "value": "查看说明"
     },
     {
       "name": "camera_new",
@@ -1459,6 +1475,94 @@
     {
       "name": "settings_standee_none",
       "value": "不显示"
+    },
+    {
+      "name": "camera_guide_col_feature",
+      "value": "功能"
+    },
+    {
+      "name": "camera_guide_feature_photos",
+      "value": "浏览与导入照片"
+    },
+    {
+      "name": "camera_guide_feature_clock",
+      "value": "校时与位置注入"
+    },
+    {
+      "name": "camera_guide_feature_pair",
+      "value": "首次需蓝牙配对"
+    },
+    {
+      "name": "camera_guide_feature_park",
+      "value": "相机停在连接页"
+    },
+    {
+      "name": "camera_guide_feature_same_net",
+      "value": "相机在同一网络"
+    },
+    {
+      "name": "camera_guide_feature_online",
+      "value": "手机上网不中断"
+    },
+    {
+      "name": "camera_title_with_serial",
+      "value": "%1$s（%2$s）"
+    },
+    {
+      "name": "camera_paired_title",
+      "value": "已配对相机"
+    },
+    {
+      "name": "camera_paired_empty",
+      "value": "还没有配对过的相机。连上一台之后，它会出现在这里。"
+    },
+    {
+      "name": "camera_paired_hint",
+      "value": "点一台把它设为当前相机，之后到相机页点「连接相机」。"
+    },
+    {
+      "name": "camera_paired_current",
+      "value": "当前"
+    },
+    {
+      "name": "camera_paired_switched",
+      "value": "已切换到 %1$s"
+    },
+    {
+      "name": "camera_paired_need_disconnect",
+      "value": "请先断开当前连接"
+    },
+    {
+      "name": "camera_paired_last_used",
+      "value": "上次连接 %1$s"
+    },
+    {
+      "name": "camera_paired_delete_title",
+      "value": "删除这台相机？"
+    },
+    {
+      "name": "camera_paired_delete_message",
+      "value": "只删除手机端的配对记录；相机那边的配对还在，重新配对即可再用。"
+    },
+    {
+      "name": "camera_mock_badge",
+      "value": "模拟"
+    },
+    {
+      "name": "settings_section_camera",
+      "value": "相机"
+    },
+    {
+      "name": "settings_paired_cameras",
+      "value": "已配对相机"
+    },
+    {
+      "name": "camera_info_mock",
+      "value": "设备来源"
+    },
+    {
+      "name": "camera_info_mock_value",
+      "value": "模拟相机（调试包）"
     }
   ]
 }

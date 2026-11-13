@@ -24,6 +24,7 @@ import { TITLE_BAR_HEIGHT, TITLE_FADE_EXTRA, titleBarInsetVp, titleBarTotalVp } 
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
 import { CardShadow, ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
+import { L10n } from '../utils/L10n';
 import { GlassEffect } from '../utils/GlassEffect';
 
 @Builder
@@ -543,12 +544,19 @@ export struct MainScreen {
     return Math.min(maxWidth, Math.max(170, base + 44));
   }
 
-  /** 同一型号可能有多台，菜单里必须把序列号一起写出来才分得清。 */
+  /**
+   * 同一型号可能有多台，菜单里必须把序列号一起写出来才分得清。
+   *
+   * 用括号把设备号挂在型号后面（`Z 50II（8079350）`），不再用「·」当分隔——
+   * 中间点在中英文里都只是一个分隔符，用户读不出「后面这串是设备号」。括号是
+   * 通用的「附注」写法，资源里可本地化（英文是半角括号）。
+   */
   private cameraMenuText(cam: SavedCamera): string {
     const label = cameraStandeeLabel(cam.modelKey);
     const name = label !== '' ? label : cam.cameraName;
     if (cam.serial !== '') {
-      return name !== '' && name !== cam.serial ? `${name} · ${cam.serial}` : cam.serial;
+      return name !== '' && name !== cam.serial
+        ? L10n.tr('camera_title_with_serial', name, cam.serial) : cam.serial;
     }
     return name !== '' ? name : cam.key;
   }
@@ -567,8 +575,11 @@ export struct MainScreen {
   }
 
   private cameraBusy(): boolean {
+    // `scanning`（USB 扫描）与 `wifiConnecting`（手填 IP 直连）也会在后台
+    // 建立/改写相机身份：这期间切相机，旧连接会把新标题覆盖掉。
     return this.svc.bleConnecting || this.svc.wifiAutoConnecting
-      || this.svc.apJoining || this.svc.wifiReconnecting
+      || this.svc.apJoining || this.svc.wifiReconnecting || this.svc.wifiConnecting
+      || this.svc.scanning
       || this.svc.disconnecting || this.svc.switchingTo >= 0;
   }
 
@@ -636,13 +647,9 @@ export struct MainScreen {
     setTimeout(() => {
       this.cameraStore.beginNew();
       this.svc.applyNewCameraSelection();
-      if (this.svc.linkMode === CameraLinkMode.STA) {
-        this.svc.searchByMode();
-      } else if (this.svc.linkMode === CameraLinkMode.USB) {
-        this.svc.scanForCamera(false, true);
-      } else {
-        this.svc.scanBleCameras();
-      }
+      // 不自动开搜索（1.64.1 二轮）：清到新相机状态后由用户自己选模式、
+      // 点状态头的「搜索相机」。以前这里默认按当前模式起一轮，用户想换
+      // 模式时得先看着旧搜索跑完；现在的入口是显式的。
       animateTo({ duration: 160, curve: Curve.EaseOut }, () => {
         this.titleSwapOpacity = 1;
       });
@@ -1149,6 +1156,12 @@ export struct MainScreen {
             },
             onSwitchMode: (mode: number) => {
               this.switchCameraMode(mode);
+            },
+            // 顶边下拉刷新（1.65.0）：界面只负责手势、阈值与动画，这里决定
+            // 真正做什么。现在不做实际动作，只留日志与接口——接「重新扫描相机」
+            // 时把下面这行换成 `this.svc.scanForCamera(true, true)` 即可。
+            onRefresh: () => {
+              this.svc.getLog().add('[刷新] 下拉刷新（暂未接入实际动作）');
             }
           })
         }
@@ -1166,7 +1179,8 @@ export struct MainScreen {
               this.syncDownloadedKeys();
             },
             onOpenGpsManagement: () => { this.pageInfos.pushPath({ name: 'GpsManagementPage' }); },
-            onOpenCacheManagement: () => { this.pageInfos.pushPath({ name: 'CacheManagementPage' }); }
+            onOpenCacheManagement: () => { this.pageInfos.pushPath({ name: 'CacheManagementPage' }); },
+            onOpenPairedCameras: () => { this.pageInfos.pushPath({ name: 'PairedCamerasPage' }); }
           })
         }
         .tabBar(this.TabItem($r('app.string.tab_settings'), $r('sys.symbol.gearshape'), 2))

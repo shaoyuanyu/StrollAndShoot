@@ -25,7 +25,6 @@ export class CameraStateDemo {
   private static readonly AP_HOST: string = '192.168.1.1';
   private static readonly STA_HOST: string = '192.168.1.5';
   private static readonly PHOTO_COUNT: number = 38;
-  private static readonly NETWORK: string = 'Wi-Fi · StrollNet · 192.168.1.23';
 
   /** 预演一个命名状态；名字见 `apply` 的 switch。 */
   static apply(name: string): void {
@@ -164,18 +163,15 @@ export class CameraStateDemo {
       // ---- Wi-Fi STA ----
       case 'sta_idle':
         s.linkMode = CameraLinkMode.STA;
-        s.networkSummary = CameraStateDemo.NETWORK;
         break;
       case 'sta_scanning':
         s.linkMode = CameraLinkMode.STA;
-        s.networkSummary = CameraStateDemo.NETWORK;
         // 自动发现是「连接」的一部分：页面收起正文，只在状态头写搜索/连接。
         s.wifiAutoConnecting = true;
         s.wifiScanning = true;
         break;
       case 'sta_connecting':
         s.linkMode = CameraLinkMode.STA;
-        s.networkSummary = CameraStateDemo.NETWORK;
         CameraStateDemo.pairedBle(s);
         s.wifiAutoConnecting = true;
         break;
@@ -183,11 +179,9 @@ export class CameraStateDemo {
         s.linkMode = CameraLinkMode.STA;
         CameraStateDemo.connectedDevice(s, true);
         s.wifiHost = CameraStateDemo.STA_HOST;
-        s.networkSummary = CameraStateDemo.NETWORK;
         break;
       case 'sta_failed':
         s.linkMode = CameraLinkMode.STA;
-        s.networkSummary = CameraStateDemo.NETWORK;
         // 自动搜索失败：原因同时写进 wirelessFailed 与 wifiHint，页面只在
         // 状态头显示一次（正文的红字在 Failed 阶段不再重复）。
         s.wifiHint = '同一网络里没有发现相机。确认相机已进入「连接至智能设备」的 Wi-Fi 模式。';
@@ -195,7 +189,6 @@ export class CameraStateDemo {
         break;
       case 'sta_reconnecting':
         s.linkMode = CameraLinkMode.STA;
-        s.networkSummary = CameraStateDemo.NETWORK;
         s.wireless = true;
         s.wifiReconnecting = true;
         break;
@@ -225,9 +218,9 @@ export class CameraStateDemo {
     s.wifiCameras = [];
     s.wifiScanning = false;
     s.wifiAutoConnecting = false;
+    s.wifiConnecting = false;
     s.wifiReconnecting = false;
     s.wifiHint = '';
-    s.networkSummary = '';
     s.bleHint = '';
     s.apJoining = false;
     s.wirelessStage = '';
