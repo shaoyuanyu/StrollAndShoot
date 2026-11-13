@@ -6,6 +6,7 @@ import { CameraLinkMode } from '../model/CameraLinkMode';
 import { cameraStandeeLabel } from '../utils/CameraStandee';
 import { CameraModelStore } from '../model/CameraModelStore';
 import { CameraService } from '../services/CameraService';
+import { SavedCameraStore, type SavedCamera } from '../services/SavedCameraStore';
 import { ExifGeotagger } from '../services/ExifGeotagger';
 import { HandednessService } from '../services/HandednessService';
 import { UsbAttachWatcher } from '../services/UsbAttachWatcher';
@@ -19,10 +20,10 @@ import { SettingsStore } from '../model/SettingsStore';
 import { UiStateStore } from '../model/UiStateStore';
 import { CustomTransition } from '../CustomTransition/CustomNavigationUtils';
 import { ComponentAttrUtils } from '../utils/ComponentAttrUtils';
-import { TITLE_BAR_HEIGHT, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
+import { TITLE_BAR_HEIGHT, TITLE_FADE_EXTRA, titleBarInsetVp, titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { WindowUtils } from '../utils/WindowUtils';
 import { getExt } from '../utils/PhotoGroupUtil';
-import { ControlHeight, FontSize, IconSize, pillRadius } from '../utils/UiTokens';
+import { CardShadow, ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import { GlassEffect } from '../utils/GlassEffect';
 
 @Builder
@@ -54,6 +55,23 @@ export struct MainScreen {
   @Local downloadedKeys: string[] = [];
   @Local settings: SettingsStore = SettingsStore.getInstance();
   @Local uiState: UiStateStore = UiStateStore.getInstance();
+  /** 标题栏相机下拉与多相机保存。 */
+  @Local cameraStore: SavedCameraStore = SavedCameraStore.getInstance();
+  /** 标题栏相机下拉是否展开。 */
+  @Local cameraMenuOpen: boolean = false;
+  /** 标题栏临时加高用的独立开关：先加高再入场，关闭时等动画结束再收回。 */
+  @Local cameraMenuSpace: boolean = false;
+  /** 正在切换的相机 key；用于行高亮和防连点。 */
+  @Local cameraPickingKey: string = '';
+  /** 打开菜单时冻结的列表：切换相机期间卡片内容不重排，避免标题/行硬跳。 */
+  @Local menuCameras: SavedCamera[] = [];
+  /** 打开菜单时冻结的卡片宽度：标题换型号时不跟着跳。 */
+  @Local menuCardWidth: number = 0;
+  /** 标题交换的交叉淡入淡出；只在相机页、菜单切换时用。 */
+  @Local titleSwapOpacity: number = 1;
+  /** 标题组实测宽度：下拉卡片按它收窄，不铺满半屏。 */
+  @Local cameraTitleWidth: number = 0;
+  private cameraMenuTimer: number = -1;
   @Local gallerySelectMode: boolean = false;
   @Local galleryFilter: string = '';
   @Local exitSelectModeVersion: number = 0;
@@ -102,6 +120,9 @@ export struct MainScreen {
     // stage1 重发负责唤醒，用户不用手动点「搜索相机」。
     // USB 模式是明确的「走线」，此时不该再去占相机的蓝牙（BLE 与 Wi-Fi 互斥，
     // 蓝牙链路也会让相机以为有主机在连）。
+    // 先把多相机仓库初始化（迁移旧身份、把 current 归位到上一次连接的相机），
+    // 再让 CameraService 读机型/序列号。
+    SavedCameraStore.getInstance();
     this.svc.initLinkMode();
     this.svc.initCameraModel();
     if (this.svc.linkMode !== CameraLinkMode.USB) {
@@ -115,7 +136,26 @@ export struct MainScreen {
   }
 
   aboutToDisappear(): void {
+    if (this.cameraMenuTimer >= 0) {
+      clearTimeout(this.cameraMenuTimer);
+      this.cameraMenuTimer = -1;
+    }
     HandednessService.getInstance().stop();
+  }
+
+  /** 切到别的标签页时收起相机下拉，避免透明遮罩留在新页上。 */
+  @Monitor('visualTab')
+  onVisualTabChanged(): void {
+    if (this.cameraMenuTimer >= 0) {
+      clearTimeout(this.cameraMenuTimer);
+      this.cameraMenuTimer = -1;
+    }
+    this.cameraMenuOpen = false;
+    this.cameraMenuSpace = false;
+    this.cameraPickingKey = '';
+    this.menuCameras = [];
+    this.menuCardWidth = 0;
+    this.titleSwapOpacity = 1;
   }
 
   /** 扫描完成 / Phase 0 部署后刷新“已下载”标记；筛选格式消失时回到“全部”。 */
@@ -347,6 +387,268 @@ export struct MainScreen {
     }
   }
 
+  /** 标题栏相机下拉按钮：只负责展开/收起，不带底色，压在照片上自动反色。 */
+  @Builder
+  CameraMenuButton() {
+    Button({ type: ButtonType.Circle, stateEffect: true }) {
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(16)
+        .fontColor([Color.White])
+        .blendMode(BlendMode.DIFFERENCE)
+        .rotate({ angle: this.cameraMenuOpen ? 180 : 0 })
+    }
+    .width(28)
+    .height(28)
+    .margin({ left: 4 })
+    .backgroundColor(Color.Transparent)
+    .responseRegion({ x: -8, y: -8, width: 44, height: 44 })
+    .onClick(() => { this.setCameraMenuOpen(!this.cameraMenuOpen); })
+  }
+
+  /**
+   * 相机下拉面板：一张从标题行顶部开始的卡片。
+   *
+   * 第一项不画任何文字——标题栏自己的大号相机名就在卡片上方，位置/字体不动；
+   * 卡片的第一个 56vp 空白行只负责给标题提供背景和点击区。后续项 48vp，
+   * 高度小于第一项。卡片画在标题行**之前**，所以标题始终在上面。
+   */
+  @Builder
+  CameraMenuCard() {
+    Column({ space: 0 }) {
+      // 第一项：标题行占位。标题本体由 NormalTitleRow 画在它上面。
+      Row()
+        .width('100%')
+        .height(TITLE_BAR_HEIGHT)
+        .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+      ForEach(this.menuCameras, (cam: SavedCamera) => {
+        Row() {
+          Text(this.cameraMenuText(cam))
+            .fontSize(FontSize.Body)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .height(48)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor(this.cameraPickingKey === cam.key
+          ? $r('app.color.primary_soft') : Color.Transparent)
+        .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+        .animation({ duration: 120, curve: Curve.EaseOut })
+        .onClick(() => { this.onPickSavedCamera(cam.key); })
+      }, (cam: SavedCamera) => cam.key)
+
+      Row() {
+        Text($r('app.string.camera_new'))
+          .fontSize(FontSize.Body)
+          .fontColor($r('app.color.primary'))
+      }
+      .width('100%')
+      .height(48)
+      .padding({ left: 12, right: 12 })
+      .backgroundColor(this.cameraPickingKey === '__new__'
+        ? $r('app.color.primary_soft') : Color.Transparent)
+      .animation({ duration: 120, curve: Curve.EaseOut })
+      .onClick(() => { this.onConnectNewCamera(); })
+    }
+    .width(this.menuCardWidth > 0 ? this.menuCardWidth : this.cameraMenuCardWidth())
+    .borderRadius(Radius.Inner)
+    .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
+    .border({
+      width: GlassEffect.isEnabled() ? 0 : 0.5,
+      color: $r('app.color.card_border')
+    })
+    .shadow(GlassEffect.isEnabled()
+      ? { radius: 0, color: '#00000000', offsetX: 0, offsetY: 0 }
+      : CardShadow)
+    .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.THICK,
+      interactive: true
+    })))
+    .clip(true)
+    .opacity(this.cameraMenuOpen ? 1 : 0)
+    .translate({ y: this.cameraMenuOpen ? 0 : -6 })
+    .position({ x: 4, y: titleBarInsetVp() - TITLE_BAR_HEIGHT })
+  }
+
+  /** 统一的展开/收起入口：所有路径都走这里，箭头、面板、点击罩同步。 */
+  private setCameraMenuOpen(open: boolean): void {
+    if (this.cameraMenuTimer >= 0) {
+      clearTimeout(this.cameraMenuTimer);
+      this.cameraMenuTimer = -1;
+    }
+    if (open) {
+      if (this.cameraMenuOpen || this.cameraPickingKey !== '' || this.titleSwapOpacity < 1) return;
+      // 先冻结列表，再撑高标题栏；切换相机时卡片里的行不会在淡出中重排。
+      this.menuCameras = this.otherCameras();
+      this.menuCardWidth = this.cameraMenuCardWidth();
+      this.cameraMenuSpace = true;
+      this.cameraMenuTimer = setTimeout(() => {
+        this.cameraMenuTimer = -1;
+        if (!this.cameraMenuSpace) return;
+        animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+          this.cameraMenuOpen = true;
+        });
+      }, 16);
+      return;
+    }
+    if (!this.cameraMenuOpen) {
+      this.cameraMenuSpace = false;
+      this.menuCameras = [];
+      this.menuCardWidth = 0;
+      this.cameraPickingKey = '';
+      return;
+    }
+    animateTo({ duration: 260, curve: Curve.EaseInOut }, () => {
+      this.cameraMenuOpen = false;
+    });
+    this.cameraMenuTimer = setTimeout(() => {
+      this.cameraMenuTimer = -1;
+      if (!this.cameraMenuOpen) {
+        this.cameraMenuSpace = false;
+        this.menuCameras = [];
+        this.menuCardWidth = 0;
+        this.cameraPickingKey = '';
+      }
+    }, 280);
+  }
+
+  /** 当前相机是标题本身；面板里只列其他已保存相机。 */
+  private otherCameras(): SavedCamera[] {
+    const out: SavedCamera[] = [];
+    for (const cam of this.cameraStore.sorted()) {
+      if (cam.key !== this.cameraStore.currentKey) out.push(cam);
+    }
+    return out;
+  }
+
+  /**
+   * 下拉展开时临时把标题栏高度加长。
+   *
+   * 菜单卡片要从标题行顶部一直画到新相机项；Navigation 标题栏会按 `.title`
+   * 给的高度裁剪，不临时加长的话卡片底部会被切掉。`BarStyle.STACK` 下内容
+   * 本来就在标题栏下方，加长只会扩大标题栏的绘制区域，不移动标题行。
+   */
+  private cameraMenuHeightExtra(): number {
+    const rows = this.menuCameras.length + 1;
+    return Math.max(0, rows * 48 - TITLE_FADE_EXTRA + 4);
+  }
+
+  /** 卡片宽度跟着标题组收：左边 8、标题左 16、右侧刚好包住箭头。 */
+  private cameraMenuCardWidth(): number {
+    const base = this.cameraTitleWidth > 0 ? this.cameraTitleWidth : 170;
+    const maxWidth = this.screenWidthVp() > 0 ? this.screenWidthVp() - 8 : 352;
+    // 左侧 4vp + 标题组 + 箭头（4 + 28），右侧刚好收在箭头外沿。
+    return Math.min(maxWidth, Math.max(170, base + 44));
+  }
+
+  /** 同一型号可能有多台，菜单里必须把序列号一起写出来才分得清。 */
+  private cameraMenuText(cam: SavedCamera): string {
+    const label = cameraStandeeLabel(cam.modelKey);
+    const name = label !== '' ? label : cam.cameraName;
+    if (cam.serial !== '') {
+      return name !== '' && name !== cam.serial ? `${name} · ${cam.serial}` : cam.serial;
+    }
+    return name !== '' ? name : cam.key;
+  }
+
+  /** 当前是否有活链路；切换相机/新相机必须先断开。 */
+  private cameraLinked(): boolean {
+    if (this.svc.linkMode === CameraLinkMode.USB) {
+      return this.svc.connected && !this.svc.wireless;
+    }
+    if (this.svc.linkMode === CameraLinkMode.BLE) {
+      // 半配对失败时 bleConnected 也可能为 true；只要 GATT 还挂着就不让切，
+      // 先让用户在状态头点「取消连接」把旧链路收掉。
+      return this.svc.bleConnected;
+    }
+    return this.svc.connected && this.svc.wireless;
+  }
+
+  private cameraBusy(): boolean {
+    return this.svc.bleConnecting || this.svc.wifiAutoConnecting
+      || this.svc.apJoining || this.svc.wifiReconnecting
+      || this.svc.disconnecting || this.svc.switchingTo >= 0;
+  }
+
+  private showCameraToast(message: ResourceStr): void {
+    try {
+      this.getUIContext().getPromptAction().showToast({ message, duration: 2500 });
+    } catch (_e) {
+      // 页面正在退出时 toast 不可用，不影响状态
+    }
+  }
+
+  private onPickSavedCamera(key: string): void {
+    if (this.cameraPickingKey !== '') return;
+    if (key === this.cameraStore.currentKey) {
+      this.setCameraMenuOpen(false);
+      return;
+    }
+    if (this.cameraLinked()) {
+      this.showCameraToast($r('app.string.camera_switch_need_disconnect'));
+      this.setCameraMenuOpen(false);
+      return;
+    }
+    if (this.cameraBusy()) {
+      this.showCameraToast($r('app.string.camera_switch_busy'));
+      this.setCameraMenuOpen(false);
+      return;
+    }
+    const rec = this.cameraStore.find(key);
+    if (rec === null) {
+      this.setCameraMenuOpen(false);
+      return;
+    }
+    this.cameraPickingKey = key;
+    this.setCameraMenuOpen(false);
+    // 标题先淡出（100ms），在完全透明时换数据，再淡入；列表已冻结，不会重排。
+    animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
+      this.titleSwapOpacity = 0;
+    });
+    setTimeout(() => {
+      this.cameraStore.activate(key);
+      this.svc.applySavedCamera(rec);
+      animateTo({ duration: 160, curve: Curve.EaseOut }, () => {
+        this.titleSwapOpacity = 1;
+      });
+    }, 100);
+  }
+
+  private onConnectNewCamera(): void {
+    if (this.cameraPickingKey !== '') return;
+    if (this.cameraLinked()) {
+      this.showCameraToast($r('app.string.camera_switch_need_disconnect'));
+      this.setCameraMenuOpen(false);
+      return;
+    }
+    if (this.cameraBusy()) {
+      this.showCameraToast($r('app.string.camera_switch_busy'));
+      this.setCameraMenuOpen(false);
+      return;
+    }
+    this.cameraPickingKey = '__new__';
+    this.setCameraMenuOpen(false);
+    animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
+      this.titleSwapOpacity = 0;
+    });
+    setTimeout(() => {
+      this.cameraStore.beginNew();
+      this.svc.applyNewCameraSelection();
+      if (this.svc.linkMode === CameraLinkMode.STA) {
+        this.svc.searchByMode();
+      } else if (this.svc.linkMode === CameraLinkMode.USB) {
+        this.svc.scanForCamera(false, true);
+      } else {
+        this.svc.scanBleCameras();
+      }
+      animateTo({ duration: 160, curve: Curve.EaseOut }, () => {
+        this.titleSwapOpacity = 1;
+      });
+    }, 100);
+  }
+
   /**
    * 标题栏。
    *
@@ -377,6 +679,21 @@ export struct MainScreen {
         // 相机页要「完全透明」：标题与右上角胶囊直接浮在内容上，不压色。
         // 画廊 / 设置页保持原来的渐隐，内容滚到标题后面仍然会被压淡。
         .opacity(this.visualTab === 1 ? 0 : 1)
+
+      // 相机下拉的点击外罩：铺满整屏，点在标题行以外就收起。放在标题行
+      // 之前，标题自己和箭头仍然在它上面，能正常点击。
+      if (this.cameraMenuSpace && this.visualTab === 1) {
+        Column()
+          .width('100%')
+          .height(this.screenHeightVp())
+          .backgroundColor(Color.Transparent)
+          .position({ x: 0, y: 0 })
+          .onClick(() => { this.setCameraMenuOpen(false); })
+      }
+
+      if (this.cameraMenuSpace && this.visualTab === 1) {
+        this.CameraMenuCard()
+      }
 
       Column() {
         // 标题停在状态栏下方（渐隐区顶部），衰减在标题下方继续
@@ -437,6 +754,7 @@ export struct MainScreen {
           .systemMaterial(GlassEffect.material(this.floatMaterial))
         }
       }
+
     }
     .width('100%')
     .height('100%')
@@ -520,6 +838,8 @@ export struct MainScreen {
           .fontSize(FontSize.Display)
           .fontWeight(FontWeight.Bold)
           .fontFamily(this.titleFontFamily())
+          // 展开时标题本身就是菜单第一项；点它表示选中当前相机并收起。
+          .onClick(() => { if (this.cameraMenuOpen) this.setCameraMenuOpen(false); })
           // 相机页标题栏完全透明，标题会压在相机图上：用「白字 + DIFFERENCE 混合」
           // 让颜色**跟着背后的像素逐像素反色**——背景是页面底色(241)时算出 14
           // （近黑），压在深色机身上(~32)时算出 223（近白），字跨在交界处时
@@ -540,8 +860,23 @@ export struct MainScreen {
             .flexShrink(0)
         }
       }
-      .layoutWeight(1)
+      // 相机页没有右侧操作，标题组不再吃掉整行宽度，下拉按钮才能紧跟在
+      // 型号 + 序列号后面；其他页仍占满，供筛选/多选按钮靠右。
+      .layoutWeight(this.visualTab === 1 ? 0 : 1)
       .alignItems(VerticalAlign.Bottom)
+      .onAreaChange((_old: Area, now: Area) => {
+        const w = Number(now.width);
+        if (w > 0 && Math.abs(w - this.cameraTitleWidth) > 0.5) {
+          this.cameraTitleWidth = w;
+        }
+      })
+      // 切换相机时标题先淡出、数据在透明点换掉、再淡入；卡片同时在收起。
+      .opacity(this.visualTab === 1 ? this.titleSwapOpacity : 1)
+      .translate({ y: this.visualTab === 1 ? (1 - this.titleSwapOpacity) * 4 : 0 })
+
+      if (this.visualTab === 1) {
+        this.CameraMenuButton()
+      }
 
       if (this.visualTab === 0 && this.svc.photos.length > 0) {
         if (this.settings.displayMode === 'file_first') {
@@ -584,40 +919,8 @@ export struct MainScreen {
         .onClick(() => { this.toggleSelectVersion++; })
       }
 
-      if (this.visualTab === 1) {
-        // 相机页的主操作放在标题栏里：真·沉浸光感只在标题栏内生效，
-        // 内容区的大按钮拿不到材质。不设 backgroundColor、不设 materialColor
-        // 时材质取 Button 主题色（蓝），正好当主操作。
-        if (this.svc.scanning) {
-          Button($r('app.string.camera_main_scanning'))
-            .height(ControlHeight.Pill)
-            .padding({ left: 18, right: 18 })
-            .fontSize(FontSize.Body)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_on_primary'))
-            .borderRadius(pillRadius(ControlHeight.Pill))
-            .opacity(0.6)
-            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
-              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-              interactive: true
-            })))
-        } else {
-          Button(this.svc.connected && this.svc.linkMode === CameraLinkMode.USB
-            ? $r('app.string.camera_main_quick_scan')
-            : $r('app.string.camera_main_find'))
-            .height(ControlHeight.Pill)
-            .padding({ left: 18, right: 18 })
-            .fontSize(FontSize.Body)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_on_primary'))
-            .borderRadius(pillRadius(ControlHeight.Pill))
-            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
-              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-              interactive: true
-            })))
-            .onClick(() => { this.svc.searchByMode(); })
-        }
-      }
+      // 相机页的标题栏不再放主操作（1.64.0）：那颗蓝胶囊压在深色立牌照片上
+      // 怎么调都不自然，已整体搬进抽屉第一行的状态头（见 `CameraPage.StatusHeader`）。
     }
     .width('100%')
     .height(TITLE_BAR_HEIGHT)
@@ -627,6 +930,29 @@ export struct MainScreen {
 
   syncDownloadedKeys(): void {
     this.downloadedKeys = this.svc.getDownloadedKeys();
+  }
+
+  /**
+   * 相机页确认切换连接模式：先断开当前会话，再写新模式。
+   *
+   * 必须串行：`setLinkMode` 只改偏好、清上一模式的错误与网络快照，不会断开
+   * 会话；先切后断会让 disconnect 里的「无线退回蓝牙」按新模式跑。
+   */
+  private async switchCameraMode(mode: number): Promise<void> {
+    // 切换要等断开（无线退出热点可能要几秒）：这期间页面必须写出「正在切换」，
+    // 否则用户点完确认框之后，页面看起来像什么都没发生。
+    this.svc.switchingTo = mode;
+    try {
+      if (this.svc.linkMode === CameraLinkMode.BLE) {
+        await this.svc.disconnectBle();
+      } else {
+        await this.svc.disconnect();
+      }
+    } finally {
+      this.syncDownloadedKeys();
+      this.svc.setLinkMode(mode);
+      this.svc.switchingTo = -1;
+    }
   }
 
   @Builder
@@ -812,20 +1138,17 @@ export struct MainScreen {
             onCompletePairing: () => {
               this.svc.completeWifiPairing();
             },
-            onScanWifi: () => {
-              this.svc.scanWifiCameras();
-            },
             onConnectBle: (deviceId: string, deviceName: string) => {
               this.svc.connectBle(deviceId, deviceName);
             },
             onDisconnectBle: () => {
               this.svc.disconnectBle();
             },
-            onConnectWireless: () => {
-              this.svc.connectWirelessNow();
-            },
             onSelectMode: (mode: number) => {
               this.svc.setLinkMode(mode);
+            },
+            onSwitchMode: (mode: number) => {
+              this.switchCameraMode(mode);
             }
           })
         }
@@ -898,7 +1221,11 @@ export struct MainScreen {
       })
 
     }
-    .title({ builder: this.TitleBar, height: titleBarTotalVp() }, {
+    .title({
+      builder: this.TitleBar,
+      height: titleBarTotalVp() + (this.cameraMenuSpace && this.visualTab === 1
+        ? this.cameraMenuHeightExtra() : 0)
+    }, {
       // STACK：内容区延伸到标题栏下方，标题栏材质才有可折射的底层
       barStyle: BarStyle.STACK
     })

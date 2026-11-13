@@ -34,6 +34,12 @@ export class CameraModelStore {
     this.key = key;
   }
 
+  /** 清空当前展示的机型与序列号（切到一台还没认出机型的新相机时用）。 */
+  clear(): void {
+    this.key = '';
+    this.serial = '';
+  }
+
   /** 序列号（标题栏型号右下角的角标）。空串表示不知道，UI 不渲染。 */
   setSerial(serial: string): void {
     // PTP 的序列号是 32 位、前面补零；去掉前导零才是相机菜单里那串

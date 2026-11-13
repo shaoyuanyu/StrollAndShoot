@@ -1,13 +1,16 @@
 import { CameraService } from '../services/CameraService';
+import { BleIdentityStore } from '../services/BleIdentityStore';
+import { StandeePreferenceStore } from '../model/StandeePreferenceStore';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
-import { HeroCardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
+import { CardShadow, HeroCardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
-import { CameraLinkMode } from '../model/CameraLinkMode';
-import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2 } from '@kit.ArkUI';
+import { CameraLinkMode, isWifiMode } from '../model/CameraLinkMode';
+import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2, uiMaterial } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { Haptics } from '../utils/Haptics';
 import { WindowUtils } from '../utils/WindowUtils';
+import { GlassEffect } from '../utils/GlassEffect';
 /**
  * 四选一的四项，顺序与 `CameraLinkMode` 的枚举值一一对应。
  *
@@ -25,7 +28,34 @@ const MODE_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
 ]);
 
 /**
- * 立牌高度（vp）。宽度不写死，按素材宽高比算（见 `standeeWidth()`）：
+ * 模式选择器的高度（vp）。连接后选择器被锁定，点击时整条左右震动，
+ * 震动位移作用在同一行上、不改变高度。
+ */
+const MODE_PICKER_HEIGHT = 44;
+/** 锁定后「快速点两次」的判定窗口（ms）。 */
+const MODE_LOCK_DOUBLE_TAP_MS = 450;
+
+/**
+ * 相机页的展示阶段。
+ *
+ * 四种模式共用这一套阶段名，但每个阶段的文案与操作按模式分派（见 `phase()`）。
+ * 页面上的状态点、状态文案、详情行、主操作全部由它派生，避免「文案一套、
+ * 按钮一套、点色又是一套」互相打架。
+ */
+enum CameraPhase {
+  Idle,
+  Searching,
+  Connecting,
+  Pairing,
+  Connected,
+  Loading,
+  Failed,
+  Disconnecting,
+  Switching
+}
+
+/**
+ * 立牌高度（vp）。宽度不写死，按素材宽高比算（见 `standeeWidthFor()`）：
  * 盒子与画布同比例，`Contain` 才不会在上下留透明带，立牌底边和倒影才能严丝合缝。
  */
 const STANDEE_HEIGHT = 144;
@@ -76,16 +106,6 @@ const TOP_BACKSTOP = 56;
 function stickScrollVp(): number {
   return titleBarTotalVp() + 8 + COVER_TOP_PAD - COVER_TOP_GAP;
 }
-
-/**
- * TEMP: 假内容的行下标（18 行）。验收完连同 `TempTestRows()` 一起删掉。
- *
- * 为什么需要它：抽屉内容在「未连接」时只有 235vp，而抽屉可视高度是 621vp，
- * 第三段（内容内部滚动）根本触发不了。补 18 行 56vp 的假行，任何模式下都能滚。
- */
-const TEMP_ROW_INDEXES: number[] = [
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17
-];
 
 /**
  * 顶边下拉时，**整张深色卡片**（圆角、深色底、机身与倒影一起）走多少比例。
@@ -195,30 +215,50 @@ const PANEL_SIDE_MARGIN = 8;
  * 2. **连接步骤**：分组小标题 + 三步引导卡（相机侧怎么设）。
  * 3. **设备信息 / 操作**：已连接时才出现。
  *
+ * **主操作与模式选择器（1.64.0）**：`搜索相机 / 断开连接` 是状态头右侧那一颗胶囊，
+ * 它和进度点、状态文案、阶段详情合成一句话——连接状态与「结束连接」本来就是
+ * 同一件事。选择器常驻四段，连接后锁定，点别的段会抖一下并提示「快速点两次」。
+ *
+ * **每个模式只有一条状态线（1.64.0 第二轮）**：USB / BLE / AP / STA 各自有一套
+ * 阶段（见 `CameraPhase`），页面只渲染当前阶段用得上的一句话、一个操作和一组
+ * 控件。AP / STA 里不再常驻「蓝牙」前置行：配对是 AP 的第一步，Wi-Fi 一起来
+ * 它就从页面上消失，不会出现「已连接」旁边还挂着一句蓝牙失败。
+ *
  * 沉浸光感规则：内容区的 `Button` 与分段按钮都拿不到系统材质（官方《组件适配
  * 沉浸光感》只对 Navigation 标题栏、底部 TabBar，以及 Select / Toggle / Slider
- * 这类「按钮与选择类」全页面生效）。所以主操作仍然放在标题栏里（见
- * MainScreen.NormalTitleRow），本页只负责状态、模式专属控件与说明。
+ * 这类「按钮与选择类」全页面生效）。抽屉在白底上，也不需要材质——实心胶囊
+ * 就是这里最干净的语言。
  */
 @ComponentV2
 export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
+  /** 已配对过的相机身份（落盘）：决定「搜索相机」还是「连接相机」。 */
+  @Local bleId: BleIdentityStore = BleIdentityStore.getInstance();
+  /** 未识别机型时使用的默认立牌（用户设置）。 */
+  @Local standeePref: StandeePreferenceStore = StandeePreferenceStore.getInstance();
+  /** 立牌卡面交叉淡入淡出：当前 / 上一张 / 进度。 */
+  @Local standeeCurrentKey: string = '';
+  @Local standeePreviousKey: string = '';
+  @Local standeeCrossfade: number = 1;
   @Param scroller: Scroller = new Scroller();
   @Event onScan: (quickMode: boolean) => void = (_q: boolean) => {};
   @Event onDisconnect: () => void = () => {};
   @Event onConnectWifi: (host: string) => void = (_h: string) => {};
   @Event onCompletePairing: () => void = () => {};
-  @Event onScanWifi: () => void = () => {};
   @Event onConnectBle: (deviceId: string, deviceName: string) => void =
     (_id: string, _name: string) => {};
   @Event onDisconnectBle: () => void = () => {};
-  /** 用户主动把相机切到 Wi-Fi（BLE 与 Wi-Fi 互斥，交接有代价，所以由用户点）。 */
-  @Event onConnectWireless: () => void = () => {};
   /** 切换链路模式（USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA）。 */
   @Event onSelectMode: (mode: number) => void = (_m: number) => {};
+  /** 锁定确认后：先断开当前连接，再切到新模式（由 MainScreen 串行执行）。 */
+  @Event onSwitchMode: (mode: number) => void = (_m: number) => {};
 
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
+  /** STA 的手动 IP 默认收起：主要操作是状态头的自动搜索。 */
+  @Local staManualOpen: boolean = false;
+  /** 半模态步骤面板是否打开。 */
+  @Local guideSheetOpen: boolean = false;
 
   /**
    * 抽屉状态。
@@ -253,7 +293,25 @@ export struct CameraPage {
    */
   @Local pullDown: number = 0;
 
+  /**
+   * 模式选择器的锁定反馈（1.64.0 第二轮）。
+   *
+   * 连接后四段仍然常驻，只是不允许切换；点别的段会让整条左右快震一下，
+   * 并在 `MODE_LOCK_DOUBLE_TAP_MS` 内再点同一段时弹出切换确认。
+   */
+  @Local pickerShakeX: number = 0;
+  /** 选择器实测宽度（vp）：既用来换算点击位置，也用来定位自绘滑块。 */
+  @Local pickerWidth: number = 0;
+  /** 上一次锁定点击的时间与目标段，用于识别「快速点两次」。 */
+  private lockedTapAt: number = 0;
+  private lockedTapIndex: number = -1;
+  /** 当前轻提示的 id（`openToast` 返回），切换确认前用来收起它。 */
+  private toastId: number = -1;
+
   aboutToAppear(): void {
+    this.standeeCurrentKey = this.effectiveStandeeKey();
+    this.standeePreviousKey = '';
+    this.standeeCrossfade = 1;
     if (this.wifiInput === '' && this.svc.wifiHost !== '') {
       this.wifiInput = this.svc.wifiHost;
     }
@@ -267,48 +325,22 @@ export struct CameraPage {
     }, 80);
   }
 
-  // ------------------------------------------------------------------
-  // 当前模式的文案
-  // ------------------------------------------------------------------
-
-  /** 一句话说明这个模式是干什么的。 */
-  private modeDesc(): Resource {
-    const m = this.svc.linkMode;
-    if (m === CameraLinkMode.USB) return $r('app.string.camera_mode_desc_usb');
-    if (m === CameraLinkMode.BLE) return $r('app.string.camera_mode_desc_ble');
-    if (m === CameraLinkMode.AP) return $r('app.string.camera_mode_desc_ap');
-    return $r('app.string.camera_mode_desc_sta');
+  /** 换模式后收起上一模式的步骤面板，避免张冠李戴。 */
+  @Monitor('svc.linkMode')
+  onLinkModeChanged(): void {
+    this.guideSheetOpen = false;
   }
 
-  /** 三步引导的第 index 条（0..2）。 */
-  private stepText(index: number): Resource {
-    const m = this.svc.linkMode;
-    if (m === CameraLinkMode.USB) {
-      if (index === 0) return $r('app.string.camera_guide_usb_1');
-      if (index === 1) return $r('app.string.camera_guide_usb_2');
-      return $r('app.string.camera_guide_usb_3');
-    }
-    if (m === CameraLinkMode.BLE) {
-      if (index === 0) return $r('app.string.camera_guide_ble_1');
-      if (index === 1) return $r('app.string.camera_guide_ble_2');
-      return $r('app.string.camera_guide_ble_3');
-    }
-    if (m === CameraLinkMode.AP) {
-      if (index === 0) return $r('app.string.camera_guide_ap_1');
-      if (index === 1) return $r('app.string.camera_guide_ap_2');
-      return $r('app.string.camera_guide_ap_3');
-    }
-    if (index === 0) return $r('app.string.camera_guide_sta_1');
-    if (index === 1) return $r('app.string.camera_guide_sta_2');
-    return $r('app.string.camera_guide_sta_3');
+  /** 真实机型变化：立牌交叉淡入淡出。 */
+  @Monitor('svc.cameraModel')
+  onStandeeModelChanged(): void {
+    this.syncStandee();
   }
 
-  /** 引导末尾的注意事项；USB 没有。 */
-  private guideNote(): ResourceStr {
-    if (this.svc.linkMode === CameraLinkMode.BLE) return $r('app.string.camera_guide_ble_note');
-    if (this.svc.linkMode === CameraLinkMode.AP) return $r('app.string.camera_guide_ap_note');
-    if (this.svc.linkMode === CameraLinkMode.STA) return $r('app.string.camera_guide_sta_note');
-    return '';
+  /** 设置里换「默认相机立牌」：只有当前没有真实机型时才影响封面。 */
+  @Monitor('standeePref.defaultKey')
+  onDefaultStandeeChanged(): void {
+    this.syncStandee();
   }
 
   // ------------------------------------------------------------------
@@ -320,7 +352,7 @@ export struct CameraPage {
     return this.svc.connected && !this.svc.wireless;
   }
 
-  /** 无线会话（BLE 配对 + 相机热点上的 PTP/IP）。 */
+  /** 无线会话（相机热点 / 局域网上的 PTP/IP）。 */
   private wifiConnected(): boolean {
     return this.svc.connected && this.svc.wireless;
   }
@@ -329,97 +361,433 @@ export struct CameraPage {
    * 配对是否真的落定。
    *
    * `bleConnected` 只代表 GATT 链路在（`connect()` 一返回就为真），配对要走完
-   * 四步握手 / 断链 / 经典绑定 / 复用握手好几段，中间那几十秒两条状态会同时
-   * 成立。UI 一律以「链路 ✓ 且拿到序列号」才算已配对。
+   * 握手 / 断链 / 经典绑定好几段，中间那几十秒 `bleConnected` 已经是 true 了。
+   * UI 一律以「链路 ✓ 且拿到序列号」才算已配对。
    */
   private blePaired(): boolean {
     return this.svc.bleConnected && this.svc.bleSerial !== '';
   }
 
   /**
-   * 状态头那一行：**只讲当前模式**。
+   * 这台相机以前配对过（身份已落盘）。
    *
-   * 以前是「未连接」+ 模式块再写一遍状态，同一句话一屏出现三四次；
-   * 现在每个模式各自给一句完整的话，全页只此一处。
+   * 与 `blePaired()` 不是一回事：断开之后链路没了，但相机那边还记着这台手机，
+   * 再连不需要重新配对。按钮文案要能区分「找一台新相机」和「连回那台旧相机」。
    */
+  private bleKnown(): boolean {
+    if (this.blePaired()) return true;
+    return this.bleId.hasIdentity() && this.bleId.deviceId !== '';
+  }
+
+  /**
+   * 当前模式是否已经连上。
+   *
+   * 三种链路的「已连接」不是同一个字段：USB 是 PTP 会话（`connected` 且非无线），
+   * 蓝牙是配对落定（链路在 + 拿到序列号），AP / STA 是 Wi-Fi 会话。
+   * 主操作变「断开」、模式选择器上锁都以它为准。
+   */
+  private linked(): boolean {
+    const m = this.svc.linkMode;
+    if (m === CameraLinkMode.USB) return this.usbConnected();
+    if (m === CameraLinkMode.BLE) return this.blePaired();
+    return this.wifiConnected();
+  }
+
+  /**
+   * 当前展示阶段。整页的状态文案、状态点、主操作都只从这一个判断里出：
+   *
+   * - USB：空闲 → 搜索 → 已连接（数据线一条链路）；
+   * - BLE：空闲 → 搜索 → 连接/配对 → 已配对（不传照片）；
+   * - AP：空闲 → 配对 → 唤醒并加入相机热点 → 已连接；
+   * - STA：空闲 → 搜索（网络 / 蓝牙）→ 连相机所在网络 → 已连接。
+   *
+   * 以前 AP/STA 里常驻一行「蓝牙 已配对 / 连接失败」，Wi-Fi 起来后蓝牙其实
+   * 已经让位给 Wi-Fi，那一行却还在——同一张卡同时讲两条链路，这就是「模式
+   * 分界不清」的来源。现在只在当前阶段真的在做那件事时，才出现那件事。
+   */
+  private phase(): CameraPhase {
+    if (this.svc.switchingTo >= 0) return CameraPhase.Switching;
+    if (this.svc.disconnecting) return CameraPhase.Disconnecting;
+    if (this.linked()) {
+      if (this.svc.pairingRequired) return CameraPhase.Pairing;
+      return this.svc.scanning ? CameraPhase.Loading : CameraPhase.Connected;
+    }
+    if (this.svc.bleConnecting || this.svc.bleReconnecting) return CameraPhase.Connecting;
+    if (this.svc.scanning || this.svc.bleScanning || this.svc.wifiScanning) {
+      return CameraPhase.Searching;
+    }
+    if (this.svc.apJoining || this.svc.wifiAutoConnecting || this.svc.wifiReconnecting) {
+      return CameraPhase.Connecting;
+    }
+    if (this.failReason() !== '') return CameraPhase.Failed;
+    return CameraPhase.Idle;
+  }
+
+  /**
+   * 当前模式下「上一次尝试为什么没成」。
+   *
+   * **只认当前模式的结论**：USB 不看无线失败，无线不看 USB 扫描错误。切模式
+   * 时服务端已经清掉上一轮的错误，这里再按模式收口一次，杜绝任何残留串台。
+   */
+  private failReason(): ResourceStr {
+    const m = this.svc.linkMode;
+    if (m === CameraLinkMode.USB) return this.svc.lastScanError;
+    if (isWifiMode(m) && this.svc.wirelessFailed !== '') return this.svc.wirelessFailed;
+    // GATT 连上却没有序列号 = 配对那一步没过。它可能发生在 BLE，也可能发生在
+    // AP 的「配对」这一步，两种模式都要把这句说清楚。
+    if (this.svc.bleConnected && !this.blePaired()) {
+      return $r('app.string.camera_status_ble_pair_failed_detail');
+    }
+    return this.svc.lastScanError;
+  }
+
+  /** 上一次失败是不是「链路还挂着、只差取消」：蓝牙 GATT 在、配对没成。 */
+  private bleStuck(): boolean {
+    return this.svc.linkMode !== CameraLinkMode.USB
+      && this.svc.bleConnected && !this.blePaired();
+  }
+
+  /** 状态头第一行：一句完整的话，讲清现在处在哪个阶段。 */
   private headline(): ResourceStr {
     const m = this.svc.linkMode;
-    if (m === CameraLinkMode.USB) {
-      if (this.svc.scanning) {
-        return this.svc.statusText !== '' ? this.svc.statusText : $r('app.string.camera_status_scanning');
-      }
-      return this.usbConnected()
-        ? $r('app.string.camera_status_connected')
-        : $r('app.string.camera_conn_disconnected');
+    const phase = this.phase();
+    if (phase === CameraPhase.Switching) return $r('app.string.camera_status_switching');
+    if (phase === CameraPhase.Disconnecting) return $r('app.string.camera_status_disconnecting');
+    if (phase === CameraPhase.Loading) {
+      return this.svc.statusText !== ''
+        ? this.svc.statusText : $r('app.string.camera_status_scanning');
     }
-    if (m === CameraLinkMode.BLE) {
-      if (this.svc.bleConnecting) return $r('app.string.camera_ble_connecting');
-      if (this.svc.bleReconnecting) return $r('app.string.camera_ble_reconnecting');
-      if (this.blePaired()) {
+    if (phase === CameraPhase.Connected) {
+      if (m === CameraLinkMode.BLE) {
         return this.svc.bleCameraName !== ''
           ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
           : $r('app.string.camera_ble_paired', this.svc.bleSerial);
       }
-      if (this.svc.bleConnected) return $r('app.string.camera_ble_pair_failed');
-      if (this.svc.bleScanning) return $r('app.string.camera_ble_scanning');
-      return $r('app.string.camera_conn_disconnected');
+      return $r('app.string.camera_status_connected');
     }
-    // AP / STA：照片通道是 Wi-Fi，蓝牙只是前置
-    if (this.wifiConnected()) return $r('app.string.camera_status_connected');
-    if (this.svc.apJoining) return $r('app.string.camera_conn_open_wifi');
-    if (this.svc.wifiAutoConnecting) return $r('app.string.camera_conn_wifi_linking');
-    if (this.svc.wifiReconnecting) return $r('app.string.camera_conn_wifi_relinking');
-    // 蓝牙的瞬时状态由下面的「蓝牙」前置行负责，状态头只讲 Wi-Fi 这一段，
-    // 否则「正在连接蓝牙相机…」会在同一张卡里出现两遍。
-    if (this.blePaired()) return $r('app.string.camera_state_ble_ready');
+    if (phase === CameraPhase.Pairing) return $r('app.string.camera_status_pairing_wait');
+    if (phase === CameraPhase.Failed) {
+      if (this.bleStuck()) return $r('app.string.camera_ble_pair_failed');
+      // USB / 蓝牙的失败原因本身就是一句话，直接拿来做标题；再在下面重复
+      // 一行同样的红字只会让人以为是两个问题。
+      if (m === CameraLinkMode.USB) {
+        return this.svc.lastScanError !== ''
+          ? this.svc.lastScanError : $r('app.string.camera_status_no_camera');
+      }
+      if (m === CameraLinkMode.BLE) {
+        return this.svc.lastScanError !== ''
+          ? this.svc.lastScanError : $r('app.string.camera_status_ble_connect_failed');
+      }
+      return $r('app.string.camera_status_wifi_failed');
+    }
+    if (phase === CameraPhase.Searching) {
+      if (m === CameraLinkMode.USB) {
+        return this.svc.statusText !== ''
+          ? this.svc.statusText : $r('app.string.camera_status_searching');
+      }
+      if (m === CameraLinkMode.BLE) return $r('app.string.camera_ble_scanning');
+      return this.svc.bleScanning
+        ? $r('app.string.camera_status_pair_searching') : $r('app.string.camera_wifi_scanning');
+    }
+    if (phase === CameraPhase.Connecting) {
+      if (m === CameraLinkMode.BLE) {
+        return this.svc.bleReconnecting
+          ? $r('app.string.camera_ble_reconnecting_full') : $r('app.string.camera_ble_connecting');
+      }
+      // Wi-Fi 模式下蓝牙只当前置：断了在自动回连，页面就说「正在重新连接相机」，
+      // 不再把蓝牙那半条链路的细节铺到 Wi-Fi 页面上。
+      if (this.svc.bleReconnecting) return $r('app.string.camera_status_relinking');
+      if (this.svc.bleConnecting) {
+        // 已配对过的相机只是握手复用，不需要用户再把它切到「开始配对」页
+        // （那一步只有首配才有）。
+        return this.bleKnown()
+          ? $r('app.string.camera_status_linking') : $r('app.string.camera_status_pairing');
+      }
+      if (this.svc.apJoining) return $r('app.string.camera_status_linking');
+      if (this.svc.wifiAutoConnecting) {
+        return m === CameraLinkMode.AP
+          ? $r('app.string.camera_status_linking_ap') : $r('app.string.camera_status_linking_sta');
+      }
+      return $r('app.string.camera_status_relinking');
+    }
+    // 空闲：蓝牙模式下「配对过但当前链路断开」也显示已配对，和 Wi-Fi 模式
+    // 的前置状态对齐；真正连着时走上面的 Connected 分支显示「已连接」。
+    if (m === CameraLinkMode.BLE) {
+      return this.bleKnown()
+        ? $r('app.string.camera_state_paired') : $r('app.string.camera_conn_disconnected');
+    }
+    if (isWifiMode(m) && this.bleKnown()) return $r('app.string.camera_state_paired');
     return $r('app.string.camera_conn_disconnected');
+  }
+
+  /** 状态头第二行：只讲当前阶段的细节；空闲时讲下一步。 */
+  private detail(): ResourceStr {
+    const m = this.svc.linkMode;
+    const phase = this.phase();
+    if (phase === CameraPhase.Disconnecting) {
+      return this.svc.wireless ? this.svc.wirelessStage : '';
+    }
+    if (phase === CameraPhase.Switching) return $r('app.string.camera_detail_switching');
+    if (phase === CameraPhase.Connected || phase === CameraPhase.Loading
+      || phase === CameraPhase.Pairing) {
+      return '';
+    }
+    if (phase === CameraPhase.Failed) {
+      // 无线的标题是泛化的「没能连上相机」，具体原因放这里；USB 的标题
+      // 已经是原因本身。蓝牙配对失败是个例外：标题只说「配对失败」，
+      // 还需要一行讲清楚链路停在哪、接下来该做什么。
+      if (this.bleStuck()) return this.failReason();
+      return isWifiMode(m) ? this.failReason() : '';
+    }
+    if (phase === CameraPhase.Connecting) {
+      // 分步进度（AP 交接）优先：交接过程中蓝牙在重连时，别让「配对提示」
+      // 盖掉真正的步骤。
+      if (this.svc.apJoining || this.svc.wifiAutoConnecting) return this.svc.wirelessStage;
+      // 首配才提示「停在开始配对页」；已配对过的只是重连。
+      if (this.svc.bleConnecting && !this.bleKnown()) {
+        return $r('app.string.camera_detail_pairing_hint');
+      }
+      return '';
+    }
+    if (phase === CameraPhase.Searching) {
+      if (this.svc.bleScanning) return $r('app.string.camera_detail_pick_to_pair');
+      return '';
+    }
+    // 空闲：下一步由状态头下方那行摘要和主操作承担，详情行不再重复。
+    return '';
+  }
+
+  private dotColor(): Resource {
+    const phase = this.phase();
+    if (phase === CameraPhase.Connected) return $r('app.color.status_connected');
+    if (phase === CameraPhase.Failed) return $r('app.color.status_error');
+    if (phase === CameraPhase.Idle) return $r('app.color.text_tertiary');
+    return $r('app.color.primary');
+  }
+
+  // ------------------------------------------------------------------
+  // 主操作
+  // ------------------------------------------------------------------
+
+  /** 未连接时是「搜索 / 配对 / 连接」，已连接时是「断开」。 */
+  private primaryActionLabel(): Resource {
+    const phase = this.phase();
+    if (phase === CameraPhase.Switching) return $r('app.string.camera_action_switching');
+    if (phase === CameraPhase.Disconnecting) return $r('app.string.camera_action_disconnecting');
+    if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing) {
+      return $r('app.string.camera_action_disconnect');
+    }
+    if (phase === CameraPhase.Loading || phase === CameraPhase.Searching) {
+      return this.svc.linkMode === CameraLinkMode.USB
+        ? $r('app.string.camera_main_scanning') : $r('app.string.camera_action_searching');
+    }
+    if (phase === CameraPhase.Connecting) {
+      if (this.svc.bleConnecting) return $r('app.string.camera_ble_cancel');
+      // 蓝牙断链后的自动重连可以放弃：它可能持续很久，用户不该只能等。
+      if (this.svc.linkMode === CameraLinkMode.BLE && this.svc.bleReconnecting) {
+        return $r('app.string.camera_action_disconnect');
+      }
+      return $r('app.string.camera_action_connecting');
+    }
+    if (phase === CameraPhase.Failed && this.bleStuck()) {
+      return $r('app.string.camera_ble_cancel');
+    }
+    const m = this.svc.linkMode;
+    // 无线链路失败后「重试」一把：`searchByMode` 会按当前进度补齐下一步
+    // （没配对先扫蓝牙，配对过就直接重连），不需要用户自己判断卡在哪。
+    if (phase === CameraPhase.Failed && isWifiMode(m) && this.svc.wirelessFailed !== '') {
+      return $r('app.string.camera_action_retry');
+    }
+    // 空闲 / 失败后重试。USB 没有「按身份连回旧相机」的概念，按钮始终是搜索；
+    // 只有 BLE 才按是否配对过区分「连接相机 / 搜索相机」。
+    if (m === CameraLinkMode.USB) return $r('app.string.camera_main_find');
+    if (m === CameraLinkMode.BLE) {
+      return this.bleKnown()
+        ? $r('app.string.camera_action_connect_camera') : $r('app.string.camera_main_find');
+    }
+    if (this.blePaired() || this.bleKnown()) return $r('app.string.camera_action_connect_camera');
+    return $r('app.string.camera_main_find');
+  }
+
+  /** 主操作是否禁用：搜索 / 连接（且不能取消）/ 断开 / 切换时。 */
+  private primaryActionDisabled(): boolean {
+    const phase = this.phase();
+    if (phase === CameraPhase.Searching || phase === CameraPhase.Loading
+      || phase === CameraPhase.Disconnecting || phase === CameraPhase.Switching) {
+      return true;
+    }
+    if (phase !== CameraPhase.Connecting) return false;
+    if (this.svc.bleConnecting) return false;
+    return !(this.svc.linkMode === CameraLinkMode.BLE && this.svc.bleReconnecting);
+  }
+
+  private primaryActionFill(): ResourceColor {
+    const phase = this.phase();
+    if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing
+      || phase === CameraPhase.Disconnecting || phase === CameraPhase.Switching) {
+      return $r('app.color.action_neutral_fill');
+    }
+    if (phase === CameraPhase.Failed && this.bleStuck()) {
+      return $r('app.color.action_neutral_fill');
+    }
+    // 可以取消的连接中（蓝牙在途）与「断开连接」同一档中性底：它是一颗
+    // 能点的「结束」按钮，不是不可点的进度状态。
+    if (phase === CameraPhase.Connecting
+      && (this.svc.bleConnecting || this.svc.linkMode === CameraLinkMode.BLE)) {
+      return $r('app.color.action_neutral_fill');
+    }
+    if (phase === CameraPhase.Searching || phase === CameraPhase.Loading
+      || phase === CameraPhase.Connecting) {
+      return $r('app.color.primary_light');
+    }
+    return $r('app.color.primary');
+  }
+
+  private primaryActionTextColor(): ResourceColor {
+    const phase = this.phase();
+    if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing
+      || phase === CameraPhase.Disconnecting || phase === CameraPhase.Switching) {
+      return $r('app.color.text_primary');
+    }
+    if (phase === CameraPhase.Failed && this.bleStuck()) return $r('app.color.text_primary');
+    if (phase === CameraPhase.Connecting
+      && (this.svc.bleConnecting || this.svc.linkMode === CameraLinkMode.BLE)) {
+      return $r('app.color.text_primary');
+    }
+    if (phase === CameraPhase.Searching || phase === CameraPhase.Loading
+      || phase === CameraPhase.Connecting) {
+      return $r('app.color.primary');
+    }
+    return $r('app.color.text_on_primary');
+  }
+
+  /** 主操作：永远是「当前这一步」的入口。 */
+  private onPrimaryAction(): void {
+    const phase = this.phase();
+    if (this.primaryActionDisabled()) return;
+    if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing) {
+      this.requestDisconnect();
+      return;
+    }
+    if (phase === CameraPhase.Connecting && this.svc.bleConnecting) {
+      this.onDisconnectBle();
+      return;
+    }
+    if (phase === CameraPhase.Connecting && this.svc.linkMode === CameraLinkMode.BLE
+      && this.svc.bleReconnecting) {
+      this.requestDisconnect();
+      return;
+    }
+    if (phase === CameraPhase.Failed && this.bleStuck()) {
+      this.onDisconnectBle();
+      return;
+    }
+    // 未连接 / 失败后重试：统一走 searchByMode。STA 也是「自动发现并连接」，
+    // 不再让用户先看一张列表再手点一台。
+    this.svc.searchByMode();
+  }
+
+  /** 已连接时断开：蓝牙走 BLE 断开，其余走会话断开（无线会先退出热点）。 */
+  private requestDisconnect(): void {
+    if (this.svc.linkMode === CameraLinkMode.BLE) {
+      this.onDisconnectBle();
+    } else {
+      this.onDisconnect();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 模式选择器的锁定
+  // ------------------------------------------------------------------
+
+  /**
+   * 轻提示（1000ms）。
+   *
+   * 用 `openToast` 而不是 `showToast` 是为了拿到 toastId：双击在 450ms 内到达，
+   * 弹确认框时要把还在屏上的「快速点击两次」收掉，否则弹窗后面挂着一句提示，
+   * 看起来像两个控件在抢同一件事。
+   */
+  private toast(message: ResourceStr): void {
+    try {
+      this.getUIContext().getPromptAction().openToast({ message: message, duration: 1000 })
+        .then((id: number) => { this.toastId = id; })
+        .catch((_e: Error) => { /* 轻提示失败不影响主流程 */ });
+    } catch (_e) {
+      // 轻提示失败不影响主流程
+    }
+  }
+
+  /** 收起还没到时间的轻提示（0.0：只给切模式确认框用）。 */
+  private closeToast(): void {
+    if (this.toastId < 0) return;
+    try {
+      this.getUIContext().getPromptAction().closeToast(this.toastId);
+    } catch (_e) {
+      // 已经消失 / 没找到都不影响流程
+    }
+    this.toastId = -1;
+  }
+
+  /** 整条选择器左右小幅快震：三段递减的位移，约 200ms。 */
+  private runPickerShake(): void {
+    this.pickerShakeX = 0;
+    this.getUIContext().keyframeAnimateTo({ iterations: 1 }, [
+      { duration: 42, curve: Curve.Sharp, event: () => { this.pickerShakeX = 6; } },
+      { duration: 42, curve: Curve.Sharp, event: () => { this.pickerShakeX = -5; } },
+      { duration: 42, curve: Curve.Sharp, event: () => { this.pickerShakeX = 3; } },
+      { duration: 42, curve: Curve.Sharp, event: () => { this.pickerShakeX = -2; } },
+      { duration: 48, curve: Curve.Sharp, event: () => { this.pickerShakeX = 0; } }
+    ]);
+  }
+
+  /** 遮罩点击：选择器坐标系里的 x（vp）→ 分段下标；点当前那一段不反应。 */
+  private onLockedPickerTap(x: number): void {
+    const total = this.pickerWidth;
+    if (total <= 0) return;
+    const seg = (total - 8) / 4;
+    let index = Math.floor((x - 4) / seg);
+    index = Math.max(0, Math.min(3, index));
+    if (index === this.svc.linkMode) return;
+    this.onLockedModeTap(index);
   }
 
   /**
-   * 状态点的颜色必须和那一行的文案同源。
-   *
-   * 按模式分开判断：AP / STA 模式下蓝牙在连、但无线还没起来时，状态头写的是
-   * 「未连接」，点就不能跟着变蓝——否则蓝点配「未连接」，自相矛盾。
+   * 已连接时点别的模式：先震一下 + 提示「快速点击两次进行切换」；
+   * 在判定窗口内再点同一段，才弹出切换确认。
    */
-  private headlineColor(): Resource {
-    const m = this.svc.linkMode;
-    if (m === CameraLinkMode.USB) {
-      if (this.usbConnected()) return $r('app.color.status_connected');
-      return this.svc.scanning ? $r('app.color.primary') : $r('app.color.text_tertiary');
+  private onLockedModeTap(index: number): void {
+    const now = Date.now();
+    const isSecond = this.lockedTapIndex === index
+      && now - this.lockedTapAt <= MODE_LOCK_DOUBLE_TAP_MS;
+    if (isSecond) {
+      this.lockedTapAt = 0;
+      this.lockedTapIndex = -1;
+      this.confirmSwitchMode(index);
+      return;
     }
-    if (m === CameraLinkMode.BLE) {
-      if (this.blePaired()) return $r('app.color.status_connected');
-      if (this.svc.bleConnecting || this.svc.bleScanning) return $r('app.color.primary');
-      if (this.svc.bleReconnecting || this.svc.bleConnected) return $r('app.color.status_error');
-      return $r('app.color.text_tertiary');
-    }
-    if (this.wifiConnected()) return $r('app.color.status_connected');
-    if (this.svc.apJoining || this.svc.wifiAutoConnecting) return $r('app.color.primary');
-    if (this.svc.wifiReconnecting) return $r('app.color.status_error');
-    if (this.blePaired()) return $r('app.color.status_connected');
-    // 未连接用灰点：琥珀色在「两种模式各自未连接」的场景下会显得像告警。
-    return $r('app.color.text_tertiary');
+    this.lockedTapAt = now;
+    this.lockedTapIndex = index;
+    this.runPickerShake();
+    this.toast($r('app.string.camera_mode_locked_hint'));
   }
 
-  /** 蓝牙前置行的状态（AP / STA 共用）。 */
-  private bleStatusText(): ResourceStr {
-    if (this.svc.bleConnecting) return $r('app.string.camera_ble_connecting');
-    if (this.svc.bleReconnecting) return $r('app.string.camera_ble_reconnecting');
-    if (this.blePaired()) {
-      return this.svc.bleCameraName !== ''
-        ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
-        : $r('app.string.camera_state_ble_paired');
-    }
-    if (this.svc.bleConnected) return $r('app.string.camera_ble_pair_failed');
-    return $r('app.string.camera_conn_disconnected');
-  }
-
-  private bleStatusColor(): Resource {
-    if (this.svc.bleConnecting) return $r('app.color.primary');
-    if (this.svc.bleReconnecting) return $r('app.color.status_error');
-    if (this.blePaired()) return $r('app.color.status_connected');
-    if (this.svc.bleConnected) return $r('app.color.status_error');
-    return $r('app.color.text_tertiary');
+  /** 切换确认：说清代价（会断开当前连接，且相机侧要手动改），再执行。 */
+  private confirmSwitchMode(index: number): void {
+    this.closeToast();
+    this.getUIContext().showAlertDialog({
+      title: $r('app.string.camera_mode_switch_title'),
+      message: $r('app.string.camera_mode_switch_message'),
+      autoCancel: true,
+      primaryButton: {
+        value: $r('app.string.common_cancel'),
+        action: () => {}
+      },
+      secondaryButton: {
+        value: $r('app.string.camera_mode_switch_confirm'),
+        fontColor: $r('app.color.primary'),
+        action: () => { this.onSwitchMode(index); }
+      }
+    });
   }
 
   // ------------------------------------------------------------------
@@ -434,6 +802,47 @@ export struct CameraPage {
       .fontColor($r('app.color.text_secondary'))
       .width('100%')
       .padding({ left: 4, top: 6 })
+  }
+
+  /** 当前模式的短标签（锁定态自绘滑块上显示的文字）。 */
+  private modeLabel(): Resource {
+    const m = this.svc.linkMode;
+    if (m === CameraLinkMode.USB) return $r('app.string.camera_mode_usb');
+    if (m === CameraLinkMode.BLE) return $r('app.string.camera_mode_ble');
+    if (m === CameraLinkMode.AP) return $r('app.string.camera_mode_ap');
+    return $r('app.string.camera_mode_sta');
+  }
+
+  /** 滑块宽度 = 轨道内宽的四分之一（官方组件每个 item 的宽度）。 */
+  private thumbWidth(): number {
+    return this.pickerWidth > 0 ? (this.pickerWidth - 8) / 4 : 0;
+  }
+
+  /**
+   * 锁定态的自绘滑块（1.64.0）。
+   *
+   * 只有这一层跟着 `pickerShakeX` 左右震；灰色轨道和另外三段文字都在官方
+   * 组件里、原地不动。几何必须和官方 item 完全一致：轨道内边距 4、高 36、
+   * 圆角 18、每段等宽。
+   */
+  @Builder
+  PickerThumb() {
+    Column() {
+      Text(this.modeLabel())
+        .fontSize(FontSize.Section)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.primary'))
+        .maxLines(1)
+    }
+    .width(this.thumbWidth())
+    .height(36)
+    .justifyContent(FlexAlign.Center)
+    .margin({ left: 4 + this.svc.linkMode * this.thumbWidth(), top: 4 })
+    .backgroundColor($r('app.color.bg_surface'))
+    .borderRadius(18)
+    .translate({ x: this.pickerShakeX })
+    // 不接点击：点击全部交给最上层的锁定遮罩
+    .hitTestBehavior(HitTestMode.None)
   }
 
   /**
@@ -452,85 +861,360 @@ export struct CameraPage {
    */
   @Builder
   ModePicker() {
-    TabSegmentButtonV2({
-      items: MODE_ITEMS,
-      selectedIndex: this.svc.linkMode,
-      $selectedIndex: (index: number) => {
-        // 只有真的换了一档才震一下。点当前项、以及程序回写 selectedIndex
-        // 都不该有反馈——振动一滥用就成了噪音。
-        if (index !== this.svc.linkMode) {
+    Stack({ alignContent: Alignment.TopStart }) {
+      TabSegmentButtonV2({
+        items: MODE_ITEMS,
+        selectedIndex: this.svc.linkMode,
+        onItemClicked: (index: number) => {
+          // 遮罩在锁定时会接走点击，这里是兜底：绝不直接切模式。
+          if (index !== this.svc.linkMode && this.linked()) {
+            this.onLockedModeTap(index);
+          }
+        },
+        $selectedIndex: (index: number) => {
+          if (index === this.svc.linkMode) return;
+          if (this.linked()) return;
+          // 只有真的换了一档才震一下。点当前项、以及程序回写 selectedIndex
+          // 都不该有反馈——振动一滥用就成了噪音。
           Haptics.tap();
-        }
-        this.onSelectMode(index);
-      },
-      itemFontSize: LengthMetrics.fp(FontSize.Section),
-      itemSelectedFontSize: LengthMetrics.fp(FontSize.Section),
-      itemFontWeight: FontWeight.Regular,
-      itemSelectedFontWeight: FontWeight.Bold,
-      itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
-      itemSelectedFontColor: ColorMetrics.resourceColor($r('app.color.primary')),
-      itemPadding: {
-        top: LengthMetrics.vp(0),
-        bottom: LengthMetrics.vp(0),
-        start: LengthMetrics.vp(4),
-        end: LengthMetrics.vp(4)
-      },
-      itemMinHeight: LengthMetrics.vp(36),
-      itemBorderRadius: LengthMetrics.vp(18),
-      buttonMinHeight: LengthMetrics.vp(44),
-      buttonPadding: LengthMetrics.vp(4),
-      buttonBorderRadius: LengthMetrics.vp(22),
-      // 轨道不能用 bg_page：那是页面底色，浅色下白卡 255、轨道 242，差值只有 13，
-      // 整条轨道像「卡片被切开一道缝」。control_track 浅色 228（差值 27），
-      // 深色仍是纯黑（卡片 28 → 轨道 0，同样是 27），两种主题的层次强度对齐。
-      buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.control_track')),
-      itemSelectedBackgroundColor: ColorMetrics.resourceColor($r('app.color.bg_surface')),
-      // 切换时胶囊滑动 + 文字颜色过渡（API 24 起，项目 target 26）
-      enableStateAnimation: true
-    })
-      .width('100%')
-  }
+          this.onSelectMode(index);
+        },
+        itemFontSize: LengthMetrics.fp(FontSize.Section),
+        itemSelectedFontSize: LengthMetrics.fp(FontSize.Section),
+        itemFontWeight: FontWeight.Regular,
+        itemSelectedFontWeight: FontWeight.Bold,
+        itemFontColor: ColorMetrics.resourceColor($r('app.color.text_secondary')),
+        // 锁定时把官方自带的选中胶囊与选中文字都藏掉，改用下面自绘的滑块
+        // （官方组件没有暴露滑块层，只有整体 translate，做不到「轨道不动」）。
+        itemSelectedFontColor: ColorMetrics.resourceColor(
+          this.linked() ? Color.Transparent : $r('app.color.primary')),
+        itemPadding: {
+          top: LengthMetrics.vp(0),
+          bottom: LengthMetrics.vp(0),
+          start: LengthMetrics.vp(4),
+          end: LengthMetrics.vp(4)
+        },
+        itemMinHeight: LengthMetrics.vp(36),
+        itemBorderRadius: LengthMetrics.vp(18),
+        buttonMinHeight: LengthMetrics.vp(MODE_PICKER_HEIGHT),
+        buttonPadding: LengthMetrics.vp(4),
+        buttonBorderRadius: LengthMetrics.vp(pillRadius(MODE_PICKER_HEIGHT)),
+        // 轨道不能用 bg_page：那是页面底色，浅色下白卡 255、轨道 242，差值只有 13，
+        // 整条轨道像「卡片被切开一道缝」。control_track 浅色 228（差值 27），
+        // 深色仍是纯黑（卡片 28 → 轨道 0，同样是 27），两种主题的层次强度对齐。
+        buttonBackgroundColor: ColorMetrics.resourceColor($r('app.color.control_track')),
+        itemSelectedBackgroundColor: ColorMetrics.resourceColor(
+          this.linked() ? Color.Transparent : $r('app.color.bg_surface')),
+        // 切换时胶囊滑动 + 文字颜色过渡（API 24 起，项目 target 26）
+        enableStateAnimation: true
+      })
+        .width('100%')
 
-  /** 三步引导的一条：编号徽章 + 一句话。 */
-  @Builder
-  StepRow(index: number) {
-    Row({ space: 10 }) {
-      Text(`${index + 1}`)
-        .fontSize(FontSize.Micro)
-        .fontColor($r('app.color.primary'))
-        .textAlign(TextAlign.Center)
-        .width(18)
-        .height(18)
-        .lineHeight(18)
-        .borderRadius(pillRadius(18))
-        .backgroundColor($r('app.color.primary_soft'))
-        .flexShrink(0)
-      Text(this.stepText(index))
-        .fontSize(FontSize.Caption)
-        .lineHeight(18)
-        .fontColor($r('app.color.text_secondary'))
-        .layoutWeight(1)
+      // 锁定态的滑块：官方组件的选中底色/文字已经透明，这里用同一套几何
+      // （轨道内边距 4、每段等宽）画白底 + 选中文字，只有这一层跟着震动。
+      if (this.linked() && this.pickerWidth > 0) {
+        this.PickerThumb()
+      }
+
+      // 已连接时盖一层透明遮罩：把点击全部接走，四段的选中态就不会先跳到
+      // 被点的那一段再跳回来。点哪里由 x 换算成下标（轨道两侧各 4vp）。
+      if (this.linked()) {
+        Column()
+          .width('100%')
+          .height(MODE_PICKER_HEIGHT)
+          .onClick((event: ClickEvent) => { this.onLockedPickerTap(event.x); })
+      }
     }
     .width('100%')
-    .alignItems(VerticalAlign.Top)
+    .height(MODE_PICKER_HEIGHT)
+    .onAreaChange((_old: Area, now: Area) => {
+      const w = Number(now.width);
+      if (w > 0 && Math.abs(w - this.pickerWidth) > 0.5) this.pickerWidth = w;
+    })
   }
 
-  /** 状态头：圆点 + 一句完整的话 +（已连接时）照片数 / 蓝牙断开口。 */
+  /**
+   * 连接引导：页面只留一句摘要，完整步骤和相机画面进系统半模态。
+   *
+   * 图片来源：Nikon SnapBridge 在线帮助。画面按面板宽度铺满（3:2），
+   * AP 的相机段是热点图、手机段是配对图；BLE 是配对图；STA 是配置文件图。
+   */
+  @Builder
+  GuideShotImage(shotKey: number) {
+    Image(this.guideShotMedia(shotKey))
+      .width('100%')
+      .aspectRatio(1.5)
+      .objectFit(ImageFit.Cover)
+      .interpolation(ImageInterpolation.High)
+      .borderRadius(8)
+      .border({ width: 0.5, color: $r('app.color.divider') })
+      .draggable(false)
+  }
+
+  /** 某个步骤对应的相机画面素材。 */
+  private guideShotMedia(shotKey: number): Resource {
+    if (this.svc.linkMode === CameraLinkMode.AP) {
+      return shotKey === 1
+        ? $r('app.media.camera_guide_ble_pair')
+        : $r('app.media.camera_guide_ap_hotspot');
+    }
+    if (this.svc.linkMode === CameraLinkMode.STA) {
+      return $r('app.media.camera_guide_sta_menu');
+    }
+    return $r('app.media.camera_guide_ble_pair');
+  }
+
+  /** 一句话摘要：只讲「先做什么、再做什么」，细节交给面板。 */
+  private guideSummary(): Resource {
+    const known = this.bleKnown();
+    if (this.svc.linkMode === CameraLinkMode.USB) {
+      return $r('app.string.camera_guide_summary_usb');
+    }
+    if (this.svc.linkMode === CameraLinkMode.BLE) {
+      return known
+        ? $r('app.string.camera_guide_summary_ble_ready')
+        : $r('app.string.camera_guide_summary_ble');
+    }
+    if (this.svc.linkMode === CameraLinkMode.AP) {
+      return known
+        ? $r('app.string.camera_guide_summary_ap_ready')
+        : $r('app.string.camera_guide_summary_ap');
+    }
+    return known
+      ? $r('app.string.camera_guide_summary_sta_ready')
+      : $r('app.string.camera_guide_summary_sta');
+  }
+
+  @Builder
+  GuideSummary() {
+    Column({ space: 2 }) {
+      Row({ space: 8 }) {
+        Text(this.guideSummary())
+          .fontSize(FontSize.Caption)
+          .lineHeight(20)
+          .fontColor($r('app.color.text_secondary'))
+          .layoutWeight(1)
+        Row({ space: 2 }) {
+          Text($r('app.string.camera_guide_view_steps'))
+            .fontSize(FontSize.Caption)
+            .lineHeight(20)
+            .fontColor($r('app.color.primary'))
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(12)
+            .fontColor([$r('app.color.primary')])
+        }
+        .height(20)
+        .alignItems(VerticalAlign.Center)
+        .flexShrink(0)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Top)
+      .onClick(() => { this.guideSheetOpen = true; })
+
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ top: 4, bottom: 4 })
+    .margin({ top: 4 })
+  }
+
+  /**
+   * 面板初始高度按当前模式的内容量给：USB 只有两句话，用中等高度会空出
+   * 一大片白；AP 有两张图，给高一点，打开后不用先滚一屏。都还能上拉到 LARGE。
+   */
+  private guideSheetHeight(): number {
+    if (this.svc.linkMode === CameraLinkMode.USB) {
+      return 240;
+    }
+    if (this.bleKnown()) {
+      return 260;
+    }
+    if (this.svc.linkMode === CameraLinkMode.AP) {
+      return 730;
+    }
+    if (this.svc.linkMode === CameraLinkMode.STA) {
+      return 420;
+    }
+    return 460;
+  }
+
+  private guideSheetOptions(): SheetOptions {
+    const height = this.guideSheetHeight();
+    const opts: SheetOptions = {
+      height,
+      detents: [height, SheetSize.LARGE],
+      preferType: SheetType.BOTTOM,
+      dragBar: true,
+      showClose: false
+    };
+    // bindSheet 的沉浸光感只能组件级开启；设置 systemMaterial 后不要再设
+    // backgroundColor / blurStyle，否则会把材质盖掉。调试机关闭磨砂时退回
+    // 不透明底，内容仍然可读。
+    if (GlassEffect.isEnabled()) {
+      opts.systemMaterial = GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THICK
+      }));
+    } else {
+      opts.backgroundColor = $r('app.color.bg_surface');
+    }
+    return opts;
+  }
+
+  @Builder
+  GuideSheetStep(lead: ResourceStr, body: Resource, shotKey: number) {
+    Column({ space: 12 }) {
+      Text() {
+        Span(lead).fontColor($r('app.color.text_primary')).fontWeight(FontWeight.Medium)
+        Span(body).fontColor($r('app.color.text_secondary'))
+      }
+      .fontSize(FontSize.Reading)
+      .lineHeight(22)
+      .width('100%')
+
+      if (shotKey >= 0) {
+        this.GuideShotImage(shotKey)
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /**
+   * 相机侧的两句话合成一段：同一台相机上的两个连续动作，不另起一行缩进。
+   * 图片跟段落同宽，不再因为缩进变窄。
+   */
+  @Builder
+  GuideSheetCameraStep(body: Resource, continuation: Resource, shotKey: number) {
+    Column({ space: 12 }) {
+      // 两句话在句号处分行，第二行不缩进；让换行点可控，避免「建立连接」
+      // 被折断成「建 / 立连接」这种中文断词。
+      Column({ space: 2 }) {
+        Text() {
+          Span($r('app.string.camera_guide_on_camera'))
+            .fontColor($r('app.color.text_primary')).fontWeight(FontWeight.Medium)
+          Span(body).fontColor($r('app.color.text_secondary'))
+        }
+        .fontSize(FontSize.Reading)
+        .lineHeight(22)
+        .width('100%')
+
+        Text(continuation)
+          .fontSize(FontSize.Reading)
+          .lineHeight(22)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+
+      this.GuideShotImage(shotKey)
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  GuideSheet() {
+    Column({ space: 0 }) {
+      Text($r('app.string.camera_guide_steps'))
+        .fontSize(FontSize.Title)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+        .padding({ top: 4, bottom: 2 })
+
+      Scroll() {
+        Column({ space: 20 }) {
+          if (this.svc.linkMode !== CameraLinkMode.USB && this.bleKnown()) {
+            // 已配对过：首配的相机菜单步骤不再适用，面板只留一句重连动作。
+            this.GuideSheetStep('', this.guideSummary(), -1)
+          } else if (this.svc.linkMode === CameraLinkMode.USB) {
+            this.GuideSheetStep($r('app.string.camera_guide_on_camera'),
+              $r('app.string.camera_guide_usb_1'), -1)
+            this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
+              $r('app.string.camera_guide_usb_2'), -1)
+          } else if (this.svc.linkMode === CameraLinkMode.BLE) {
+            this.GuideSheetStep($r('app.string.camera_guide_on_camera'),
+              $r('app.string.camera_guide_ble_1'), 0)
+            this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
+              $r('app.string.camera_guide_ble_2'), -1)
+          } else if (this.svc.linkMode === CameraLinkMode.AP) {
+            this.GuideSheetCameraStep(
+              $r('app.string.camera_guide_ap_1'),
+              $r('app.string.camera_guide_ap_screen'), 0)
+            this.GuideSheetStep($r('app.string.camera_guide_on_phone'),
+              $r('app.string.camera_guide_ap_2'), 1)
+          } else {
+            this.GuideSheetCameraStep(
+              $r('app.string.camera_guide_sta_2'),
+              $r('app.string.camera_guide_sta_screen'), 0)
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ top: 14, bottom: 32 })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .align(Alignment.Top)
+      .scrollBar(BarState.Off)
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 24 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** 阶段是不是「正在进行中」：状态点换成转圈，避免再单开一行进度。 */
+  private inProgress(): boolean {
+    const phase = this.phase();
+    return phase === CameraPhase.Searching || phase === CameraPhase.Connecting
+      || phase === CameraPhase.Loading || phase === CameraPhase.Disconnecting
+      || phase === CameraPhase.Switching;
+  }
+
+  /**
+   * 状态头：进度点 + 一句状态 + 一行阶段细节 +（已连接时）照片数 + 主操作胶囊。
+   *
+   * 主操作永远是「当前这一步」：未连接是「搜索 / 配对 / 连接」，进行中禁用，
+   * 已连接变中性底的「断开连接」。它也是页面上**唯一**的断开入口——同一张卡里
+   * 出现两个「断开」只会让人犹豫点哪个。
+   */
   @Builder
   StatusHeader() {
     Row({ space: 10 }) {
-      Row()
-        .width(8).height(8)
-        .borderRadius(pillRadius(8))
-        .backgroundColor(this.headlineColor())
-        .flexShrink(0)
-      Text(this.headline())
-        .fontSize(FontSize.CardTitle)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .layoutWeight(1)
-        .maxLines(2)
-      if (this.svc.connected && this.svc.photoCount > 0) {
+      if (this.inProgress()) {
+        LoadingProgress()
+          .width(16).height(16)
+          .color($r('app.color.primary'))
+          .flexShrink(0)
+      } else {
+        Row()
+          .width(8).height(8)
+          .borderRadius(pillRadius(8))
+          .backgroundColor(this.dotColor())
+          .flexShrink(0)
+      }
+      Column({ space: 3 }) {
+        Text(this.headline())
+          .fontSize(FontSize.CardTitle)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+          .maxLines(2)
+        if (this.detail() !== '') {
+          Text(this.detail())
+            .fontSize(FontSize.Caption)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .maxLines(3)
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      if (this.linked() && this.svc.photoCount > 0) {
         Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
           .fontSize(FontSize.Caption)
           .fontColor($r('app.color.primary'))
@@ -539,252 +1223,248 @@ export struct CameraPage {
           .borderRadius(Radius.Chip)
           .flexShrink(0)
       }
-      // 蓝牙模式的「取消 / 断开」跟状态同一行：状态头已经说明蓝牙断到哪一步，
-      // 动作就该贴着它，不再单独占一行。
-      if (this.svc.linkMode === CameraLinkMode.BLE
-        && (this.svc.bleConnecting || this.svc.bleConnected || this.svc.bleReconnecting)) {
-        Text(this.svc.bleConnecting
-          ? $r('app.string.camera_ble_cancel')
-          : $r('app.string.camera_ble_disconnect'))
-          .fontSize(FontSize.Caption)
-          .fontColor(this.svc.bleConnecting
-            ? $r('app.color.text_secondary') : $r('app.color.button_danger'))
-          .flexShrink(0)
-          .onClick(() => { this.onDisconnectBle(); })
-      }
-    }
-    .width('100%')
-  }
-
-  /** 蓝牙前置行：AP / STA 模式都要先有蓝牙。 */
-  @Builder
-  BlePrereqRow() {
-    Row({ space: 8 }) {
-      Text($r('app.string.camera_conn_ble'))
-        .fontSize(FontSize.Caption)
-        .fontColor($r('app.color.text_secondary'))
+      Button(this.primaryActionLabel())
+        .height(36)
+        .padding({ left: 16, right: 16 })
+        .fontSize(FontSize.Body)
+        .fontWeight(FontWeight.Medium)
+        .borderRadius(pillRadius(36))
+        .backgroundColor(this.primaryActionFill())
+        .fontColor(this.primaryActionTextColor())
+        .enabled(!this.primaryActionDisabled())
         .flexShrink(0)
-      Text(this.bleStatusText())
-        .fontSize(FontSize.Caption)
-        .fontColor(this.bleStatusColor())
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      // 连接/配对进行中给「取消连接」而不是「断开蓝牙」：这几十秒里链路可能
-      // 已通但配对还没落定，写「断开」会和「正在连接」打架。
-      if (this.svc.bleConnecting) {
-        Text($r('app.string.camera_ble_cancel'))
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.text_secondary'))
-          .onClick(() => { this.onDisconnectBle(); })
-      } else if (this.svc.bleConnected || this.svc.bleReconnecting) {
-        Text($r('app.string.camera_ble_disconnect'))
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.button_danger'))
-          .onClick(() => { this.onDisconnectBle(); })
-      }
+        .onClick(() => { this.onPrimaryAction(); })
     }
     .width('100%')
+    .alignItems(VerticalAlign.Center)
   }
 
-  /** 已连上无线：显示地址与断开。 */
+  /**
+   * 蓝牙相机列表：BLE 模式与 AP 的「配对」这一步共用。
+   *
+   * AP 未配对时「搜索相机」扫到的就是这些设备，点一台 = 配对 + 交接热点，
+   * 所以列表在两种模式下长得一样、动作也一样。
+   */
   @Builder
-  WifiConnectedRow() {
+  BleCameraList() {
+    if (this.svc.bleCameras.length > 0) {
+      Column() {
+        ForEach(this.svc.bleCameras, (cam: BleCameraDevice) => {
+          Row({ space: 8 }) {
+            Text(cam.name !== '' ? cam.name : $r('app.string.camera_ble_unnamed'))
+              .fontSize(FontSize.Body)
+              .fontColor($r('app.color.text_primary'))
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`${cam.rssi} dBm`)
+              .fontSize(FontSize.Caption)
+              .fontColor($r('app.color.text_tertiary'))
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(IconSize.Body)
+              .fontColor([$r('app.color.text_tertiary')])
+          }
+          .width('100%')
+          .height(RowHeight.Single)
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+          .opacity(this.svc.bleConnecting || this.svc.bleConnected ? 0.4 : 1)
+          .onClick(() => {
+            if (!this.svc.bleConnecting && !this.svc.bleConnected) {
+              this.onConnectBle(cam.deviceId, cam.name);
+            }
+          })
+        }, (cam: BleCameraDevice) => cam.deviceId)
+      }
+      .width('100%')
+    }
+  }
+
+  /**
+   * 已连上无线：只显示地址。
+   *
+   * 「断开」不在这里——状态头右侧那颗胶囊已经是全页唯一的断开入口。
+   */
+  @Builder
+  AddressRow() {
     Row({ space: 12 }) {
-      Text($r('app.string.camera_conn_wifi_host', this.svc.wifiHost, this.svc.wifiPort))
+      Text($r('app.string.camera_conn_wifi_host', this.svc.wifiHost, `${this.svc.wifiPort}`))
         .fontSize(FontSize.Caption)
         .fontColor($r('app.color.text_tertiary'))
         .layoutWeight(1)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Button($r('app.string.camera_wifi_disconnect'))
-        .height(36)
-        .fontSize(FontSize.Caption)
-        .borderRadius(pillRadius(36))
-        .backgroundColor($r('app.color.bg_page'))
-        .fontColor($r('app.color.text_primary'))
-        .onClick(() => { this.onDisconnect(); })
     }
     .width('100%')
   }
 
+  /** 蓝牙回不来时的说明（只在对它有意义的阶段渲染）。 */
+  @Builder
+  BleHintLine() {
+    if (this.svc.bleHint !== '') {
+      Text(this.svc.bleHint)
+        .fontSize(FontSize.Micro)
+        .lineHeight(16)
+        .fontColor($r('app.color.status_error'))
+        .width('100%')
+    }
+  }
+
   /**
-   * 模式专属的交互区：只渲染当前模式用得上的控件。
+   * AP 模式的主体：只剩「等它连」和「已连上」两种画面。
    *
-   * 之前 USB 模式下也会整块渲染「蓝牙」，还带上本机网络，甚至把 USB 的引导文案
-   * 也塞进蓝牙块，一条页面里同时讲三条链路；现在按模式分支。
+   * 配对设备列表在未配对时出现；配对完成后提示相机会切到热点，主动作是
+   * 「连接相机」。以前这里还有一颗「查看照片」按钮，和状态头的「搜索相机」
+   * 指向同一条流程，用户得猜点哪个——现在只留状态头那一颗。
    */
   @Builder
-  ModeControls() {
-    if (this.svc.linkMode !== CameraLinkMode.USB) {
-      if (this.svc.linkMode === CameraLinkMode.BLE) {
-        // BLE 模式的状态头已经是蓝牙状态，这里只保留「取消 / 断开」入口，
-        // 不再重复一行「蓝牙 已配对」。
-        if (this.svc.bleCameras.length > 0) {
-          Column() {
-            ForEach(this.svc.bleCameras, (cam: BleCameraDevice) => {
-              Row({ space: 8 }) {
-                Text(cam.name !== '' ? cam.name : $r('app.string.camera_ble_unnamed'))
-                  .fontSize(FontSize.Body)
-                  .fontColor($r('app.color.text_primary'))
-                  .layoutWeight(1)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text(`${cam.rssi} dBm`)
-                  .fontSize(FontSize.Caption)
-                  .fontColor($r('app.color.text_tertiary'))
-                SymbolGlyph($r('sys.symbol.chevron_right'))
-                  .fontSize(IconSize.Body)
-                  .fontColor([$r('app.color.text_tertiary')])
-              }
-              .width('100%')
-              .height(RowHeight.Single)
-              .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
-              .opacity(this.svc.bleConnecting || this.svc.bleConnected ? 0.4 : 1)
-              .onClick(() => {
-                if (!this.svc.bleConnecting && !this.svc.bleConnected) {
-                  this.onConnectBle(cam.deviceId, cam.name);
-                }
-              })
-            }, (cam: BleCameraDevice) => cam.deviceId)
-          }
+  ApControls() {
+    if (this.wifiConnected()) {
+      this.AddressRow()
+    } else {
+      if (this.blePaired()) {
+        Text($r('app.string.camera_conn_open_wifi_hint'))
+          .fontSize(FontSize.Micro)
+          .lineHeight(16)
+          .fontColor($r('app.color.text_tertiary'))
           .width('100%')
-        }
-      } else {
-        this.BlePrereqRow()
+      }
+      this.BleCameraList()
+      this.BleHintLine()
+    }
+  }
 
-        if (this.wifiConnected()) {
-          this.WifiConnectedRow()
-        } else if (this.svc.apJoining) {
-          // 交接进行中：显示分步进度，别让用户对着一个不动的按钮反复点。
-          Row({ space: 10 }) {
-            LoadingProgress()
-              .width(18).height(18)
-              .color($r('app.color.primary'))
-            Text(this.svc.wirelessStage !== ''
-              ? this.svc.wirelessStage
-              : $r('app.string.camera_conn_open_wifi'))
-              .fontSize(FontSize.Caption)
-              .fontColor($r('app.color.text_secondary'))
-              .layoutWeight(1)
-          }
-          .width('100%')
-        } else if (this.svc.linkMode === CameraLinkMode.AP) {
-          if (this.blePaired() && !this.svc.wifiAutoConnecting) {
-            Button($r('app.string.camera_conn_open_wifi'))
-              .width('100%')
-              .height(44)
-              .fontSize(FontSize.Body)
-              .borderRadius(pillRadius(44))
-              .backgroundColor($r('app.color.primary'))
-              .fontColor($r('app.color.text_on_primary'))
-              .onClick(() => { this.onConnectWireless(); })
-            Text($r('app.string.camera_conn_open_wifi_hint'))
-              .fontSize(FontSize.Micro)
-              .lineHeight(16)
-              .fontColor($r('app.color.text_tertiary'))
-              .width('100%')
-          }
-        } else {
-          // STA：手动地址 + 附近搜索两条路都留着（mDNS 在部分网络里出不来）
-          Row({ space: 8 }) {
-            TextInput({
-              placeholder: $r('app.string.camera_wifi_host_placeholder'),
-              text: this.wifiInput
-            })
-              .height(40)
-              .layoutWeight(1)
-              .fontSize(FontSize.Body)
-              .borderRadius(Radius.Chip)
-              .backgroundColor($r('app.color.bg_page'))
-              .onChange((value: string) => { this.wifiInput = value; })
-              .onSubmit(() => {
-                if (this.wifiInput.trim() !== '' && !this.svc.scanning) {
-                  this.onConnectWifi(this.wifiInput.trim());
-                }
-              })
-            Button($r('app.string.camera_wifi_connect'))
-              .height(40)
-              .fontSize(FontSize.Body)
-              .borderRadius(pillRadius(40))
-              // 不可点时换成中性底 + 灰字：主色整体变淡会看着还能点。
-              .backgroundColor(this.wifiInput.trim() !== ''
-                ? $r('app.color.primary') : $r('app.color.filter_chip_bg'))
-              .fontColor(this.wifiInput.trim() !== ''
-                ? $r('app.color.text_on_primary') : $r('app.color.text_tertiary'))
-              .enabled(!this.svc.scanning && this.wifiInput.trim() !== '')
-              .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
-          }
-          .width('100%')
+  /** STA 空闲且不在搜索/交接时，才显示网络元信息与手动 IP。 */
+  private staMetaVisible(): boolean {
+    return this.svc.linkMode === CameraLinkMode.STA && !this.wifiConnected()
+      && !(this.svc.apJoining || this.svc.wifiAutoConnecting
+        || this.svc.wifiReconnecting || this.svc.wifiScanning);
+  }
 
-          Row() {
-            Text(this.svc.wifiScanning
-              ? $r('app.string.camera_wifi_scanning')
-              : $r('app.string.camera_wifi_scan_nearby'))
-              .fontSize(FontSize.Caption)
-              .fontColor(this.svc.wifiScanning
-                ? $r('app.color.text_tertiary') : $r('app.color.primary'))
-              .onClick(() => {
-                if (!this.svc.wifiScanning) {
-                  this.onScanWifi();
-                }
-              })
-            Blank()
-          }
-          .width('100%')
-
-          if (this.svc.wifiCameras.length > 0) {
-            Column() {
-              ForEach(this.svc.wifiCameras, (cam: WifiCameraInfo) => {
-                Row({ space: 8 }) {
-                  Text(cam.name)
-                    .fontSize(FontSize.Body)
-                    .fontColor($r('app.color.text_primary'))
-                    .layoutWeight(1)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(cam.host)
-                    .fontSize(FontSize.Caption)
-                    .fontColor($r('app.color.text_tertiary'))
-                  SymbolGlyph($r('sys.symbol.chevron_right'))
-                    .fontSize(IconSize.Body)
-                    .fontColor([$r('app.color.text_tertiary')])
-                }
-                .width('100%')
-                .height(RowHeight.Single)
-                .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
-                .onClick(() => { this.onConnectWifi(cam.host); })
-              }, (cam: WifiCameraInfo) => cam.name)
-            }
-            .width('100%')
-          }
-
-          // 本机网络快照只对 STA 有意义：AP 模式连的是相机自己的热点，
-          // 手机当前连哪个 Wi-Fi 与它无关，写出来只会让人以为「网络不对」。
-          if (this.svc.networkSummary !== '') {
-            Text($r('app.string.camera_conn_network', this.svc.networkSummary))
-              .fontSize(FontSize.Micro)
-              .lineHeight(16)
-              .fontColor($r('app.color.text_tertiary'))
-              .width('100%')
-          }
-          if (this.svc.wifiHint !== '') {
-            Text(this.svc.wifiHint)
-              .fontSize(FontSize.Micro)
-              .lineHeight(16)
-              .fontColor($r('app.color.status_error'))
-              .width('100%')
-          }
-        }
-
-        if (this.svc.bleHint !== '') {
-          Text(this.svc.bleHint)
+  /** STA 的网络摘要 + 手动 IP：紧贴四选一下方，一行收起。 */
+  @Builder
+  StaNetworkRow() {
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        if (this.svc.networkSummary !== '') {
+          Text($r('app.string.camera_conn_network', this.svc.networkSummary))
             .fontSize(FontSize.Micro)
             .lineHeight(16)
-            .fontColor($r('app.color.status_error'))
-            .width('100%')
+            .fontColor($r('app.color.text_tertiary'))
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        } else {
+          Blank()
         }
+        Row({ space: 2 }) {
+          Text(this.staManualOpen
+            ? $r('app.string.camera_sta_manual_hide')
+            : $r('app.string.camera_sta_manual_show'))
+            .fontSize(FontSize.Micro)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary'))
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(12)
+            .fontColor([$r('app.color.text_tertiary')])
+            .rotate({ angle: this.staManualOpen ? 180 : 0 })
+        }
+        .padding({ top: 6, bottom: 6, left: 6 })
+        .onClick(() => { this.staManualOpen = !this.staManualOpen; })
       }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (this.staManualOpen) {
+        Row({ space: 8 }) {
+          TextInput({
+            placeholder: $r('app.string.camera_wifi_host_placeholder'),
+            text: this.wifiInput
+          })
+            .height(40)
+            .layoutWeight(1)
+            .fontSize(FontSize.Body)
+            .borderRadius(Radius.Chip)
+            .backgroundColor($r('app.color.bg_page'))
+            .onChange((value: string) => { this.wifiInput = value; })
+            .onSubmit(() => {
+              if (this.wifiInput.trim() !== '' && !this.svc.scanning) {
+                this.onConnectWifi(this.wifiInput.trim());
+              }
+            })
+          Button($r('app.string.camera_wifi_connect'))
+            .height(40)
+            .fontSize(FontSize.Body)
+            .borderRadius(pillRadius(40))
+            .backgroundColor(this.wifiInput.trim() !== ''
+              ? $r('app.color.primary') : $r('app.color.filter_chip_bg'))
+            .fontColor(this.wifiInput.trim() !== ''
+              ? $r('app.color.text_on_primary') : $r('app.color.text_tertiary'))
+            .enabled(!this.svc.scanning && this.wifiInput.trim() !== '')
+            .onClick(() => { this.onConnectWifi(this.wifiInput.trim()); })
+        }
+        .width('100%')
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  /** STA 状态区：已连接地址、发现但未连上的相机、错误/提示。 */
+  @Builder
+  StaControls() {
+    if (this.wifiConnected()) {
+      this.AddressRow()
+    } else if (!(this.svc.apJoining || this.svc.wifiAutoConnecting
+      || this.svc.wifiReconnecting || this.svc.wifiScanning)) {
+      // 自动连失败后还能点一台：平时这里没有内容，只有发现过、但没连上的情况。
+      if (this.svc.wifiCameras.length > 0) {
+        Column() {
+          ForEach(this.svc.wifiCameras, (cam: WifiCameraInfo) => {
+            Row({ space: 8 }) {
+              Text(cam.name)
+                .fontSize(FontSize.Body)
+                .fontColor($r('app.color.text_primary'))
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(cam.host)
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+              SymbolGlyph($r('sys.symbol.chevron_right'))
+                .fontSize(IconSize.Body)
+                .fontColor([$r('app.color.text_tertiary')])
+            }
+            .width('100%')
+            .height(RowHeight.Single)
+            .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+            .onClick(() => { this.onConnectWifi(cam.host); })
+          }, (cam: WifiCameraInfo) => cam.name)
+        }
+        .width('100%')
+      }
+
+      // 失败原因已经写在状态头的详情行里，这里只在「空闲但网络有条件问题」时
+      // 提醒，避免同一句红字出现两遍。
+      if (this.svc.wifiHint !== '' && this.phase() !== CameraPhase.Failed) {
+        Text(this.svc.wifiHint)
+          .fontSize(FontSize.Micro)
+          .lineHeight(16)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
+      this.BleHintLine()
+    }
+  }
+
+  /** 模式专属的交互区：只渲染当前模式用得上的控件。 */
+  @Builder
+  ModeControls() {
+    if (this.svc.linkMode === CameraLinkMode.BLE) {
+      this.BleCameraList()
+    } else if (this.svc.linkMode === CameraLinkMode.AP) {
+      this.ApControls()
+    } else if (this.svc.linkMode === CameraLinkMode.STA) {
+      this.StaControls()
     }
   }
 
@@ -1028,7 +1708,9 @@ export struct CameraPage {
           .width('100%')
       }
 
-      if (this.svc.lastScanError !== '') {
+      // 连接阶段的失败写在状态头的详情行里（唯一一处）；这里只保留「会话还在，
+      // 但这次扫描失败」——那时状态头是「已连接」，需要单独一行讲扫描错误。
+      if (this.svc.lastScanError !== '' && this.svc.connected) {
         Text(this.svc.lastScanError)
           .fontSize(FontSize.Caption)
           .lineHeight(18)
@@ -1038,45 +1720,21 @@ export struct CameraPage {
 
       Divider().color($r('app.color.divider'))
 
-      // 选择器 + 当前模式的一句话：切完立刻能读到这一句变了，才是切换的反馈。
-      Column({ space: 8 }) {
-        this.ModePicker()
-        Text(this.modeDesc())
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
+      // 四选一：不再配一句模式说明，模式差异交给下面的相机操作说明。
+      this.ModePicker()
+
+      if (this.staMetaVisible()) {
+        this.StaNetworkRow()
       }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
 
       this.ModeControls()
 
-      Divider().color($r('app.color.divider'))
-
-      // 连接步骤：并入抽屉后不再单独成卡
-      Column({ space: 10 }) {
-        Text($r('app.string.camera_guide_title'))
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
-        this.StepRow(0)
-        this.StepRow(1)
-        this.StepRow(2)
-        if (this.guideNote() !== '') {
-          Text(this.guideNote())
-            .fontSize(FontSize.Micro)
-            .lineHeight(16)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
+      // 连接引导：页面只留一句摘要，完整步骤和相机画面进系统半模态。
+      // 已配对相机的重连过程中不再显示「点连接相机」——那时按钮已经变成
+      // 「取消连接」，再留着这句会自相矛盾；首配/搜索新相机时保留步骤。
+      if (!this.linked() && !(this.bleKnown() && this.inProgress())) {
+        this.GuideSummary()
       }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
-
-      // TEMP: 第三段滚动验收用的假内容。搜索「TEMP」可以整块删掉。
-      // 18 行 × 56vp ≈ 1008vp，未连接时也够把第三段撑出来。
-      this.TempTestRows()
 
       // 设备信息 / 操作：抽屉本身就是一张卡，这里是平铺的行 + 小标题，
       // 不再套一层卡片（白卡压在白抽屉上只剩一道阴影，看不出层次）。
@@ -1158,14 +1816,31 @@ export struct CameraPage {
         })
 
       Column() {
-        Image(cameraStandeeMedia(this.svc.cameraModel))
-          .width(this.standeeWidth())
-          .height(STANDEE_HEIGHT)
-          .objectFit(ImageFit.Contain)
-          .interpolation(ImageInterpolation.High)
-          .draggable(false)
-          .opacity(this.svc.connected ? 1 : 0.72)
-          .animation({ duration: 260, curve: Curve.EaseOut })
+        // 卡面交叉淡入淡出：上一层旧图 1→0，新图 0→1；同型号换序列号时
+        // effectiveStandeeKey 不变，不会白闪一下。
+        Stack({ alignContent: Alignment.Bottom }) {
+          if (this.standeePreviousKey !== '') {
+            Image(cameraStandeeMedia(this.standeePreviousKey))
+              .width(this.standeeWidthFor(this.standeePreviousKey))
+              .height(STANDEE_HEIGHT)
+              .objectFit(ImageFit.Contain)
+              .interpolation(ImageInterpolation.High)
+              .draggable(false)
+              .opacity((this.linked() ? 1 : 0.72) * (1 - this.standeeCrossfade))
+          }
+          if (this.standeeCurrentKey !== '') {
+            Image(cameraStandeeMedia(this.standeeCurrentKey))
+              .width(this.standeeWidthFor(this.standeeCurrentKey))
+              .height(STANDEE_HEIGHT)
+              .objectFit(ImageFit.Contain)
+              .interpolation(ImageInterpolation.High)
+              .draggable(false)
+              .opacity((this.linked() ? 1 : 0.72) * this.standeeCrossfade)
+          }
+        }
+        .width('100%')
+        .height(STANDEE_HEIGHT)
+
         this.StandeeReflection()
       }
       .width('100%')
@@ -1225,8 +1900,25 @@ export struct CameraPage {
    * 只是素材左右两侧的透明边，最大 45vp（Z 30），而素材本身左右各留了
    * 40–67vp 透明余量，机身不会被裁到。
    */
-  private standeeWidth(): number {
-    return STANDEE_HEIGHT * cameraStandeeAspect(this.svc.cameraModel);
+  /** 真实型号优先；没有真实型号（标题为「相机」）时才看用户设置的默认立牌。 */
+  private effectiveStandeeKey(): string {
+    return this.svc.cameraModel !== '' ? this.svc.cameraModel : this.standeePref.defaultKey;
+  }
+
+  private standeeWidthFor(key: string): number {
+    return key === '' ? 0 : STANDEE_HEIGHT * cameraStandeeAspect(key);
+  }
+
+  /** 卡面换型号：保留上一张，280ms 交叉淡入淡出，不硬切。 */
+  private syncStandee(): void {
+    const next = this.effectiveStandeeKey();
+    if (next === this.standeeCurrentKey) return;
+    this.standeePreviousKey = this.standeeCurrentKey;
+    this.standeeCurrentKey = next;
+    this.standeeCrossfade = 0;
+    animateTo({ duration: 280, curve: Curve.EaseInOut }, () => {
+      this.standeeCrossfade = 1;
+    });
   }
 
   /**
@@ -1259,7 +1951,7 @@ export struct CameraPage {
    * 断开时乘 0.7，和主图的 0.72 呼应。
    */
   private reflectionOpacity(): number {
-    const base = this.svc.connected ? 0.7 : 0.7 * 0.7;
+    const base = this.linked() ? 0.7 : 0.7 * 0.7;
     // 第二段里跟着抽屉一起淡出：抽屉收位与倒影淡出同时完成，接缝处不会出现
     // 「白面已经贴到机身、下面还挂着半截镜像」的硬切。
     return base * (1 - this.stage2Progress());
@@ -1277,15 +1969,33 @@ export struct CameraPage {
   @Builder
   StandeeReflection() {
     Stack({ alignContent: Alignment.Top }) {
-      Image(cameraStandeeMedia(this.svc.cameraModel))
-        .width(this.standeeWidth())
-        .height(STANDEE_HEIGHT)
-        .objectFit(ImageFit.Contain)
-        .interpolation(ImageInterpolation.High)
-        .draggable(false)
-        .scale({ x: 1, y: -1 })
-        .translate({ y: 0 })
-        .opacity(this.reflectionOpacity())
+      // 倒影与主图同步交叉淡入淡出，避免「机身已经换图、脚下的镜像还是上一台」。
+      Stack({ alignContent: Alignment.Top }) {
+        if (this.standeePreviousKey !== '') {
+          Image(cameraStandeeMedia(this.standeePreviousKey))
+            .width(this.standeeWidthFor(this.standeePreviousKey))
+            .height(STANDEE_HEIGHT)
+            .objectFit(ImageFit.Contain)
+            .interpolation(ImageInterpolation.High)
+            .draggable(false)
+            .scale({ x: 1, y: -1 })
+            .translate({ y: 0 })
+            .opacity(this.reflectionOpacity() * (1 - this.standeeCrossfade))
+        }
+        if (this.standeeCurrentKey !== '') {
+          Image(cameraStandeeMedia(this.standeeCurrentKey))
+            .width(this.standeeWidthFor(this.standeeCurrentKey))
+            .height(STANDEE_HEIGHT)
+            .objectFit(ImageFit.Contain)
+            .interpolation(ImageInterpolation.High)
+            .draggable(false)
+            .scale({ x: 1, y: -1 })
+            .translate({ y: 0 })
+            .opacity(this.reflectionOpacity() * this.standeeCrossfade)
+        }
+      }
+      .width('100%')
+      .height(STANDEE_HEIGHT)
       Column()
         .width('100%')
         .height('100%')
@@ -1311,7 +2021,7 @@ export struct CameraPage {
       // 从底边往下淡出——只盖倒影不盖机身，于是立牌是「踩」在台面上，不是浮着。
       // 倒影盒子顶边正好是机身底边（镜像线），所以这一层天然对齐底座。
       Column()
-        .width(this.standeeWidth() * STANDEE_SHADOW_WIDTH_RATIO)
+        .width(this.standeeWidthFor(this.standeeCurrentKey) * STANDEE_SHADOW_WIDTH_RATIO)
         .height(STANDEE_SHADOW_HEIGHT)
         .linearGradient({
           angle: 180,
@@ -1327,29 +2037,6 @@ export struct CameraPage {
     // 带硬边的矩形。这里显式铺一层 bg_surface，让遮罩和卡片由构造保证同色。
     .backgroundColor($r('app.color.cover_bg'))
     .clip(true)
-  }
-
-  /**
-   * TEMP: 第三段滚动验收用的假内容（搜索「TEMP」整块删除）。
-   *
-   * 用 `CameraInfoRow` 只是为了让假内容与抽屉里真实的设备信息行同一个尺度
-   * （56vp 行高 + 分隔线），滚起来看不出拼接痕迹；行数够多，未连接时也能把
-   * 第三段撑到「要滚两屏」。
-   */
-  @Builder
-  TempTestRows() {
-    Column() {
-      Divider().color($r('app.color.divider'))
-      this.GroupTitle('测试内容（临时）')
-      ForEach(TEMP_ROW_INDEXES, (i: number) => {
-        CameraInfoRow({
-          label: `测试行 ${i + 1}`,
-          value: `占位内容 ${i + 1}`,
-          last: i === TEMP_ROW_INDEXES.length - 1
-        })
-      }, (i: number) => `temp_row_${i}`)
-    }
-    .width('100%')
   }
 
   /** 设备信息：平铺的行，抽屉本身就是它的卡片。 */
@@ -1373,21 +2060,27 @@ export struct CameraPage {
     .width('100%')
   }
 
-  /** 次要操作：全量扫描（会丢缓存）与断开连接。 */
+  /**
+   * 数据操作：快速扫描 / 全量扫描。
+   *
+   * 「断开连接」已经交给状态头那颗胶囊（1.64.0），这里只留与照片数据有关的两条：
+   * 上面管「补新增」，下面管「忽略缓存重来」。
+   */
   @Builder
   ActionRows() {
     Column() {
       CameraActionRow({
+        label: $r('app.string.camera_main_quick_scan'),
+        subtitle: $r('app.string.camera_action_quick_scan_desc'),
+        disabled: this.svc.scanning,
+        onTap: () => { this.onScan(true); }
+      })
+      CameraActionRow({
         label: $r('app.string.camera_action_full_scan'),
         subtitle: $r('app.string.camera_action_full_scan_desc'),
         disabled: this.svc.scanning,
-        onTap: () => { this.onScan(false); }
-      })
-      CameraActionRow({
-        label: $r('app.string.camera_action_disconnect'),
-        danger: true,
         last: true,
-        onTap: () => { this.onDisconnect(); }
+        onTap: () => { this.onScan(false); }
       })
     }
     .width('100%')
@@ -1541,6 +2234,7 @@ export struct CameraPage {
       })
       }
     .width('100%').height('100%')
+    .bindSheet($$this.guideSheetOpen, this.GuideSheet(), this.guideSheetOptions())
   }
 
   /**

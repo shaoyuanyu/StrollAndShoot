@@ -223,6 +223,10 @@
     {
       "name": "shadow_fade",
       "value": "#00000000"
+    },
+    {
+      "name": "action_neutral_fill",
+      "value": "#F1F3F5"
     }
   ]
 }

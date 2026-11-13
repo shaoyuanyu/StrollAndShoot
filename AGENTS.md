@@ -432,6 +432,23 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 - 开关状态持久化在 `SettingsStore.mockCameraEnabled`。改完开关或重装包后，需要重新到「相机」页点一次「搜索相机」。
 - 验证完记得关掉开关，否则会与真实相机状态混淆。
 
+### 相机页状态预演（仅调试包）
+
+模拟器没有真实相机，蓝牙 / Wi-Fi 交接也走不通，但相机页的状态全由 `CameraService`
+字段派生。调试包内置 `entry/src/main/ets/debug/CameraStateDemo.ets`，直接把这些字段
+摆成某个真实状态（不发起连接、不写持久化），用于逐状态截图验收：
+
+```bash
+hdc shell aa start -a EntryAbility -b <bundle> --ps demo ap_connected
+hdc shell aa start -a EntryAbility -b <bundle> --ps shot ap_connected
+```
+
+- 由 `EntryAbility.onNewWant` 在 `MockPtpDevice.isDebugBuild()` 为真时处理，release
+  包没有入口；
+- 名字就是 `CameraStateDemo.apply()` 的 case，覆盖 USB / 蓝牙 / AP / STA 的空闲、
+  搜索、首配、配对失败、已配对、交接、已连接、配对码、重连、断开、切换共 28 个状态；
+- 状态之间的口径、每个阶段该显示什么见 [PAGES.md](PAGES.md)「状态机：四种模式各一条线」。
+
 ## 调试经验
 
 ### `deploy.sh run` 不会重新构建
@@ -616,6 +633,7 @@ HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_kno
 | `services/GpsRecorder.ets` | 连续定位、后台长时任务、按天聚合、模拟轨迹 |
 | `services/ThumbnailCache.ets` | 缩略图磁盘缓存、manifest、过期清理 |
 | `services/AppLog.ets` | 内存环形缓冲 + `app_log.txt` 追加写 + hilog |
+| `services/SavedCameraStore.ets` | 多相机配对记录、旧单相机身份迁移、当前/上次连接选择 |
 | `services/UsbAttachWatcher.ets` | USB 相机插入监听：前台提示扫描、后台通知 |
 | `pages/PtpHost.ets` | USB/PTP 会话层 |
 | `model/SettingsStore.ets` | 持久化设置 |
@@ -723,7 +741,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 - **应用级开关**在 `entry/src/main/module.json5` 的 `metadata`：`{ "name": "ohos.arkui.UIMaterial.state", "value": "enable" }`。开启后 `Toggle` / `Slider` / `Select` / 弹窗类组件在全页面生效，其余组件只在 Navigation/NavDestination 标题栏与底部 TabBar 生效。
 - **材质只在「Navigation/NavDestination 标题栏」或「横向 Tabs 且 barPosition: End 的底部 TabBar」里生效**（官方《组件适配沉浸光感》）。写在内容区不生效——所以胶囊必须画在 `title({ builder })` 里，不能挪到页面内容里。
-  - 例外是官方「按钮与选择类」里明确列出全页面生效的 `Select` / `Toggle` / `Slider`：`Select`、`Toggle(Switch)`、`Slider` 在内容区也能拿到真材质（应用级开关已开时默认生效）。`Button`、`ChipGroup`、`SegmentButton` **不行**，内容区里只能写成普通胶囊。所以设置页的选项控件用 `Select` + `Toggle`，相机页的主操作用标题栏胶囊。
+  - 例外是官方「按钮与选择类」里明确列出全页面生效的 `Select` / `Toggle` / `Slider`：`Select`、`Toggle(Switch)`、`Slider` 在内容区也能拿到真材质（应用级开关已开时默认生效）。`Button`、`ChipGroup`、`SegmentButton` **不行**，内容区里只能写成普通胶囊。所以设置页的选项控件用 `Select` + `Toggle`；相机页的主操作 1.64.0 起搬进抽屉（白底上用实心胶囊，不需要材质）。
   - `Select` 的按钮文字只认 `value()`，`selected()` 只控制菜单里的选中态；只给 `selected()` 会渲染成一个**只有箭头、没有文字**的空胶囊。设置页的 `SettingSelectRow` 就是因此才单独取了 `selectedLabel()`。
 
 #### 底部页签
@@ -909,7 +927,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 ### 2026-11-08
 
-- 快速在相机 / 设置间切换时，标题栏「搜索相机」在设置页停留约 220ms → 标题栏、底部页签、浮岛改用独立 `visualTab`，在 `Tabs.onSelected` 提前更新；`currentTab` 只保留给 `Tabs.index` 与 `onChange`。根因与官方建议见「三个必须记住的刷新坑」第 3 条。
+- 快速在相机 / 设置间切换时，标题栏里的按钮会在设置页停留约 220ms → 标题栏、底部页签、浮岛改用独立 `visualTab`，在 `Tabs.onSelected` 提前更新；`currentTab` 只保留给 `Tabs.index` 与 `onChange`。根因与官方建议见「三个必须记住的刷新坑」第 3 条。（相机页的「搜索相机」1.64.0 已搬进抽屉，但画廊的「选择 / 筛选」仍是标题栏控件，这条规则继续有效。）
 
 ### 2026-11-05 第二批
 

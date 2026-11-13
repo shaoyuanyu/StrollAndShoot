@@ -178,7 +178,7 @@ interface PhotoEntry {
 
 同文件还有：`DisplayGroup`（内容优先模式下把同名文件合成一组）、`DownloadRecord`（下载注册表条目，键为 `${cameraIdentity}::${filename}::${size}`，含 `missingSince` 表示暂时进了「最近删除」）、`DownloadProgress`、`DownloadResult`、`GpsRecord`、`GpsDailyGroup`。
 
-`model/SettingsStore.ets` 存放持久化设置（深色模式、画廊列数、显示模式）；`model/UiStateStore.ets` 存放上次标签页、画廊筛选和握持手。
+`model/SettingsStore.ets` 存放持久化设置（深色模式、画廊列数、显示模式）；`model/UiStateStore.ets` 存放上次标签页、画廊筛选和握持手；`model/StandeePreferenceStore.ets` 单独存「默认相机立牌」的 `defaultKey`（PersistenceV2 key `standee_preference`），空串表示不显示。相机页在真实型号为空时回退到它，真实型号优先；设置页提供「不显示」+ 10 个立牌型号的 `Select`。
 
 ## 定位与地图
 
@@ -318,12 +318,12 @@ USB 之外的第二条链路：相机与手机在同一网络时，走 TCP 15740
 
 - `services/NsdScanner.ets` 浏览 Bonjour `_ptp._tcp`，实例名就是相机名（`Z50_2_8079350`），SRV 端口 15740。
 - `serviceFound` 只保证 `serviceName`，IP/端口必须再 `resolveLocalService()` 补全；serviceType 在 HarmonyOS 上**不带尾点**。
-- `CameraService.scanWifiCameras(8000)` 浏览 8 秒，结果进 `wifiCameras`；相机页的「搜索附近的相机」把它们列出来，点一下直接连，不用手填 IP。
+- `CameraService.scanWifiCameras(8000)` 浏览 8 秒，结果进 `wifiCameras`；相机页 STA 的「搜索相机」走 `autoLinkWifi()`，命中第一台就直接连，不要求用户手填 IP。
 - 解析失败（2204006 超时）属正常，下轮广播会再报；`serviceLost` 会从列表移除。
 
 **/24 网段扫描兜底（1.33.0）**
 
-mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以「搜索附近的相机」会**同时**跑一遍 `services/SubnetScanner.ets`：
+mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 STA 的自动发现会**同时**跑一遍 `services/SubnetScanner.ets`：
 
 - 取本机所有 IPv4 接口地址，各展开所在 /24 的 1..254（跳过本机、回环、169.254），候选上限 512；
 - 并发 12 个 TCP connect（700ms 超时），**只连不发送任何字节**——相机是单连接服务器，乱发 Init 会踢掉正在配对的会话；
@@ -390,6 +390,17 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以�
 - 否则走两段式首配
 
 段 2 复用握手失败时**不落盘**身份，避免下次拿一份相机不认的身份去复用。
+
+*多相机（1.64.0）*：`services/SavedCameraStore.ets` 用新的
+`PersistenceV2` key `saved_cameras` 保存多台已配对相机（型号、展示序列号、
+`identityDevice` / `identityNonce`、BLE 地址与上次连接时间）。`BleIdentityStore`
+仍是底层唯一的「活动身份」：切换相机时把对应记录载入它，`pair()` 的分支逻辑
+完全不变。首次启动从旧 `ble_identity` 迁移一条；冷启动把 current 归位到
+`lastConnectedKey`。连新相机只清活动身份和 Wi-Fi 快速地址，不清相机列表。
+
+展示序列号和身份序列号**不是同一个数**：`SavedCamera.serial` 是标题栏/菜单用的
+展示序列号（BLE 名尾段），`SavedCamera.identitySerial` 是 `BleIdentityStore.serial`
+那份 stage4 身份序列号；`activate()` 时不要把展示序列号写进活动身份。
 
 *容易踩的三个坑*
 
@@ -491,8 +502,8 @@ STA 的三条退出路都试过，全部不通：
 AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯一客户端，`removeCandidateConfig`
 一撤，相机看到零客户端就按自己的待机计时回落。这就是「按需切换」需要的那把开关。
 
-所以 1.42.0 起：**默认走 AP 模式**，STA 保留为「相机已配好 STA 时的手动入口」
-（相机页的「搜索附近的相机」），不再自动触发。
+所以 1.42.0 起：**默认走 AP 模式**，STA 保留为「相机已配好 STA 时的手动入口」，
+进入 STA 后再点「搜索相机」才自动发现并连接，不在启动时偷偷触发。
 
 产品含义：**BLE 是常驻待机态，Wi-Fi 是「借来传照片」的态**。这也和 SnapBridge
 一致 —— 拍摄期间靠 BLE 打 GPS，只有下载时才切 Wi-Fi。相机页因此在「蓝牙已配对、
@@ -573,10 +584,28 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 *切换链路模式要清场*
 
 `setLinkMode(mode)` 除了落盘，还会清空 `lastScanError` / `bleHint` / `wifiHint` /
-`networkSummary` / `wirelessStage`——这些都描述上一模式的现场，留着会串味
-（切到 USB 还挂着蓝牙失败、AP 模式还显示手机当前 Wi-Fi）。进入 STA 时顺带调
-`refreshNetworkSnapshot()` 摸一遍本机网络，「本机网络」一行立刻可见；
-`initLinkMode()` 恢复的是 STA 时同样补一次。
+`networkSummary` / `wirelessStage` / `wirelessFailed` / `bleCameras` / 扫描统计
+（`scanStatsText` / `scanPhaseText` / `scanProgress` / `scanTotal`）——这些都描述
+上一模式的现场，留着会串味（切到 USB 还挂着蓝牙失败、AP 模式还显示手机当前 Wi-Fi）。
+进入 STA 时顺带调 `refreshNetworkSnapshot()` 摸一遍本机网络，「本机网络」一行立刻
+可见；`initLinkMode()` 恢复的是 STA 时同样补一次。
+
+*无线进度、失败与断开状态*
+
+- `wirelessStage` 只表示**正在走到哪一步**（唤醒 / 热点 / 相机），成功或放弃就清；
+  失败结论单独放 `wirelessFailed`，保留到下一次尝试或切模式。以前只有前者，
+  `apJoining = false` 后失败原因随进度一起消失，页面只剩「未连接」。
+- `connectWifi()` 成功时清掉 `wirelessFailed` / `wirelessStage` / `bleHint` /
+  `lastScanError`：Wi-Fi 已经接管照片通道，上一轮的蓝牙失败/等待提示都属于过去时，
+  否则会出现「已连接」旁边挂着「蓝牙连接失败」。
+- `disconnect()` / `disconnectBle()` 用 `disconnecting` 标志包住整个异步过程
+  （try/finally），并在结束时清掉本模式的进度、统计与错误；`MainScreen`
+  切换模式时另写 `switchingTo`，页面据此显示「正在断开 / 正在切换」。
+- `searchWireless()` 按模式分派：AP 没有落盘身份就先扫蓝牙；STA **直接自动发现并
+  连接**（先试记住的地址，再 mDNS / 网段扫描，命中就 `connectWifi`），有身份时只多
+  一步「先借蓝牙唤醒相机」。STA 不需要配对就能用，这是两种模式在入口上最直观的
+  区别；自动发现失败时用 `failWireless(wifiHint || camera_status_wifi_not_found)`
+  留下结论，页面显示「没能连上相机 + 原因 + 重试」。
 
 `autoLinkWifi()` 的顺序刻意是「记得的地址 → mDNS/网段扫描」：相机地址几乎不
 变，先直连能把冷启动压到一两秒；直连失败才扫。连上之后 `finishAutoLink()`

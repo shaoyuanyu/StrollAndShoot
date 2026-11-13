@@ -3,6 +3,7 @@ import { i18n } from '@kit.LocalizationKit';
 import { SymbolGlyphModifier, uiMaterial } from '@kit.ArkUI';
 import { SettingsStore } from '../model/SettingsStore';
 import { LanguageStore } from '../model/LanguageStore';
+import { StandeePreferenceStore } from '../model/StandeePreferenceStore';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
@@ -48,6 +49,23 @@ const LANGUAGE_OPTIONS: SelectOption[] = [
   { value: $r('app.string.settings_language_zh_hant') },
   { value: $r('app.string.settings_language_en') }
 ];
+
+/** 默认相机立牌：第一项「不显示」，其余按立牌表。 */
+const STANDEE_VALUES: string[] = (() => {
+  const values: string[] = [''];
+  for (const key of cameraStandeeKeys()) {
+    values.push(key);
+  }
+  return values;
+})();
+
+const STANDEE_OPTIONS: SelectOption[] = (() => {
+  const options: SelectOption[] = [{ value: $r('app.string.settings_standee_none') }];
+  for (const key of cameraStandeeKeys()) {
+    options.push({ value: cameraStandeeLabel(key) });
+  }
+  return options;
+})();
 
 const GPS_MODE_OPTIONS: SelectOption[] = [
   { value: $r('app.string.settings_gps_precise') },
@@ -102,6 +120,8 @@ export struct SettingsPage {
   settings: SettingsStore = SettingsStore.getInstance();
   /** 应用语言偏好；单独 PersistenceV2 key，默认跟随系统。 */
   @Local languageStore: LanguageStore = LanguageStore.getInstance();
+  /** 默认相机立牌；标题为「相机」时使用。 */
+  @Local standeePref: StandeePreferenceStore = StandeePreferenceStore.getInstance();
   /** GPS 服务的真实状态。直接读单例的 @Trace 字段，不再要页面之间传副本。 */
   @Local gps: GpsRecorder = GpsRecorder.getInstance();
   /** 开关的显示值。用 !! 双向绑定，启动失败时才能把滑块弹回去。 */
@@ -181,6 +201,18 @@ export struct SettingsPage {
         action: () => { this.applyLanguage(value, previous); }
       }
     });
+  }
+
+  private standeeIndex(): number {
+    const index = STANDEE_VALUES.indexOf(this.standeePref.defaultKey);
+    return index < 0 ? 0 : index;
+  }
+
+  private onStandeeSelect(index: number): void {
+    const value = STANDEE_VALUES[index];
+    if (value !== undefined) {
+      this.standeePref.setDefaultKey(value);
+    }
   }
 
   /** 设置应用偏好语言；'default' 清空偏好，恢复到跟随系统。 */
@@ -367,8 +399,15 @@ export struct SettingsPage {
             label: $r('app.string.settings_language'),
             options: LANGUAGE_OPTIONS,
             selectedIndex: this.languageIndex(),
-            last: true,
             onSelect: (index: number) => { this.onLanguageSelect(index); }
+          })
+          SettingSelectRow({
+            label: $r('app.string.settings_default_standee'),
+            hint: $r('app.string.settings_default_standee_hint'),
+            options: STANDEE_OPTIONS,
+            selectedIndex: this.standeeIndex(),
+            last: true,
+            onSelect: (index: number) => { this.onStandeeSelect(index); }
           })
         }
         .width('100%').padding({ left: 16, right: 16 })

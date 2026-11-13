@@ -133,20 +133,12 @@
       "value": "Bluetooth + Wi-Fi"
     },
     {
-      "name": "camera_conn_ble",
-      "value": "Bluetooth"
-    },
-    {
       "name": "camera_conn_connected",
       "value": "Connected"
     },
     {
-      "name": "camera_conn_open_wifi",
-      "value": "View photos"
-    },
-    {
       "name": "camera_conn_open_wifi_hint",
-      "value": "The camera switches to its own Wi-Fi hotspot for transfer. Bluetooth pauses meanwhile and the camera returns to Bluetooth standby after you exit."
+      "value": "The camera switches to its own Wi-Fi hotspot for transfer. The paired link pauses meanwhile and the camera returns to standby after you exit."
     },
     {
       "name": "camera_conn_disconnected",
@@ -189,10 +181,6 @@
       "value": "Connect"
     },
     {
-      "name": "camera_wifi_scan_nearby",
-      "value": "Search for nearby cameras"
-    },
-    {
       "name": "camera_ble_title",
       "value": "Bluetooth"
     },
@@ -217,10 +205,6 @@
       "value": "Paired · serial %1$s"
     },
     {
-      "name": "camera_ble_reconnecting",
-      "value": "Reconnecting…"
-    },
-    {
       "name": "camera_ble_connected_name",
       "value": "Connected · %1$s"
     },
@@ -231,10 +215,6 @@
     {
       "name": "camera_ble_cancel",
       "value": "Cancel"
-    },
-    {
-      "name": "camera_ble_disconnect",
-      "value": "Disconnect Bluetooth"
     },
     {
       "name": "camera_ble_services",
@@ -370,7 +350,7 @@
     },
     {
       "name": "camera_empty_hint",
-      "value": "Connect the camera with a USB cable and select PTP mode.\nThen tap “Find Camera” in the top-right corner."
+      "value": "Connect the camera with a USB cable and select PTP mode.\nThen tap “Find Camera” in the drawer."
     },
     {
       "name": "camera_info_brand",
@@ -421,6 +401,10 @@
       "value": "Ignore the cache and re-read metadata and thumbnails for all files"
     },
     {
+      "name": "camera_action_quick_scan_desc",
+      "value": "Only reads new or changed photos"
+    },
+    {
       "name": "camera_action_disconnect",
       "value": "Disconnect"
     },
@@ -435,6 +419,106 @@
     {
       "name": "camera_main_find",
       "value": "Find Camera"
+    },
+    {
+      "name": "camera_status_switching",
+      "value": "Switching connection mode…"
+    },
+    {
+      "name": "camera_status_disconnecting",
+      "value": "Disconnecting…"
+    },
+    {
+      "name": "camera_status_pairing",
+      "value": "Pairing with the camera…"
+    },
+    {
+      "name": "camera_status_linking",
+      "value": "Connecting to the camera…"
+    },
+    {
+      "name": "camera_status_relinking",
+      "value": "Reconnecting to the camera…"
+    },
+    {
+      "name": "camera_status_linking_ap",
+      "value": "Connecting to the camera hotspot…"
+    },
+    {
+      "name": "camera_status_linking_sta",
+      "value": "Connecting to the camera network…"
+    },
+    {
+      "name": "camera_status_wifi_failed",
+      "value": "Couldn’t connect to the camera"
+    },
+    {
+      "name": "camera_status_pairing_wait",
+      "value": "Waiting for pairing confirmation"
+    },
+    {
+      "name": "camera_status_pair_searching",
+      "value": "Searching for the camera…"
+    },
+    {
+      "name": "camera_status_ble_pair_failed_detail",
+      "value": "Pairing isn’t finished.\nStay on the pairing screen and try again"
+    },
+    {
+      "name": "camera_state_paired",
+      "value": "Paired"
+    },
+    {
+      "name": "camera_ble_reconnecting_full",
+      "value": "Reconnecting to the Bluetooth camera…"
+    },
+    {
+      "name": "camera_action_switching",
+      "value": "Switching"
+    },
+    {
+      "name": "camera_action_disconnecting",
+      "value": "Disconnecting"
+    },
+    {
+      "name": "camera_action_connecting",
+      "value": "Connecting"
+    },
+    {
+      "name": "camera_action_searching",
+      "value": "Searching"
+    },
+    {
+      "name": "camera_action_connect_camera",
+      "value": "Connect camera"
+    },
+    {
+      "name": "camera_action_retry",
+      "value": "Retry"
+    },
+    {
+      "name": "camera_detail_switching",
+      "value": "Disconnect first, then switch"
+    },
+    {
+      "name": "camera_detail_pairing_hint",
+      "value": "Pairing can take up to 30 seconds; keep the camera on the “Start pairing” screen"
+    },
+    {
+      "name": "camera_detail_pick_to_pair",
+      "value": "Choose a camera to pair"
+    },
+    {
+      "name": "camera_status_wifi_not_found",
+      "value": "No camera found on this network"
+    },
+    {
+      "name": "camera_sta_manual_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "camera_sta_manual_show",
+      "value": "Manual IP"
     },
     {
       "name": "gallery_scanning_title",
@@ -1225,80 +1309,104 @@
       "value": "Wi-Fi STA"
     },
     {
-      "name": "camera_mode_desc_usb",
-      "value": "Direct cable connection — fastest and most reliable."
+      "name": "camera_mode_locked_hint",
+      "value": "Tap twice quickly to switch"
     },
     {
-      "name": "camera_mode_desc_ble",
-      "value": "Pairing, clock sync and location tagging only. No photos."
+      "name": "camera_mode_switch_title",
+      "value": "Switch connection mode"
     },
     {
-      "name": "camera_mode_desc_ap",
-      "value": "The camera runs its own hotspot. The phone joins it, so no password is needed."
+      "name": "camera_mode_switch_message",
+      "value": "Switching the connection mode closes the current connection, and the camera settings must be changed as well."
     },
     {
-      "name": "camera_mode_desc_sta",
-      "value": "The camera joins the phone Wi-Fi network, so the phone stays online."
+      "name": "camera_mode_switch_confirm",
+      "value": "Switch"
     },
     {
       "name": "camera_guide_usb_1",
-      "value": "Connect the camera to the phone with a USB cable"
+      "value": "connect the camera with a cable and set USB to PTP."
     },
     {
       "name": "camera_guide_usb_2",
-      "value": "Set the camera's USB mode to PTP"
-    },
-    {
-      "name": "camera_guide_usb_3",
-      "value": "Tap Find Camera in the top right"
+      "value": "tap “Find Camera”."
     },
     {
       "name": "camera_guide_ble_1",
-      "value": "On the camera: Network menu → Connect to smart device → Pair (Bluetooth) → Start pairing"
+      "value": "connect to smart device → Pair → Start pairing."
     },
     {
       "name": "camera_guide_ble_2",
-      "value": "Tap Find Camera in the top right"
-    },
-    {
-      "name": "camera_guide_ble_3",
-      "value": "The camera shows up here once pairing finishes"
+      "value": "tap “Find Camera”, pick it, and finish pairing."
     },
     {
       "name": "camera_guide_ap_1",
-      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (AP mode)"
+      "value": "connect to smart device → Wi-Fi connection."
     },
     {
       "name": "camera_guide_ap_2",
-      "value": "Tap Establish Wi-Fi connection and leave the camera on that screen"
-    },
-    {
-      "name": "camera_guide_ap_3",
-      "value": "Tap Find Camera; the phone joins the camera hotspot automatically"
-    },
-    {
-      "name": "camera_guide_ap_note",
-      "value": "The camera returns to Bluetooth standby after you leave photo browsing."
-    },
-    {
-      "name": "camera_guide_sta_1",
-      "value": "Connect the phone to the Wi-Fi network you want to use"
+      "value": "tap “Find Camera” to pair, then tap Connect camera."
     },
     {
       "name": "camera_guide_sta_2",
-      "value": "On the camera: Network menu → Connect to smart device → Wi-Fi connection (STA mode); create a profile for the same network"
+      "value": "connect to smart device → Wi-Fi connection."
     },
     {
-      "name": "camera_guide_sta_3",
-      "value": "Tap Search for nearby cameras, or enter the camera IP directly"
+      "name": "camera_guide_ap_screen",
+      "value": "enter “Establish connection” and stay on the Wi-Fi screen."
     },
     {
-      "name": "camera_guide_sta_note",
-      "value": "In STA mode the app cannot send the camera back to Bluetooth. Exit it from the camera menu if needed."
+      "name": "camera_guide_sta_screen",
+      "value": "create a profile and join the same network."
     },
     {
-      "name": "camera_state_ble_ready",
-      "value": "Bluetooth ready"
+      "name": "camera_guide_steps",
+      "value": "Connection steps"
+    },
+    {
+      "name": "camera_guide_view_steps",
+      "value": "View steps"
+    },
+    {
+      "name": "camera_new",
+      "value": "Connect a new camera"
+    },
+    {
+      "name": "camera_switch_need_disconnect",
+      "value": "Disconnect the current camera first"
+    },
+    {
+      "name": "camera_switch_busy",
+      "value": "Camera connection is in progress. Please wait."
+    },
+    {
+      "name": "camera_guide_summary_usb",
+      "value": "Connect the camera with a cable and set USB to PTP."
+    },
+    {
+      "name": "camera_guide_summary_ble",
+      "value": "Start pairing on the camera, then find it on the phone."
+    },
+    {
+      "name": "camera_guide_summary_ap",
+      "value": "Turn on Wi-Fi on the camera, then find and pair it on the phone."
+    },
+    {
+      "name": "camera_guide_summary_sta",
+      "value": "Join the camera and phone to the same Wi-Fi, then find the camera."
+    },
+    {
+      "name": "camera_guide_summary_ble_ready",
+      "value": "Tap “Connect camera” to reconnect."
+    },
+    {
+      "name": "camera_guide_summary_ap_ready",
+      "value": "Tap “Connect camera” to join the camera hotspot."
+    },
+    {
+      "name": "camera_guide_summary_sta_ready",
+      "value": "Tap “Connect camera” to search and connect."
     },
     {
       "name": "camera_state_ble_paired",
@@ -1309,16 +1417,16 @@
       "value": "Camera Wi-Fi %1$s:%2$s"
     },
     {
-      "name": "camera_guide_ble_note",
-      "value": "Bluetooth never carries photos. Switch to Wi-Fi AP to import them."
-    },
-    {
       "name": "camera_hero_serial",
       "value": "Serial %1$s"
     },
     {
-      "name": "camera_guide_title",
-      "value": "Steps"
+      "name": "camera_guide_on_camera",
+      "value": "On the camera, "
+    },
+    {
+      "name": "camera_guide_on_phone",
+      "value": "On the phone, "
     },
     {
       "name": "camera_group_device",
@@ -1339,6 +1447,18 @@
     {
       "name": "settings_mock_model_unknown",
       "value": "Unknown model"
+    },
+    {
+      "name": "settings_default_standee",
+      "value": "Default camera standee"
+    },
+    {
+      "name": "settings_default_standee_hint",
+      "value": "Shown while adding a camera"
+    },
+    {
+      "name": "settings_standee_none",
+      "value": "None"
     }
   ]
 }

@@ -207,6 +207,10 @@
     {
       "name": "hero_glow",
       "value": "#24FFFFFF"
+    },
+    {
+      "name": "action_neutral_fill",
+      "value": "#2C2C2E"
     }
   ]
 }

@@ -5,6 +5,7 @@ import { WindowUtils } from '../utils/WindowUtils';
 import { L10n } from '../utils/L10n';
 import { saveWindowSnapshot, saveWindowSnapshotBurst } from '../utils/WindowShot';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
+import { CameraStateDemo } from '../debug/CameraStateDemo';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { GpsGeocoder } from '../services/GpsGeocoder';
@@ -27,6 +28,14 @@ export default class EntryAbility extends UIAbility {
     if (usbCamera !== undefined && String(usbCamera) === '1') {
       // 点「相机已连接」通知回到前台时，等 onForeground 再提示，避免在后台弹窗。
       UsbAttachWatcher.getInstance().noteNoticeOpen();
+    }
+    const demo = want.parameters ? want.parameters['demo'] : undefined;
+    if (demo !== undefined) {
+      if (MockPtpDevice.isDebugBuild()) {
+        CameraStateDemo.apply(String(demo));
+        hilog.info(DOMAIN, TAG, 'camera state demo: %{public}s', String(demo));
+      }
+      return;
     }
     const shot = want.parameters ? want.parameters['shot'] : undefined;
     if (shot === undefined) return;

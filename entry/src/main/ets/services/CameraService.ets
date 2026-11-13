@@ -20,6 +20,7 @@ import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
 import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
 import { BleIdentityStore } from './BleIdentityStore';
+import { SavedCameraStore, type SavedCamera } from './SavedCameraStore';
 import { WifiLinkStore } from './WifiLinkStore';
 import { WifiApJoiner, type ApJoinOutcome } from './WifiApJoiner';
 import { CameraLinkMode, DEFAULT_LINK_MODE, isWifiMode } from '../model/CameraLinkMode';
@@ -263,6 +264,22 @@ export class CameraService {
   @Trace apJoining: boolean = false;
   /** 分步进度文案（空串 = 不在进行中）。 */
   @Trace wirelessStage: string = '';
+  /**
+   * 无线链路的失败结论。
+   *
+   * `wirelessStage` 是**进行到哪一步**，成功/放弃后就该清掉；失败原因必须留到
+   * 用户重试或切模式，否则「正在连接相机热点 → 未连接」中间会丢掉唯一的线索。
+   */
+  @Trace wirelessFailed: string = '';
+  /**
+   * 正在执行「断开连接」。
+   *
+   * 无线断开要退出相机热点、等相机回落，可能要几秒；这期间按钮不能装死，
+   * 状态头要明确写「正在断开」，并把模式选择器继续锁住。
+   */
+  @Trace disconnecting: boolean = false;
+  /** 正在切换链路模式（= 目标下标，-1 表示没有在切换）。 */
+  @Trace switchingTo: number = -1;
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
   @Trace bleScanning: boolean = false;
@@ -1486,6 +1503,13 @@ export class CameraService {
     WifiLinkStore.getInstance().save(target, port, this.cameraName);
     this.wifiAutoReconnectArmed = true;
     this.wifiHint = '';
+    this.wirelessFailed = '';
+    this.wirelessStage = '';
+    // Wi-Fi 已经接管照片通道：BLE 侧上一轮的失败/等待提示都属于过去时，
+    // 留在页面上会变成「Wi-Fi 已连接，旁边还挂着蓝牙失败」。
+    this.bleHint = '';
+    this.lastScanError = '';
+    this.bleCameras = [];
     this.suspendBleForWifi();
     this.startBleVisibilityProbe();
 
@@ -1804,6 +1828,7 @@ export class CameraService {
       }
       this.bleSerial = serial;
       this.bleHint = '';
+      SavedCameraStore.getInstance().rememberActive();
       this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
 
       // 断链自动重连：相机会休眠，链路断了自己爬起来（用保存的身份复用握手）。
@@ -1811,6 +1836,7 @@ export class CameraService {
         this.bleSerial = serial;
         this.bleConnected = true;
         this.bleReconnecting = false;
+        SavedCameraStore.getInstance().rememberActive();
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
         // 重连只恢复待机（校时/GPS）。**不要**在这里补写 0x2005：
@@ -1925,6 +1951,15 @@ export class CameraService {
 
   /** 断开 BLE。 */
   async disconnectBle(): Promise<void> {
+    this.disconnecting = true;
+    try {
+      await this.disconnectBleInternal();
+    } finally {
+      this.disconnecting = false;
+    }
+  }
+
+  private async disconnectBleInternal(): Promise<void> {
     // 用户显式断开：先撤掉无线侧的自动重连，免得刚点完「断开」又被接回来。
     this.wifiAutoReconnectArmed = false;
     this.cancelWifiReconnect();
@@ -1940,6 +1975,9 @@ export class CameraService {
     this.bleReconnecting = false;
     this.bleServices = [];
     this.bleSerial = '';
+    // 取消连接/配对失败留下的提示不再成立
+    this.bleHint = '';
+    this.bleCameras = [];
   }
 
   /** 只取网络快照，不做搜索；进 STA 模式时用。 */
@@ -1976,6 +2014,8 @@ export class CameraService {
     // 广播名尾段就是官方那串序列号；早先版本误存过 BLE stage4 的另一串，这里覆盖
     const sn = cameraSerialFromBleName(ble.cameraName);
     if (sn !== '') store.setSerial(sn);
+    // 迁移时 CameraModelStore 可能还没恢复完；这里补一次当前保存相机的机型/序列号。
+    SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel, store.serial);
   }
 
   /**
@@ -2008,6 +2048,8 @@ export class CameraService {
     if (key === this.cameraModel) return;
     this.cameraModel = key;
     CameraModelStore.getInstance().set(key);
+    SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel,
+      CameraModelStore.getInstance().serial);
     this.log.add(`相机立牌: ${raw} → ${key}`);
   }
 
@@ -2025,7 +2067,53 @@ export class CameraService {
     const serial = fromName !== '' ? fromName : this.deviceSerialNumber.replace(/^0+/, '');
     if (serial === '') return;
     CameraModelStore.getInstance().setSerial(serial);
+    SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel, serial);
     this.log.add(`机身序列号: ${serial}`);
+  }
+
+  /**
+   * 切换到一台已保存的相机（不主动连接）。
+   *
+   * 只改展示与活动身份：标题栏立牌、序列号、BLE 复用身份都指向它；真正的
+   * 连接仍由用户点「连接相机」触发。清掉上一台的无线快速地址与扫描残留，
+   * 避免切过去后先连回旧相机。
+   */
+  applySavedCamera(record: SavedCamera): void {
+    this.stopBleScan();
+    this.stopWifiScan();
+    this.bleCameras = [];
+    this.wifiCameras = [];
+    this.bleHint = '';
+    this.wirelessFailed = '';
+    this.lastScanError = '';
+    this.bleSerial = '';
+    this.bleCameraName = record.cameraName;
+    this.cameraModel = record.modelKey;
+    this.wifiHost = '';
+    this.wifiPort = 15740;
+    const model = CameraModelStore.getInstance();
+    model.clear();
+    if (record.modelKey !== '') model.set(record.modelKey);
+    if (record.serial !== '') model.setSerial(record.serial);
+    WifiLinkStore.getInstance().clear();
+  }
+
+  /** 准备连接一台新相机：清掉当前展示与活动身份，已保存记录仍由仓库保留。 */
+  applyNewCameraSelection(): void {
+    this.stopBleScan();
+    this.stopWifiScan();
+    this.bleCameras = [];
+    this.wifiCameras = [];
+    this.bleHint = '';
+    this.wirelessFailed = '';
+    this.lastScanError = '';
+    this.bleSerial = '';
+    this.bleCameraName = '';
+    this.cameraModel = '';
+    this.wifiHost = '';
+    this.wifiPort = 15740;
+    CameraModelStore.getInstance().clear();
+    WifiLinkStore.getInstance().clear();
   }
 
   /** 启动时把落盘的模式读回来。 */
@@ -2051,11 +2139,31 @@ export class CameraService {
     this.wifiHint = '';
     this.networkSummary = '';
     this.wirelessStage = '';
+    this.wirelessFailed = '';
+    // 配对列表属于上一模式：切过去还留着几台旧设备，看起来像当前模式也扫到了
+    this.bleCameras = [];
+    // 上一模式的扫描统计也一起清：切模式是显式断连，留着「照片 38 张 | 扫描完成」
+    // 会让新模式的空态看起来像刚扫完（1.64.0 加锁定切换时发现）。
+    this.scanStatsText = '';
+    this.scanPhaseText = '';
+    this.scanProgress = 0;
+    this.scanTotal = 0;
     // STA 一进模式就先摸一遍本机网络：用户要拿它跟相机那边连的热点对比，
     // 等点了「搜索」才出现太晚。
     if (mode === CameraLinkMode.STA) {
       this.refreshNetworkSnapshot().catch((_e: Error) => { /* 快照失败不影响主流程 */ });
     }
+  }
+
+  /**
+   * 记一条无线失败结论。
+   *
+   * 失败后不能再占着「进行中」的进度位，否则界面会把一句已经结束的文案当成
+   * 还在跑；结论留在 `wirelessFailed`，等下一次尝试或切模式时清掉。
+   */
+  private failWireless(message: string): void {
+    this.wirelessFailed = message;
+    this.wirelessStage = '';
   }
 
   /**
@@ -2085,24 +2193,55 @@ export class CameraService {
     }
   }
 
-  /** 无线两模式的搜索：已配对就直接走全流程，未配对先扫出来让用户点。 */
+  /**
+   * 无线两模式的搜索。
+   *
+   * AP 必须走「配对 → 相机热点」，没有身份就先扫蓝牙；
+   * STA 的相机已经在手机所在的网络里，**先走网络发现**——没配对也能用，
+   * 这也是两种模式在入口上最直观的区别。配对过的话先借蓝牙唤一下相机，
+   * 醒来仍然走网络发现。
+   */
   private async searchWireless(): Promise<void> {
     if (this.connected && this.wireless) return;
+    this.wirelessFailed = '';
     const store = BleIdentityStore.getInstance();
-    if (store.hasIdentity() && store.deviceId.length > 0) {
-      if (this.linkMode === CameraLinkMode.AP) {
+    const paired = store.hasIdentity() && store.deviceId.length > 0;
+    if (this.linkMode === CameraLinkMode.AP) {
+      if (paired) {
         await this.connectWirelessNow();
       } else {
-        // STA：先连 BLE 待机，再唤醒相机无线并发现
-        if (!await this.connectBle(store.deviceId, store.cameraName, false)) {
-          await this.scanBleCameras();
-          return;
-        }
-        await this.autoLinkWifi('search-sta');
+        await this.scanBleCameras();
       }
       return;
     }
-    await this.scanBleCameras();
+    // STA：蓝牙只做唤醒，不改变「照片走网络」这条主线。
+    // 主要操作就是「自动搜索并连接」：先试记住的地址，再 mDNS / 网段发现，
+    // 命中一台就直接连，不像 AP 那样停下来让用户从列表里挑（STA 的相机
+    // 本来就在手机的网络里，用户点「搜索相机」要的是连上，不是一张列表）。
+    if (paired) {
+      if (await this.connectBle(store.deviceId, store.cameraName, false)) {
+        if (!await this.autoLinkWifi('search-sta')) this.failStaAutoLink();
+        return;
+      }
+      this.log.add('STA: 蓝牙待机没连上，改为网络发现');
+    }
+    if (!await this.autoLinkWifi('search-sta')) this.failStaAutoLink();
+  }
+
+  /**
+   * STA 自动发现失败：留下结论，页面才能显示「没能连上相机 + 原因」。
+   *
+   * 区分「一台都没发现」和「发现了但连不上」——后者给出具体地址，比笼统的
+   * 「没有发现相机」更接近现场。
+   */
+  private failStaAutoLink(): void {
+    const found = this.pickWifiCamera();
+    if (found !== null) {
+      this.failWireless(L10n.tr('camera_status_wifi_connect_failed', found.host));
+      return;
+    }
+    this.failWireless(this.wifiHint !== ''
+      ? this.wifiHint : L10n.tr('camera_status_wifi_not_found'));
   }
 
   private getApJoiner(): WifiApJoiner {
@@ -2129,21 +2268,23 @@ export class CameraService {
     if (this.apJoining || this.wifiAutoConnecting) return false;
     if (!this.handoverAllowed()) {
       this.log.add('交接冷却中：相机刚被推过 Wi-Fi，稍后再试');
-      this.wirelessStage = '相机刚切换过无线，请稍等一会再试';
+      this.failWireless('相机刚切换过无线，请稍等一会再试');
       return false;
     }
     this.apJoining = true;
+    this.wirelessFailed = '';
+    this.wirelessStage = '';
     try {
       // BLE 待机握手（AP 模式要靠它拿 0x2004 凭据）
       if (!this.bleConnected) {
         const store = BleIdentityStore.getInstance();
         if (!store.hasIdentity() || store.deviceId.length === 0) {
-          this.wirelessStage = '还没有配对过相机';
+          this.failWireless('还没有配对过相机');
           return false;
         }
-        this.wirelessStage = '正在连接相机（蓝牙）';
+        this.wirelessStage = '正在唤醒相机';
         if (!await this.connectBle(store.deviceId, store.cameraName, false)) {
-          this.wirelessStage = '蓝牙没连上，请确认相机已开机且在蓝牙范围';
+          this.failWireless('连不上相机，请确认相机已开机且在附近');
           return false;
         }
       }
@@ -2158,7 +2299,7 @@ export class CameraService {
           this.bleLink.stopKeepalive();
         }
       } catch (err) {
-        this.wirelessStage = '唤醒相机无线失败';
+        this.failWireless('唤醒相机无线失败');
         this.log.add(`0x2005 写入失败: ${(err as Error).message}`);
         return false;
       }
@@ -2186,7 +2327,7 @@ export class CameraService {
   private async joinApAndConnect(): Promise<boolean> {
     const creds = this.bleLink === null ? null : this.bleLink.getCredentials();
     if (creds === null) {
-      this.wirelessStage = '没拿到相机热点凭据（相机可能没认这次配对）';
+      this.failWireless('没拿到相机热点凭据（相机可能没认这次配对）');
       this.log.add('AP: 0x2004 凭据为空，放弃');
       return false;
     }
@@ -2194,7 +2335,7 @@ export class CameraService {
     const joiner = this.getApJoiner();
     const outcome: ApJoinOutcome = await joiner.join(creds.ssid, creds.password, creds.security);
     if (!outcome.ok) {
-      this.wirelessStage = outcome.reason;
+      this.failWireless(outcome.reason);
       this.log.add(`AP: 加入相机热点失败 —— ${outcome.reason}`);
       return false;
     }
@@ -2211,14 +2352,14 @@ export class CameraService {
     await this.scanWifiCameras(5000);
     const camera = this.pickWifiCamera();
     if (camera === null) {
-      this.wirelessStage = this.wifiHint !== '' ? this.wifiHint : '没有找到照相机';
+      this.failWireless(this.wifiHint !== '' ? this.wifiHint : '没有找到照相机');
       return false;
     }
     if (await this.connectWifi(camera.host, camera.port, true)) {
       await this.finishAutoLink();
       return this.connected;
     }
-    this.wirelessStage = '连上相机热点，但连不上照相机';
+    this.failWireless('连上相机热点，但连不上照相机');
     return false;
   }
 
@@ -2449,6 +2590,7 @@ export class CameraService {
       return false;
     }
     this.wifiAutoConnecting = true;
+    this.wirelessFailed = '';
     try {
       const nets = await collectLocalNetworks();
       this.networkSummary = nets.summary;
@@ -2490,6 +2632,8 @@ export class CameraService {
   private async finishAutoLink(): Promise<void> {
     this.wifiAutoReconnectArmed = true;
     this.wifiHint = '';
+    this.wirelessFailed = '';
+    this.wirelessStage = '';
     if (this.pairingRequired) {
       await this.completeWifiPairing();
       return;
@@ -4156,6 +4300,15 @@ export class CameraService {
   }
 
   async disconnect(): Promise<void> {
+    this.disconnecting = true;
+    try {
+      await this.disconnectInternal();
+    } finally {
+      this.disconnecting = false;
+    }
+  }
+
+  private async disconnectInternal(): Promise<void> {
     // 用户主动断开：撤掉自动重连，避免刚断开就被自己接回来。
     const wasWireless = this.wireless;
     if (wasWireless) {
@@ -4176,6 +4329,15 @@ export class CameraService {
     this.connected = false;
     this.usable = false;
     this.lastScanError = '';
+    // 上一轮的进度、统计、失败结论都属于「已结束的那次连接」：断开后还挂着
+    // 「正在连接相机热点」或「照片 38 张 | 扫描完成」，看起来像没断开。
+    this.wirelessStage = '';
+    this.wirelessFailed = '';
+    this.bleHint = '';
+    this.scanStatsText = '';
+    this.scanPhaseText = '';
+    this.scanProgress = 0;
+    this.scanTotal = 0;
     this.cameraName = '';
     this.cameraIdentity = '';
     this.deviceManufacturer = '';

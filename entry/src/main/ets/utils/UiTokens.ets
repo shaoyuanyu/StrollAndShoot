@@ -20,6 +20,8 @@ export class FontSize {
   static readonly CardTitle: number = 16;
   /** 正文、值、大号操作按钮。 */
   static readonly Body: number = 15;
+  /** 半模态 / 长文正文：比 Body 小一档，长句更容易排成一行。 */
+  static readonly Reading: number = 14;
   /** 分组标题、辅助操作。 */
   static readonly Section: number = 13;
   /** 副标题、说明、小号胶囊按钮。 */
@@ -86,6 +88,7 @@ export function pillRadius(height: number): number {
  *
  * 只加在 24vp 圆角的页面卡片上；卡内的分隔线、行、控件不要再叠。
  */
+
 export const CardShadow: ShadowOptions = {
   radius: 18,
   color: '#0F000000',

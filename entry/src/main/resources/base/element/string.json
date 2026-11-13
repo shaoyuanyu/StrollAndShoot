@@ -133,20 +133,12 @@
       "value": "蓝牙 + Wi-Fi"
     },
     {
-      "name": "camera_conn_ble",
-      "value": "蓝牙"
-    },
-    {
       "name": "camera_conn_connected",
       "value": "已连接"
     },
     {
-      "name": "camera_conn_open_wifi",
-      "value": "查看照片"
-    },
-    {
       "name": "camera_conn_open_wifi_hint",
-      "value": "相机会切到自己的 Wi-Fi 热点传照片，这期间蓝牙会断开；退出后相机会自动回到蓝牙待机。"
+      "value": "相机会切到自己的 Wi-Fi 热点传照片，配对连接会暂停一次；退出后相机自动回到待机。"
     },
     {
       "name": "camera_conn_disconnected",
@@ -189,10 +181,6 @@
       "value": "连接"
     },
     {
-      "name": "camera_wifi_scan_nearby",
-      "value": "搜索附近的相机"
-    },
-    {
       "name": "camera_ble_title",
       "value": "蓝牙连接"
     },
@@ -217,10 +205,6 @@
       "value": "已配对 · 序列号 %1$s"
     },
     {
-      "name": "camera_ble_reconnecting",
-      "value": "重连中…"
-    },
-    {
       "name": "camera_ble_connected_name",
       "value": "已连接 · %1$s"
     },
@@ -231,10 +215,6 @@
     {
       "name": "camera_ble_cancel",
       "value": "取消连接"
-    },
-    {
-      "name": "camera_ble_disconnect",
-      "value": "断开蓝牙"
     },
     {
       "name": "camera_ble_services",
@@ -370,7 +350,7 @@
     },
     {
       "name": "camera_empty_hint",
-      "value": "用 USB 数据线连接相机，并选择 PTP 传输模式\n然后点右上角的「搜索相机」"
+      "value": "用 USB 数据线连接相机，并选择 PTP 传输模式\n然后点抽屉里的「搜索相机」"
     },
     {
       "name": "camera_info_brand",
@@ -421,6 +401,10 @@
       "value": "忽略缓存，重新读取所有文件的元数据与缩略图"
     },
     {
+      "name": "camera_action_quick_scan_desc",
+      "value": "只读取新增或有变化的照片"
+    },
+    {
       "name": "camera_action_disconnect",
       "value": "断开连接"
     },
@@ -435,6 +419,106 @@
     {
       "name": "camera_main_find",
       "value": "搜索相机"
+    },
+    {
+      "name": "camera_status_switching",
+      "value": "正在切换连接模式…"
+    },
+    {
+      "name": "camera_status_disconnecting",
+      "value": "正在断开连接…"
+    },
+    {
+      "name": "camera_status_pairing",
+      "value": "正在配对相机…"
+    },
+    {
+      "name": "camera_status_linking",
+      "value": "正在连接相机…"
+    },
+    {
+      "name": "camera_status_relinking",
+      "value": "正在重新连接相机…"
+    },
+    {
+      "name": "camera_status_linking_ap",
+      "value": "正在连接相机热点…"
+    },
+    {
+      "name": "camera_status_linking_sta",
+      "value": "正在连接相机网络…"
+    },
+    {
+      "name": "camera_status_wifi_failed",
+      "value": "没能连上相机"
+    },
+    {
+      "name": "camera_status_pairing_wait",
+      "value": "等待确认配对"
+    },
+    {
+      "name": "camera_status_pair_searching",
+      "value": "正在搜索相机…"
+    },
+    {
+      "name": "camera_status_ble_pair_failed_detail",
+      "value": "配对未完成，请让相机停在\n「开始配对」页后重试"
+    },
+    {
+      "name": "camera_state_paired",
+      "value": "已配对"
+    },
+    {
+      "name": "camera_ble_reconnecting_full",
+      "value": "正在重新连接蓝牙相机…"
+    },
+    {
+      "name": "camera_action_switching",
+      "value": "切换中"
+    },
+    {
+      "name": "camera_action_disconnecting",
+      "value": "断开中"
+    },
+    {
+      "name": "camera_action_connecting",
+      "value": "连接中"
+    },
+    {
+      "name": "camera_action_searching",
+      "value": "搜索中"
+    },
+    {
+      "name": "camera_action_connect_camera",
+      "value": "连接相机"
+    },
+    {
+      "name": "camera_action_retry",
+      "value": "重试"
+    },
+    {
+      "name": "camera_detail_switching",
+      "value": "先断开当前连接，再切换"
+    },
+    {
+      "name": "camera_detail_pairing_hint",
+      "value": "配对最长约 30 秒，请让相机停在「开始配对」页"
+    },
+    {
+      "name": "camera_detail_pick_to_pair",
+      "value": "选择要配对的相机"
+    },
+    {
+      "name": "camera_status_wifi_not_found",
+      "value": "同一网络里没有发现相机"
+    },
+    {
+      "name": "camera_sta_manual_hide",
+      "value": "收起"
+    },
+    {
+      "name": "camera_sta_manual_show",
+      "value": "手动 IP"
     },
     {
       "name": "gallery_scanning_title",
@@ -654,7 +738,7 @@
     },
     {
       "name": "settings_mock_camera_desc",
-      "value": "开启后到「相机」页点右上角的「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片"
+      "value": "开启后到「相机」页点「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片"
     },
     {
       "name": "settings_disable_glass",
@@ -1225,80 +1309,104 @@
       "value": "Wi-Fi STA"
     },
     {
-      "name": "camera_mode_desc_usb",
-      "value": "数据线直连，传输最快、最稳。"
+      "name": "camera_mode_locked_hint",
+      "value": "快速点击两次进行切换"
     },
     {
-      "name": "camera_mode_desc_ble",
-      "value": "只做配对、校时与位置注入，不传照片。"
+      "name": "camera_mode_switch_title",
+      "value": "切换连接模式"
     },
     {
-      "name": "camera_mode_desc_ap",
-      "value": "相机自己开热点，手机连上去就能传照片，不用输密码。"
+      "name": "camera_mode_switch_message",
+      "value": "切换连接模式会导致当前连接关闭，且需要在相机设置中进行操作"
     },
     {
-      "name": "camera_mode_desc_sta",
-      "value": "相机加入手机所在的 Wi-Fi，手机可以保持联网。"
+      "name": "camera_mode_switch_confirm",
+      "value": "继续切换"
     },
     {
       "name": "camera_guide_usb_1",
-      "value": "用数据线把相机接到手机"
+      "value": "数据线接手机，USB 传输设为 PTP。"
     },
     {
       "name": "camera_guide_usb_2",
-      "value": "相机上把 USB 传输模式设为 PTP"
-    },
-    {
-      "name": "camera_guide_usb_3",
-      "value": "点右上角「搜索相机」"
+      "value": "点「搜索相机」。"
     },
     {
       "name": "camera_guide_ble_1",
-      "value": "相机「网络菜单 → 连接至智能设备 → 配对（Bluetooth）」开始配对"
+      "value": "连接至智能设备 → 配对 → 开始配对。"
     },
     {
       "name": "camera_guide_ble_2",
-      "value": "点右上角「搜索相机」"
-    },
-    {
-      "name": "camera_guide_ble_3",
-      "value": "配对完成后相机会出现在这里"
+      "value": "点「搜索相机」选相机，等配对完成。"
     },
     {
       "name": "camera_guide_ap_1",
-      "value": "相机「网络菜单 → 连接至智能设备 → Wi-Fi 连接（AP mode）」"
+      "value": "连接至智能设备 → Wi-Fi 连接。"
     },
     {
       "name": "camera_guide_ap_2",
-      "value": "点「建立 Wi-Fi 连接」，让相机停在这个画面"
-    },
-    {
-      "name": "camera_guide_ap_3",
-      "value": "点右上角「搜索相机」，手机会自动连上相机热点"
-    },
-    {
-      "name": "camera_guide_ap_note",
-      "value": "退出照片浏览后，相机会自己回到蓝牙待机。"
-    },
-    {
-      "name": "camera_guide_sta_1",
-      "value": "手机先连上要用的 Wi-Fi"
+      "value": "点「搜索相机」配对，再点连接相机。"
     },
     {
       "name": "camera_guide_sta_2",
-      "value": "相机「网络菜单 → 连接至智能设备 → Wi-Fi 连接（STA mode）」，创建配置文件并加入同一网络"
+      "value": "连接至智能设备 → Wi-Fi 连接。"
     },
     {
-      "name": "camera_guide_sta_3",
-      "value": "点「搜索附近的相机」，或直接填相机 IP"
+      "name": "camera_guide_ap_screen",
+      "value": "进入「建立连接」，停在 Wi-Fi 画面。"
     },
     {
-      "name": "camera_guide_sta_note",
-      "value": "STA 模式下 App 无法让相机退回蓝牙，需要时得在相机菜单里退出。"
+      "name": "camera_guide_sta_screen",
+      "value": "创建配置文件，加入同一网络。"
     },
     {
-      "name": "camera_state_ble_ready",
-      "value": "蓝牙已就绪"
+      "name": "camera_guide_steps",
+      "value": "连接步骤"
+    },
+    {
+      "name": "camera_guide_view_steps",
+      "value": "查看步骤"
+    },
+    {
+      "name": "camera_new",
+      "value": "连接新相机"
+    },
+    {
+      "name": "camera_switch_need_disconnect",
+      "value": "请先断开当前相机"
+    },
+    {
+      "name": "camera_switch_busy",
+      "value": "正在处理相机连接，请稍候"
+    },
+    {
+      "name": "camera_guide_summary_usb",
+      "value": "用数据线连接相机，并把 USB 传输设为 PTP。"
+    },
+    {
+      "name": "camera_guide_summary_ble",
+      "value": "先在相机上开始配对，再用手机搜索相机。"
+    },
+    {
+      "name": "camera_guide_summary_ap",
+      "value": "先在相机上开启 Wi-Fi，再用手机搜索并配对。"
+    },
+    {
+      "name": "camera_guide_summary_sta",
+      "value": "让相机和手机连上同一个 Wi-Fi，再搜索相机。"
+    },
+    {
+      "name": "camera_guide_summary_ble_ready",
+      "value": "点「连接相机」重新连接。"
+    },
+    {
+      "name": "camera_guide_summary_ap_ready",
+      "value": "点「连接相机」加入相机热点。"
+    },
+    {
+      "name": "camera_guide_summary_sta_ready",
+      "value": "点「连接相机」搜索并连接。"
     },
     {
       "name": "camera_state_ble_paired",
@@ -1309,16 +1417,16 @@
       "value": "相机 Wi-Fi %1$s:%2$s"
     },
     {
-      "name": "camera_guide_ble_note",
-      "value": "蓝牙链路不传照片，要取照片请切到「Wi-Fi AP」。"
-    },
-    {
       "name": "camera_hero_serial",
       "value": "序列号 %1$s"
     },
     {
-      "name": "camera_guide_title",
-      "value": "连接步骤"
+      "name": "camera_guide_on_camera",
+      "value": "在相机上，"
+    },
+    {
+      "name": "camera_guide_on_phone",
+      "value": "在手机上，"
     },
     {
       "name": "camera_group_device",
@@ -1339,6 +1447,18 @@
     {
       "name": "settings_mock_model_unknown",
       "value": "未知型号"
+    },
+    {
+      "name": "settings_default_standee",
+      "value": "默认相机立牌（看板）"
+    },
+    {
+      "name": "settings_default_standee_hint",
+      "value": "添加新相机时显示"
+    },
+    {
+      "name": "settings_standee_none",
+      "value": "不显示"
     }
   ]
 }
