@@ -102,7 +102,7 @@
     },
     {
       "name": "camera_status_wifi_connecting",
-      "value": "正在連線 Wi-Fi 相機 %1$s..."
+      "value": "正在連線 Wi-Fi 相機 %1$s…"
     },
     {
       "name": "camera_status_wifi_connect_failed",
@@ -138,7 +138,7 @@
     },
     {
       "name": "camera_conn_open_wifi_hint",
-      "value": "相機會切到自己的 Wi-Fi 熱點傳照片，配對連線會暫停一次；退出後相機自動回到待機。"
+      "value": "切到熱點時藍牙會斷開，退出後相機自動回到待機。"
     },
     {
       "name": "camera_conn_disconnected",
@@ -186,11 +186,11 @@
     },
     {
       "name": "camera_ble_scanning",
-      "value": "正在搜尋藍牙相機..."
+      "value": "正在搜尋藍牙相機…"
     },
     {
       "name": "camera_ble_connecting",
-      "value": "正在連線藍牙相機..."
+      "value": "正在連線藍牙相機…"
     },
     {
       "name": "camera_ble_paired",
@@ -205,8 +205,16 @@
       "value": "配對失敗"
     },
     {
+      "name": "camera_ble_hint_repair",
+      "value": "若一直配對不上，可能是相機裡還記著這台手機：到相機選單刪除已配對的裝置後重新開始配對。"
+    },
+    {
       "name": "camera_ble_cancel",
       "value": "取消連線"
+    },
+    {
+      "name": "camera_ble_cancelled",
+      "value": "已取消連線"
     },
     {
       "name": "camera_ble_services",
@@ -226,7 +234,7 @@
     },
     {
       "name": "camera_wifi_scanning",
-      "value": "正在搜尋附近的相機..."
+      "value": "正在搜尋附近的相機…"
     },
     {
       "name": "camera_wifi_disconnect",
@@ -242,11 +250,11 @@
     },
     {
       "name": "camera_status_wifi_pairing_confirm",
-      "value": "正在完成配對..."
+      "value": "正在完成配對…"
     },
     {
       "name": "camera_status_wifi_pairing_done",
-      "value": "配對完成，正在重新連線..."
+      "value": "配對完成，正在重新連線…"
     },
     {
       "name": "camera_wifi_pairing_title",
@@ -254,7 +262,7 @@
     },
     {
       "name": "camera_wifi_pairing_hint",
-      "value": "點「完成配對」後相機會儲存這台手機並重新啟動 Wi-Fi，app 會自動重新連線，不需要再點一次。若相機上顯示同一組數字，可順便核對。"
+      "value": "點「完成配對」後相機會儲存這台手機並重新啟動 Wi-Fi，之後會自動重新連線，不需要再點一次。若相機上顯示同一組數字，可順便核對。"
     },
     {
       "name": "camera_wifi_pairing_confirm",
@@ -266,7 +274,7 @@
     },
     {
       "name": "camera_status_wifi_reconnecting",
-      "value": "正在重新連線相機（第 %1$d 次）..."
+      "value": "正在重新連線相機（第 %1$d 次）…"
     },
     {
       "name": "camera_status_choose_cache",
@@ -318,7 +326,7 @@
     },
     {
       "name": "camera_phase_loading_photos",
-      "value": "正在載入照片..."
+      "value": "正在載入照片…"
     },
     {
       "name": "camera_phase_thumbnails",
@@ -494,7 +502,11 @@
     },
     {
       "name": "camera_detail_pairing_hint",
-      "value": "配對最長約 30 秒，請讓相機停在「開始配對」頁"
+      "value": "請讓相機停在「開始配對」頁"
+    },
+    {
+      "name": "camera_detail_ble_asleep",
+      "value": "相機可能已休眠，按快門喚醒"
     },
     {
       "name": "camera_detail_pick_to_pair",
@@ -1173,6 +1185,10 @@
       "value": "USB 通訊失敗：請檢查連接線或重新插拔"
     },
     {
+      "name": "camera_status_usb_lost",
+      "value": "USB 相機已中斷連線"
+    },
+    {
       "name": "camera_status_ptp_error",
       "value": "相機傳回錯誤 %1$s"
     },
@@ -1342,7 +1358,7 @@
     },
     {
       "name": "camera_guide_ble_2",
-      "value": "點「搜尋相機」選相機，等配對完成。"
+      "value": "點「搜尋相機」選相機，等配對完成（最長約 30 秒）。"
     },
     {
       "name": "camera_guide_ap_1",
@@ -1378,7 +1394,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "每種連線方式能做的事不一樣，勾選表示可用。"
+      "value": "勾選表示可用；◐ 表示部分支援，缺什麼見下方。"
     },
     {
       "name": "camera_guide_view_steps",
@@ -1485,24 +1501,64 @@
       "value": "瀏覽與匯入照片"
     },
     {
+      "name": "camera_guide_feature_exif",
+      "value": "匯入時寫入 GPS"
+    },
+    {
       "name": "camera_guide_feature_clock",
-      "value": "校時與位置注入"
+      "value": "對時與位置注入"
     },
     {
-      "name": "camera_guide_feature_pair",
-      "value": "首次需藍牙配對"
-    },
-    {
-      "name": "camera_guide_feature_park",
-      "value": "相機停在連線頁"
-    },
-    {
-      "name": "camera_guide_feature_same_net",
-      "value": "相機在同一網路"
+      "name": "camera_guide_feature_standby",
+      "value": "背景保持連線"
     },
     {
       "name": "camera_guide_feature_online",
-      "value": "手機上網不中斷"
+      "value": "手機照常上網"
+    },
+    {
+      "name": "camera_guide_modes_note",
+      "value": "藍牙只做待機，不傳照片；照片只走 USB 與 Wi-Fi。"
+    },
+    {
+      "name": "camera_guide_official_title",
+      "value": "官方 SnapBridge 有、我們還沒有"
+    },
+    {
+      "name": "camera_guide_official_1",
+      "value": "藍牙遙控：快門、錄影、對焦、間隔／延時拍攝"
+    },
+    {
+      "name": "camera_guide_official_2",
+      "value": "即時取景遙控：在手機上看畫面、按快門、錄影"
+    },
+    {
+      "name": "camera_guide_official_3",
+      "value": "拍攝時自動下載 200 萬像素副本（走藍牙）"
+    },
+    {
+      "name": "camera_guide_official_4",
+      "value": "遙控播放：翻頁、放大相機照片"
+    },
+    {
+      "name": "camera_guide_official_5",
+      "value": "韌體下載並傳給相機"
+    },
+    {
+      "name": "camera_guide_official_6",
+      "value": "相機設定庫下發（簡易拍攝設定）"
+    },
+    {
+      "name": "camera_guide_partial_title",
+      "value": "部分支援"
+    },
+    {
+      "name": "camera_guide_partial_1",
+      "value": "對時與位置注入：位置寫進了相機，但衛星數固定為 0，照片端效果還沒真機驗收。"
+    },
+    {
+      "name": "camera_guide_partial_2",
+      "value": "背景保持連線：只有藍牙有長時任務，Wi-Fi AP / STA 退回背景不保證。"
     },
     {
       "name": "camera_title_with_serial",

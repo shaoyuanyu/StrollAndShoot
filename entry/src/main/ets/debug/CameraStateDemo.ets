@@ -1,5 +1,6 @@
 import { CameraService } from '../services/CameraService';
 import { CameraLinkMode } from '../model/CameraLinkMode';
+import { L10n } from '../utils/L10n';
 import type { BleCameraDevice } from '../services/BleScanner';
 
 /**
@@ -25,6 +26,7 @@ export class CameraStateDemo {
   private static readonly AP_HOST: string = '192.168.1.1';
   private static readonly STA_HOST: string = '192.168.1.5';
   private static readonly PHOTO_COUNT: number = 38;
+  private static readonly PAIR_CODE: string = '483921';
 
   /** 预演一个命名状态；名字见 `apply` 的 switch。 */
   static apply(name: string): void {
@@ -38,7 +40,7 @@ export class CameraStateDemo {
       case 'usb_searching':
         s.linkMode = CameraLinkMode.USB;
         s.scanning = true;
-        s.statusText = '正在搜索 USB 相机…';
+        s.statusText = L10n.tr('camera_status_searching');
         break;
       case 'usb_connected':
         s.linkMode = CameraLinkMode.USB;
@@ -48,8 +50,20 @@ export class CameraStateDemo {
         break;
       case 'usb_failed':
         s.linkMode = CameraLinkMode.USB;
-        s.lastScanError = '未检测到 USB 相机';
-        s.statusText = '未检测到 USB 相机';
+        s.lastScanError = L10n.tr('camera_status_no_camera');
+        s.statusText = s.lastScanError;
+        break;
+      case 'usb_storage_denied':
+        // 会话在、设备信息读得到，只有取存储 / 元数据被相机拒了（真实机型上
+        // 卡没插好 / 相机停在回放状态就是这样）。用来验收状态头的「读卡失败」
+        // 形态：红灯 + 结论 + 下一步 + 重试，且不再另起红字。
+        s.linkMode = CameraLinkMode.USB;
+        CameraStateDemo.connectedDevice(s, false);
+        s.photoCount = 0;
+        s.usbVidPid = '04B0:044C';
+        s.usbSerialNumber = CameraStateDemo.SERIAL;
+        s.lastScanError = L10n.tr('camera_status_access_denied');
+        s.statusText = s.lastScanError;
         break;
       case 'usb_loading':
         s.linkMode = CameraLinkMode.USB;
@@ -60,8 +74,8 @@ export class CameraStateDemo {
         s.photoCount = 0;
         s.scanTotal = CameraStateDemo.PHOTO_COUNT;
         s.scanProgress = 17;
-        s.scanPhaseText = '正在读取缩略图…';
-        s.statusText = '正在获取照片列表...';
+        s.scanPhaseText = L10n.tr('camera_phase_loading_thumbnails');
+        s.statusText = L10n.tr('camera_status_fetching_list');
         break;
 
       // ---- BLE ----
@@ -91,6 +105,14 @@ export class CameraStateDemo {
         s.linkMode = CameraLinkMode.BLE;
         s.bleCameraName = CameraStateDemo.BLE_NAME;
         s.bleReconnecting = true;
+        break;
+      case 'ble_asleep':
+        // 相机进待机、断链之后连广播都没有：状态头要说「唤醒相机」，
+        // 而不是一直「正在重新连接相机…」（1.66.3）。
+        s.linkMode = CameraLinkMode.BLE;
+        s.bleCameraName = CameraStateDemo.BLE_NAME;
+        s.bleReconnecting = true;
+        s.bleAsleep = true;
         break;
 
       // ---- Wi-Fi AP ----
@@ -133,8 +155,8 @@ export class CameraStateDemo {
         s.wifiHost = CameraStateDemo.AP_HOST;
         s.photoCount = 0;
         s.pairingRequired = true;
-        s.pairingCode = '483921';
-        s.statusText = '相机等待配对';
+        s.pairingCode = CameraStateDemo.PAIR_CODE;
+        s.statusText = L10n.tr('camera_status_wifi_pairing', s.pairingCode);
         break;
       case 'ap_failed':
         s.linkMode = CameraLinkMode.AP;
@@ -261,7 +283,7 @@ export class CameraStateDemo {
     s.deviceSerialNumber = CameraStateDemo.SERIAL;
     s.deviceVersion = '2.00';
     s.photoCount = CameraStateDemo.PHOTO_COUNT;
-    s.statusText = '已连接';
+    s.statusText = L10n.tr('camera_status_connected');
   }
 
   /** BLE 配对落定：链路在、序列号在。 */

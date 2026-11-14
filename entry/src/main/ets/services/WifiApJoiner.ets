@@ -136,7 +136,7 @@ export class WifiApJoiner {
       if (this.cancelled) {
         return { ok: false, host: '', reason: '已取消' };
       }
-      if (this.isLinkedTo(ssid)) {
+      if (await this.isLinkedTo(ssid)) {
         const hosts = this.candidateHosts();
         this.onLog(`已连上相机热点「${ssid}」，候选地址 ${hosts.join(' / ')}`);
         return { ok: true, host: hosts.length > 0 ? hosts[0] : '', reason: '' };
@@ -155,11 +155,19 @@ export class WifiApJoiner {
     return { ok: false, host: '', reason: '连接相机热点超时' };
   }
 
-  private isLinkedTo(ssid: string): boolean {
+  /**
+   * 是否已经挂到相机热点上。
+   *
+   * **不要用同步版**（1.66.15）：`getLinkedInfoSync()` / `isConnected()` 都是同步
+   * napi，绑在 JS 线程上做 binder 往返；这个函数在 `pollJoin()` 里被每 400ms
+   * 调一次，热点还在关联时每一次都可能等上几百毫秒，全算在主线程头上。
+   * `getLinkedInfo()` 是 Promise 版，失败（没连上）就当未上链。
+   */
+  private async isLinkedTo(ssid: string): Promise<boolean> {
     try {
-      if (!wifiManager.isConnected()) return false;
-      const linked = wifiManager.getLinkedInfoSync().ssid ?? '';
-      return linked === ssid || (linked.length > 0 && linked.includes(ssid));
+      const linked: wifiManager.WifiLinkedInfo = await wifiManager.getLinkedInfo();
+      const name = linked.ssid ?? '';
+      return name === ssid || (name.length > 0 && name.includes(ssid));
     } catch (_e) {
       return false;
     }
@@ -203,8 +211,8 @@ export class WifiApJoiner {
   }
 
   /** 当前是否就挂在相机热点上。 */
-  isOnCameraAp(): boolean {
-    return this.joinedSsid !== '' && this.isLinkedTo(this.joinedSsid);
+  async isOnCameraAp(): Promise<boolean> {
+    return this.joinedSsid !== '' && await this.isLinkedTo(this.joinedSsid);
   }
 
   /**

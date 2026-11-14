@@ -1,5 +1,6 @@
 import { PersistenceV2 } from '@kit.ArkUI';
 import { CameraModelStore } from '../model/CameraModelStore';
+import { SettingsStore } from '../model/SettingsStore';
 import { BleIdentityStore } from './BleIdentityStore';
 import { cameraSerialFromBleName } from '../utils/CameraStandee';
 
@@ -105,17 +106,153 @@ export class SavedCameraStore {
     }
 
     // 当前选择不跨进程保留：重新启动时要求默认显示上一次连接的相机。
-    if (this.lastConnectedKey !== '' && this.find(this.lastConnectedKey) !== null) {
-      this.activate(this.lastConnectedKey);
+    // 但**模拟相机的记录不能顶替真机**（1.66.1）：它一个配对身份都没有，选中它
+    // 等于把 `BleIdentityStore` 清空，蓝牙页上「已配对」就变成「未连接」。
+    // 模拟相机只有在调试开关打开、且没有真机记录时才是默认相机。
+    this.normalizeMockRecords();
+    const mockOn = SettingsStore.getInstance().mockCameraEnabled;
+    const last = this.lastConnectedKey !== '' ? this.find(this.lastConnectedKey) : null;
+    const pick = last !== null && (last.isMock !== true || mockOn)
+      ? last : this.defaultRecord(mockOn);
+    if (pick !== null) {
+      this.lastConnectedKey = pick.key;
+      this.activate(pick.key);
       return;
     }
-    const sorted = this.sorted();
-    if (sorted.length > 0) {
-      this.lastConnectedKey = sorted[0].key;
-      this.activate(sorted[0].key);
-      return;
-    }
+    this.lastConnectedKey = '';
     this.currentKey = '';
+  }
+
+  /** 冷启动默认相机：真机优先，没有真机且模拟相机开着时才退回模拟记录。 */
+  private defaultRecord(mockOn: boolean): SavedCamera | null {
+    const real = this.latestReal();
+    if (real !== null) return real;
+    return mockOn ? this.latestMock() : null;
+  }
+
+  /**
+   * 1.66.1：把模拟相机的记录从真机的身份空间里摘出来。
+   *
+   * 1.66.0 及以前 `rememberMock()` 用 `CameraModelStore.serial` 当 key，而那个
+   * 值常常是上一台真机留下的（`bleCameraName` 断开时不清，尾段又被优先采用）。
+   * 于是模拟相机的记录直接顶掉了真机那条：下次冷启动 `activate()` 看到
+   * `isMock` 就清空 `BleIdentityStore`，相机页从「已配对」退回「未连接」，
+   * 再连只能重新配对——而相机那边还记着这台手机，首配会被
+   * `Remote device has an error` 秒拒。
+   *
+   * 这里补一次收尾：纯数字序列号的模拟记录不可能有配对身份，直接丢掉；
+   * 其余模拟记录改用 `mock:` 前缀的 key，从此不可能和真机序列号撞上。
+   */
+  private normalizeMockRecords(): void {
+    let changed = false;
+    let cur = this.currentKey;
+    let last = this.lastConnectedKey;
+    // 模拟开关关着的时候，模拟记录没有存在的理由：它只会让「已配对相机」里躺着
+    // 一台根本连不上的假相机，冷启动还会把活动身份清掉。
+    const mockOn = SettingsStore.getInstance().mockCameraEnabled;
+    const next: SavedCamera[] = [];
+    for (const cam of this.cameras) {
+      if (cam.isMock !== true) {
+        next.push(cam);
+        continue;
+      }
+      if (!mockOn || /^[0-9]+$/.test(cam.serial)) {
+        changed = true;
+        if (cur === cam.key) cur = '';
+        if (last === cam.key) last = '';
+        continue;
+      }
+      const key = this.mockKey(cam.modelKey, cam.cameraName);
+      const normalized: SavedCamera = {
+        key,
+        deviceId: cam.deviceId,
+        cameraName: cam.cameraName,
+        identityDevice: cam.identityDevice,
+        identityNonce: cam.identityNonce,
+        serial: cam.serial,
+        identitySerial: cam.identitySerial,
+        modelKey: cam.modelKey,
+        lastConnectedAt: cam.lastConnectedAt,
+        isMock: true
+      };
+      if (key !== cam.key) {
+        changed = true;
+        if (cur === cam.key) cur = key;
+        if (last === cam.key) last = key;
+      }
+      // 旧记录可能同一条出现过两种 key（序列号写过、广播名写过），归一之后
+      // 会撞到一起：留最近连接的那条。
+      let dup = -1;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i].isMock === true && next[i].key === key) {
+          dup = i;
+          break;
+        }
+      }
+      if (dup < 0) {
+        next.push(normalized);
+        continue;
+      }
+      changed = true;
+      if (normalized.lastConnectedAt >= next[dup].lastConnectedAt) next[dup] = normalized;
+    }
+    if (!changed) return;
+    this.cameras = next;
+    this.currentKey = cur;
+    this.lastConnectedKey = last;
+  }
+
+  /** 模拟相机记录的 key：永远带 `mock:` 前缀，不可能和真机序列号撞。 */
+  private mockKey(modelKey: string, name: string): string {
+    const tail = modelKey !== '' ? modelKey : name;
+    return tail !== '' ? `mock:${tail}` : 'mock:unknown';
+  }
+
+  private latestMock(): SavedCamera | null {
+    const sorted = this.sorted();
+    for (const cam of sorted) {
+      if (cam.isMock === true) return cam;
+    }
+    return null;
+  }
+
+  /**
+   * 最近连接过的一台真机（模拟记录一律跳过）。
+   *
+   * 蓝牙 / 无线这条线只认真机：模拟相机没有蓝牙身份，也不该出现在
+   * 「已配对」的按钮文案里。
+   */
+  latestReal(): SavedCamera | null {
+    const sorted = this.sorted();
+    for (const cam of sorted) {
+      if (cam.isMock !== true) return cam;
+    }
+    return null;
+  }
+
+  /**
+   * 当前可用的真机记录。
+   *
+   * 当前选中的若是模拟相机（或记录已被删掉），退回最近连接过的那台真机；
+   * 用户在「已配对相机」里点了「连接新相机」（`currentKey` 为空）时返回 null，
+   * 不要自作主张把旧相机接回来。
+   */
+  pickReal(): SavedCamera | null {
+    if (this.currentKey === '') return null;
+    const cur = this.current();
+    if (cur !== null && cur.isMock !== true) return cur;
+    return this.latestReal();
+  }
+
+  /** 按序列号 / 广播名找一台已保存的真机（蓝牙扫描命中时用）。 */
+  findReal(serial: string, name: string): SavedCamera | null {
+    for (const cam of this.cameras) {
+      if (cam.isMock === true) continue;
+      if (serial !== '' && cam.serial === serial) return cam;
+      if (name !== '' && cam.cameraName === name) return cam;
+      if (serial !== '' && cameraSerialFromBleName(cam.cameraName) === serial) return cam;
+    }
+    return null;
   }
 
   /** 按上次连接时间倒序，菜单直接用。 */
@@ -176,10 +313,14 @@ export class SavedCameraStore {
    * 不会被它触发——重启之后标题、立牌、当前相机全都退回「相机」，每轮测试都得
    * 重新搜一次，和真机流程对不上。这里给它建一条普通记录（`isMock` 标记），
    * 于是一次配对之后重启也能回到同一台。
+   *
+   * **key 必须带 `mock:` 前缀，序列号只能用模拟相机自己上报的**（1.66.1）：
+   * 以前拿 `CameraModelStore.serial` 当 key，而那个值常是上一台真机的，
+   * 模拟相机因此顶掉了真机记录，还顺手清空了蓝牙身份。
    */
   rememberMock(modelKey: string, serial: string, name: string): SavedCamera | null {
-    const key = serial !== '' ? serial : name;
-    if (key === '') return null;
+    if (modelKey === '' && name === '') return null;
+    const key = this.mockKey(modelKey, name);
     const rec: SavedCamera = {
       key,
       deviceId: '',
@@ -192,7 +333,14 @@ export class SavedCameraStore {
       isMock: true
     };
     const next = this.cameras.slice();
-    const idx = this.indexOf(rec);
+    let idx = -1;
+    for (let i = 0; i < next.length; i++) {
+      // 只在模拟记录里找同一条：按序列号去匹配真机记录，正是当初丢身份的原因。
+      if (next[i].isMock === true && next[i].key === key) {
+        idx = i;
+        break;
+      }
+    }
     if (idx >= 0) {
       next[idx] = rec;
     } else {
@@ -220,8 +368,15 @@ export class SavedCameraStore {
     if (this.currentKey !== key) return true;
     this.currentKey = '';
     BleIdentityStore.getInstance().clear();
-    const sorted = this.sorted();
-    if (sorted.length > 0) this.activate(sorted[0].key);
+    // 回退目标同样真机优先：删掉一台真机之后不该落到模拟相机上。
+    const fallback = this.defaultRecord(SettingsStore.getInstance().mockCameraEnabled);
+    if (fallback !== null) {
+      this.activate(fallback.key);
+    } else {
+      // 一台都不剩了：展示缓存也得一起清掉，否则标题栏会继续挂着刚删掉的那台
+      // 相机的型号与序列号（1.66.1）。
+      CameraModelStore.getInstance().clear();
+    }
     return true;
   }
 
@@ -271,7 +426,7 @@ export class SavedCameraStore {
       return;
     }
     const next = this.cameras.slice();
-    next[idx] = {
+    const rec: SavedCamera = {
       key: cur.key,
       deviceId: cur.deviceId,
       cameraName: cur.cameraName,
@@ -282,6 +437,11 @@ export class SavedCameraStore {
       modelKey: modelKey !== '' ? modelKey : cur.modelKey,
       lastConnectedAt: cur.lastConnectedAt
     };
+    // 以前这里把 `isMock` 整个漏掉了：模拟相机的记录被「补机型 / 序列号」洗一遍
+    // 就变成一条没有配对身份、却当成真机的记录（1.66.1 修）。只在确实是模拟记录
+    // 时才写这个字段，真机记录里不该留下一个 `isMock: undefined`。
+    if (cur.isMock === true) rec.isMock = true;
+    next[idx] = rec;
     this.cameras = next;
   }
 

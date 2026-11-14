@@ -39,7 +39,10 @@
         ],
         "backgroundModes": [
           "location",
-          "dataTransfer"
+          "dataTransfer",
+          // 蓝牙长连（相机待机保活）：长时任务的模式决定系统通知怎么说，
+          // 用 dataTransfer 会在「只是蓝牙待机」时显示「正在运行数据传输任务」。
+          "bluetoothInteraction"
         ]
       }
     ],

@@ -74,11 +74,11 @@
     },
     {
       "name": "camera_status_searching",
-      "value": "正在搜索USB相机..."
+      "value": "正在搜索 USB 相机…"
     },
     {
       "name": "camera_status_no_camera",
-      "value": "未检测到USB相机"
+      "value": "未检测到 USB 相机"
     },
     {
       "name": "camera_status_connected",
@@ -102,11 +102,11 @@
     },
     {
       "name": "camera_status_wifi_connecting",
-      "value": "正在连接 Wi-Fi 相机 %1$s..."
+      "value": "正在连接 Wi-Fi 相机 %1$s…"
     },
     {
       "name": "camera_status_wifi_connect_failed",
-      "value": "无法连接 %1$s。请确认相机停在「连接向导」页面（显示照相机名称），且手机与相机在同一网络。"
+      "value": "无法连接 %1$s。请确认相机停在「连接向导」页面（显示相机名称），且手机与相机在同一网络。"
     },
     {
       "name": "camera_status_wifi_disconnected",
@@ -138,7 +138,7 @@
     },
     {
       "name": "camera_conn_open_wifi_hint",
-      "value": "相机会切到自己的 Wi-Fi 热点传照片，配对连接会暂停一次；退出后相机自动回到待机。"
+      "value": "切到热点时蓝牙会断开，退出后相机自动回到待机。"
     },
     {
       "name": "camera_conn_disconnected",
@@ -186,11 +186,11 @@
     },
     {
       "name": "camera_ble_scanning",
-      "value": "正在搜索蓝牙相机..."
+      "value": "正在搜索蓝牙相机…"
     },
     {
       "name": "camera_ble_connecting",
-      "value": "正在连接蓝牙相机..."
+      "value": "正在连接蓝牙相机…"
     },
     {
       "name": "camera_ble_paired",
@@ -205,8 +205,16 @@
       "value": "配对失败"
     },
     {
+      "name": "camera_ble_hint_repair",
+      "value": "若一直配对不上，可能是相机里还记着这台手机：到相机菜单删除已配对的设备后重新开始配对。"
+    },
+    {
       "name": "camera_ble_cancel",
       "value": "取消连接"
+    },
+    {
+      "name": "camera_ble_cancelled",
+      "value": "已取消连接"
     },
     {
       "name": "camera_ble_services",
@@ -226,7 +234,7 @@
     },
     {
       "name": "camera_wifi_scanning",
-      "value": "正在搜索附近的相机..."
+      "value": "正在搜索附近的相机…"
     },
     {
       "name": "camera_wifi_disconnect",
@@ -242,11 +250,11 @@
     },
     {
       "name": "camera_status_wifi_pairing_confirm",
-      "value": "正在完成配对..."
+      "value": "正在完成配对…"
     },
     {
       "name": "camera_status_wifi_pairing_done",
-      "value": "配对完成，正在重新连接..."
+      "value": "配对完成，正在重新连接…"
     },
     {
       "name": "camera_wifi_pairing_title",
@@ -254,7 +262,7 @@
     },
     {
       "name": "camera_wifi_pairing_hint",
-      "value": "点「完成配对」后相机会保存这台手机并重启 Wi-Fi，app 会自动重连，不需要再点一次。若相机上显示同一组数字，可顺便核对。"
+      "value": "点「完成配对」后相机会保存这台手机并重启 Wi-Fi，之后会自动重连，不需要再点一次。若相机上显示同一组数字，可顺便核对。"
     },
     {
       "name": "camera_wifi_pairing_confirm",
@@ -262,23 +270,23 @@
     },
     {
       "name": "camera_status_wifi_pairing_timeout",
-      "value": "配对已确认，但 %1$s 没有恢复响应。请确认相机已回到「连接向导」页面（显示照相机名称）后再试。"
+      "value": "配对已确认，但 %1$s 没有恢复响应。请确认相机已回到「连接向导」页面（显示相机名称）后再试。"
     },
     {
       "name": "camera_status_wifi_reconnecting",
-      "value": "正在重连相机（第 %1$d 次）..."
+      "value": "正在重连相机（第 %1$d 次）…"
     },
     {
       "name": "camera_status_choose_cache",
-      "value": "请选择缓存设置..."
+      "value": "请选择缓存设置…"
     },
     {
       "name": "camera_status_loading_cache",
-      "value": "正在加载缓存..."
+      "value": "正在加载缓存…"
     },
     {
       "name": "camera_status_scanning",
-      "value": "正在扫描..."
+      "value": "正在扫描…"
     },
     {
       "name": "camera_status_scan_error",
@@ -286,7 +294,7 @@
     },
     {
       "name": "camera_status_fetching_list",
-      "value": "正在获取照片列表..."
+      "value": "正在获取照片列表…"
     },
     {
       "name": "camera_status_no_storage",
@@ -294,7 +302,7 @@
     },
     {
       "name": "camera_status_walking_dirs",
-      "value": "正在遍历目录..."
+      "value": "正在遍历目录…"
     },
     {
       "name": "camera_status_disconnected",
@@ -314,11 +322,11 @@
     },
     {
       "name": "camera_phase_loading_metadata",
-      "value": "正在获取元数据..."
+      "value": "正在获取元数据…"
     },
     {
       "name": "camera_phase_loading_photos",
-      "value": "正在加载照片..."
+      "value": "正在加载照片…"
     },
     {
       "name": "camera_phase_thumbnails",
@@ -326,7 +334,7 @@
     },
     {
       "name": "camera_phase_loading_thumbnails",
-      "value": "正在加载缩略图..."
+      "value": "正在加载缩略图…"
     },
     {
       "name": "camera_scan_stats",
@@ -494,7 +502,11 @@
     },
     {
       "name": "camera_detail_pairing_hint",
-      "value": "配对最长约 30 秒，请让相机停在「开始配对」页"
+      "value": "请让相机停在「开始配对」页"
+    },
+    {
+      "name": "camera_detail_ble_asleep",
+      "value": "相机可能已休眠，按快门唤醒"
     },
     {
       "name": "camera_detail_pick_to_pair",
@@ -1173,6 +1185,10 @@
       "value": "USB 通信失败：请检查连接线或重新插拔"
     },
     {
+      "name": "camera_status_usb_lost",
+      "value": "USB 相机已断开连接"
+    },
+    {
       "name": "camera_status_ptp_error",
       "value": "相机返回错误 %1$s"
     },
@@ -1342,7 +1358,7 @@
     },
     {
       "name": "camera_guide_ble_2",
-      "value": "点「搜索相机」选相机，等配对完成。"
+      "value": "点「搜索相机」选相机，等配对完成（最长约 30 秒）。"
     },
     {
       "name": "camera_guide_ap_1",
@@ -1378,7 +1394,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "每種連接方式能做的事不一樣，勾選表示可用。"
+      "value": "勾选表示可用；◐ 表示部分支持，缺什么见下方。"
     },
     {
       "name": "camera_guide_view_steps",
@@ -1485,24 +1501,64 @@
       "value": "浏览与导入照片"
     },
     {
+      "name": "camera_guide_feature_exif",
+      "value": "导入时写入 GPS"
+    },
+    {
       "name": "camera_guide_feature_clock",
-      "value": "校时与位置注入"
+      "value": "对时与位置注入"
     },
     {
-      "name": "camera_guide_feature_pair",
-      "value": "首次需蓝牙配对"
-    },
-    {
-      "name": "camera_guide_feature_park",
-      "value": "相机停在连接页"
-    },
-    {
-      "name": "camera_guide_feature_same_net",
-      "value": "相机在同一网络"
+      "name": "camera_guide_feature_standby",
+      "value": "后台保持连接"
     },
     {
       "name": "camera_guide_feature_online",
-      "value": "手机上网不中断"
+      "value": "手机照常上网"
+    },
+    {
+      "name": "camera_guide_modes_note",
+      "value": "蓝牙只做待机，不传照片；照片只走 USB 与 Wi-Fi。"
+    },
+    {
+      "name": "camera_guide_official_title",
+      "value": "官方 SnapBridge 有、我们还没有"
+    },
+    {
+      "name": "camera_guide_official_1",
+      "value": "蓝牙遥控：快门、录像、对焦、间隔／延时拍摄"
+    },
+    {
+      "name": "camera_guide_official_2",
+      "value": "即时取景遥控：在手机上看画面、按快门、录视频"
+    },
+    {
+      "name": "camera_guide_official_3",
+      "value": "拍摄时自动下载 200 万像素副本（走蓝牙）"
+    },
+    {
+      "name": "camera_guide_official_4",
+      "value": "遥控播放：翻页、放大相机照片"
+    },
+    {
+      "name": "camera_guide_official_5",
+      "value": "固件下载并传给相机"
+    },
+    {
+      "name": "camera_guide_official_6",
+      "value": "相机设定库下发（简易拍摄设定）"
+    },
+    {
+      "name": "camera_guide_partial_title",
+      "value": "部分支持"
+    },
+    {
+      "name": "camera_guide_partial_1",
+      "value": "对时与位置注入：位置写进了相机，但卫星数固定为 0，照片端效果还没真机验收。"
+    },
+    {
+      "name": "camera_guide_partial_2",
+      "value": "后台保持连接：只有蓝牙有长时任务，Wi-Fi AP / STA 退回后台不保证。"
     },
     {
       "name": "camera_title_with_serial",

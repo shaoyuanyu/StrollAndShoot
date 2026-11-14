@@ -431,10 +431,14 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 - 型号存在 `SettingsStore.mockCameraModel`（默认空串 = 未知型号），真实机型名一律取 `cameraStandeeLabel()`，不要手写（手写拼错会落到「认不出」分支）。
 - 开关状态持久化在 `SettingsStore.mockCameraEnabled`。改完开关或重装包后，需要重新到「相机」页点一次「搜索相机」。
 - **模拟相机现在也走「已配对相机」那一套**（1.65.0）：连上之后 `CameraService.rememberMockCamera()`
-  会把它按普通记录写进 `SavedCameraStore`（`isMock: true`，key 用 `MOCK-0001`），于是重启后
-  标题、立牌、当前相机都还停在同一台，不用每轮重连；`rememberActive()` 永远不会被它触发
-  （模拟相机没有蓝牙配对那一步）。切到模拟记录时 `activate()` 不写 `BleIdentityStore`，
-  而是把蓝牙活动身份清掉——否则相机页会把它显示成「已配对」的蓝牙相机。
+  会把它按普通记录写进 `SavedCameraStore`（`isMock: true`，key 是 `mock:<modelKey>`，1.66.1
+  起），于是重启后标题、立牌、当前相机都还停在同一台，不用每轮重连；`rememberActive()`
+  永远不会被它触发（模拟相机没有蓝牙配对那一步）。切到模拟记录时 `activate()` 不写
+  `BleIdentityStore`，而是把蓝牙活动身份清掉——否则相机页会把它显示成「已配对」的蓝牙相机。
+- **模拟记录不能占真机的身份**（1.66.1）：key 必须是 `mock:` 前缀、序列号只能用模拟相机
+  自己上报的 `MOCK-0001`，模拟会话也不许调 `updateCurrentMeta()`。以前这三处漏了一处就
+  会把真机那条配对记录覆盖成 `isMock`，冷启动清掉蓝牙身份，表现是「已配对」变「未连接」、
+  重连只能首配且被相机秒拒。详细链条见 [SERVICES.md](SERVICES.md)「模拟记录不能占真机的身份」。
 - **模拟设备必须和真机分得出来**：已连接时设备信息第一行是「设备来源 = 模拟相机（调试包）」
   （`svc.mockSession()`），「已配对相机」页里它带「模拟」胶囊。截图对外时不要漏掉这一行。
 - 验证完记得关掉开关，否则会与真实相机状态混淆。
@@ -453,7 +457,10 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps shot ap_connected
 - 由 `EntryAbility.onNewWant` 在 `MockPtpDevice.isDebugBuild()` 为真时处理，release
   包没有入口；
 - 名字就是 `CameraStateDemo.apply()` 的 case，覆盖 USB / 蓝牙 / AP / STA 的空闲、
-  搜索、首配、配对失败、已配对、交接、已连接、配对码、重连、断开、切换共 28 个状态；
+  搜索、首配、配对失败、已配对、交接、已连接、配对码、重连、断开、切换共 29 个状态
+  （1.65.1 新增 `usb_storage_denied`：会话在、读卡被拒，用于验收状态头的错误态）；
+- 预演里的状态文案一律走 `L10n.tr(...)`，不要硬编码：硬编码那几条已经和资源里的
+  空格、省略号漂移过（1.65.2 修），截图验收看到的就是错的东西；
 - 状态之间的口径、每个阶段该显示什么见 [PAGES.md](PAGES.md)「状态机：四种模式各一条线」。
 
 ## 调试经验
@@ -465,6 +472,24 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps shot ap_connected
 ### 构建缓存会造成假象
 
 改动回退之后直接重新构建，hvigor 可能复用旧的构建产物，看起来像是回退没有生效。回退代码之后先清理：Linux 用 `hvigorw clean --no-daemon`，macOS 用 `devecocli build clean`。
+
+### 「取消」标记不要塞进通用的断开方法
+
+`BleCameraLink.disconnect()` 是「取消连接」按钮的入口，会置上用户取消标记
+`cancelled`；`disconnectInner()` 才是「只断链路」。首配（`pairFresh()`）在段 1 之后
+要主动断一次链、让相机暴露经典蓝牙，用错成 `disconnect()` 就会在 3 秒后自我判定
+「用户已取消（经典绑定未做）」，首配永远走不完。`4b5bd97`（2026-11-11）这么踩过，
+直到 2026-11-14 真机才定位到。凡是流程内部主动断链，一律用 `disconnectInner()`。
+
+### 主线程不许调「会同步等系统服务」的接口
+
+HarmonyOS 里有一批同步 napi（`gatt.disconnect()`、`setCharacteristicChangeIndication()`、
+`connection.getAllNets()` 的伴随同步接口、`fileIo.*Sync` …）：调用跑在 JS 线程上，
+背后要么是 binder 往返、要么是蓝牙栈的锁，慢起来直接 `THREAD_BLOCK_6S` 被系统杀进程。
+2026-11-14 一天 10 次闪退全部出在这里。**改任何涉及蓝牙、网络、文件、USB 的代码前，
+先读 [SERVICES.md](SERVICES.md)「主线程禁区」那张表**。排查闪退时也以 faultlog 的
+**采样栈**为准：EventHandler 的任务名（`getAllNets`、`uv_timer_task`）只是投递这段
+续体的 napi 回调名，会把方向带偏。
 
 ### 留意写定的上限
 
@@ -718,6 +743,9 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 - 长时任务：`module.json5` 的 `abilities[].backgroundModes` 要声明类型（本项目 `location` + `dataTransfer`），权限 `ohos.permission.KEEP_BACKGROUND_RUNNING`。申请成功后**通知栏出现系统通知**，用户划掉通知系统会自动停任务。
 - **一个 UIAbility 同时只允许一个长时任务**（API 20 及以前）；API 21 起才有 `startBackgroundRunning(context, ContinuousTaskRequest)` 多任务版本。两个业务都要保活时，要么合并类型，要么换新接口。
 - **长时任务通知的内容应用改不了**：`ContinuousTaskRequest` 只有模式、子模式、`wantAgent`、`continuousTaskId`，没有进度或自定义文案。
+  **能改的是「用哪个模式」，而模式决定通知那句话**：`DATA_TRANSFER` →「正在运行数据传输任务」、
+  `BLUETOOTH_INTERACTION` →「正在运行蓝牙相关任务」、`LOCATION` →「正在运行定位任务」。
+  所以别为了省事统一用 `dataTransfer`：名不副实会被用户一眼看出来（本项目 1.66.11 改的）。
 - 想在通知栏显示**进度环**，用系统预置通知模板 `NotificationTemplate`：`name: 'downloadTemplate'`，`data` 只认 `title` / `fileName` / `progressValue(0~100)`，`>= 100` 时环消失。模板只覆盖上传/下载场景。这是普通通知，和长时任务通知是两条。
 - DATA_TRANSFER 的附加约束：进度首次更新超过 10 分钟会被取消，且官方要求「更新进度的通知类型必须为实况窗」。实况窗的 `event` 只支持固定场景（打车/配送/取餐/航班/排队/比分/租赁/计时/运动/导航/打卡/快递/高铁），**照片导入不在其中**，不要硬套场景。
 - 实现与日志见 [SERVICES.md](SERVICES.md)「传输期间的后台长时任务与通知进度环」。

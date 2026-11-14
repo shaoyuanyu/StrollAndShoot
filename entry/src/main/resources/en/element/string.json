@@ -138,7 +138,7 @@
     },
     {
       "name": "camera_conn_open_wifi_hint",
-      "value": "The camera switches to its own Wi-Fi hotspot for transfer. The paired link pauses meanwhile and the camera returns to standby after you exit."
+      "value": "Switching to the hotspot drops the Bluetooth link; the camera returns to standby after you exit."
     },
     {
       "name": "camera_conn_disconnected",
@@ -205,8 +205,16 @@
       "value": "Pairing failed"
     },
     {
+      "name": "camera_ble_hint_repair",
+      "value": "If pairing keeps failing, the camera may still remember this phone. Delete the paired device in the camera menu, then start pairing again."
+    },
+    {
       "name": "camera_ble_cancel",
       "value": "Cancel"
+    },
+    {
+      "name": "camera_ble_cancelled",
+      "value": "Connection cancelled"
     },
     {
       "name": "camera_ble_services",
@@ -254,7 +262,7 @@
     },
     {
       "name": "camera_wifi_pairing_hint",
-      "value": "After you tap Complete Pairing the camera saves this phone and restarts Wi-Fi; the app reconnects automatically, no second tap needed. If the camera shows the same digits, feel free to check them."
+      "value": "After you tap Complete Pairing the camera saves this phone and restarts Wi-Fi; it reconnects automatically, no second tap needed. If the camera shows the same digits, feel free to check them."
     },
     {
       "name": "camera_wifi_pairing_confirm",
@@ -318,7 +326,7 @@
     },
     {
       "name": "camera_phase_loading_photos",
-      "value": "Loading photos..."
+      "value": "Loading photos…"
     },
     {
       "name": "camera_phase_thumbnails",
@@ -494,7 +502,11 @@
     },
     {
       "name": "camera_detail_pairing_hint",
-      "value": "Pairing can take up to 30 seconds; keep the camera on the “Start pairing” screen"
+      "value": "Keep camera on “Start pairing”"
+    },
+    {
+      "name": "camera_detail_ble_asleep",
+      "value": "Camera may be asleep; wake it up"
     },
     {
       "name": "camera_detail_pick_to_pair",
@@ -1173,6 +1185,10 @@
       "value": "USB communication failed: check the cable or reconnect"
     },
     {
+      "name": "camera_status_usb_lost",
+      "value": "USB camera disconnected"
+    },
+    {
       "name": "camera_status_ptp_error",
       "value": "Camera returned error %1$s"
     },
@@ -1342,7 +1358,7 @@
     },
     {
       "name": "camera_guide_ble_2",
-      "value": "tap “Find Camera”, pick it, and finish pairing."
+      "value": "tap “Find Camera”, pick it, and finish pairing (up to 30 s)."
     },
     {
       "name": "camera_guide_ap_1",
@@ -1378,7 +1394,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "Each connection type supports a different set of features. A check mark means it works."
+      "value": "A check mark means supported; ◐ means partly supported — see below."
     },
     {
       "name": "camera_guide_view_steps",
@@ -1485,24 +1501,64 @@
       "value": "Browse and import photos"
     },
     {
+      "name": "camera_guide_feature_exif",
+      "value": "Write GPS on import"
+    },
+    {
       "name": "camera_guide_feature_clock",
       "value": "Clock and location sync"
     },
     {
-      "name": "camera_guide_feature_pair",
-      "value": "Needs Bluetooth pairing first"
-    },
-    {
-      "name": "camera_guide_feature_park",
-      "value": "Stays on connect screen"
-    },
-    {
-      "name": "camera_guide_feature_same_net",
-      "value": "Same network as phone"
+      "name": "camera_guide_feature_standby",
+      "value": "Stay connected in background"
     },
     {
       "name": "camera_guide_feature_online",
       "value": "Phone stays online"
+    },
+    {
+      "name": "camera_guide_modes_note",
+      "value": "Bluetooth is standby only and never transfers photos; photos use USB and Wi-Fi."
+    },
+    {
+      "name": "camera_guide_official_title",
+      "value": "In SnapBridge, not here yet"
+    },
+    {
+      "name": "camera_guide_official_1",
+      "value": "Bluetooth remote: shutter, video, focus, interval or time-lapse"
+    },
+    {
+      "name": "camera_guide_official_2",
+      "value": "Live view remote: see the frame, shoot and record video from the phone"
+    },
+    {
+      "name": "camera_guide_official_3",
+      "value": "Auto-download a 2 MP copy as you shoot (over Bluetooth)"
+    },
+    {
+      "name": "camera_guide_official_4",
+      "value": "Remote playback: page and zoom camera photos"
+    },
+    {
+      "name": "camera_guide_official_5",
+      "value": "Download firmware and send it to the camera"
+    },
+    {
+      "name": "camera_guide_official_6",
+      "value": "Send camera setting banks (easy shooting settings)"
+    },
+    {
+      "name": "camera_guide_partial_title",
+      "value": "Partly supported"
+    },
+    {
+      "name": "camera_guide_partial_1",
+      "value": "Clock and location sync: location reaches the camera, but the satellite count is fixed at 0 and the result on photos is not verified on a real camera yet."
+    },
+    {
+      "name": "camera_guide_partial_2",
+      "value": "Background keep-alive: only Bluetooth holds a long task; Wi-Fi AP / STA is not guaranteed in the background."
     },
     {
       "name": "camera_title_with_serial",

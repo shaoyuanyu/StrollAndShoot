@@ -1,5 +1,6 @@
 import { CameraService } from '../services/CameraService';
 import { BleIdentityStore } from '../services/BleIdentityStore';
+import { SavedCameraStore } from '../services/SavedCameraStore';
 import { StandeePreferenceStore } from '../model/StandeePreferenceStore';
 import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { CardShadow, HeroCardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
@@ -41,6 +42,10 @@ const GUIDE_TAB_ITEMS: SegmentButtonV2Items = new SegmentButtonV2Items([
  */
 const GUIDE_FEATURE_COL = 104;
 const GUIDE_ROW_HEIGHT = 34;
+/** 支持表一格的状态：不支持 / 支持 / 部分支持（1.66.13 加了「部分」）。 */
+const GUIDE_NONE = 0;
+const GUIDE_FULL = 1;
+const GUIDE_PARTIAL = 2;
 
 /**
  * 模式选择器的高度（vp）。连接后选择器被锁定，点击时整条左右震动，
@@ -475,7 +480,12 @@ export struct CameraPage {
    */
   private bleKnown(): boolean {
     if (this.blePaired()) return true;
-    return this.bleId.hasIdentity() && this.bleId.deviceId !== '';
+    if (this.bleId.hasIdentity() && this.bleId.deviceId !== '') return true;
+    // 身份没装回活动位不等于没配过对（1.66.1）：仓库里还留着这台相机的
+    // device/nonce，连接时服务端会先把它装回去。这条兜底让按钮仍是
+    // 「连接相机」、摘要仍是「点「连接相机」重新连接」，而不是把一台配过对的
+    // 相机当成新相机去「搜索」再首配（相机那边会秒拒）。
+    return SavedCameraStore.getInstance().pickReal() !== null;
   }
 
   /**
@@ -560,6 +570,7 @@ export struct CameraPage {
         ? this.svc.statusText : $r('app.string.camera_status_scanning');
     }
     if (phase === CameraPhase.Connected) {
+      if (this.scanFailed()) return this.scanErrorTitle();
       if (m === CameraLinkMode.BLE) {
         return this.svc.bleCameraName !== ''
           ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
@@ -570,15 +581,16 @@ export struct CameraPage {
     if (phase === CameraPhase.Pairing) return $r('app.string.camera_status_pairing_wait');
     if (phase === CameraPhase.Failed) {
       if (this.bleStuck()) return $r('app.string.camera_ble_pair_failed');
-      // USB / 蓝牙的失败原因本身就是一句话，直接拿来做标题；再在下面重复
-      // 一行同样的红字只会让人以为是两个问题。
+      // USB / 蓝牙的失败原因本身就是一句话，直接拿来做标题；但标题只放冒号前的
+      // 结论，「请确认…」那句动作交给 `detail()`（1.65.2），否则一句「结论：动作」
+      // 在 16fp 下发字号标题里要折两行，动作会被当成第二个结论读。
       if (m === CameraLinkMode.USB) {
         return this.svc.lastScanError !== ''
-          ? this.svc.lastScanError : $r('app.string.camera_status_no_camera');
+          ? this.scanErrorTitle() : $r('app.string.camera_status_no_camera');
       }
       if (m === CameraLinkMode.BLE) {
         return this.svc.lastScanError !== ''
-          ? this.svc.lastScanError : $r('app.string.camera_status_ble_connect_failed');
+          ? this.scanErrorTitle() : $r('app.string.camera_status_ble_connect_failed');
       }
       return $r('app.string.camera_status_wifi_failed');
     }
@@ -640,11 +652,12 @@ export struct CameraPage {
       return '';
     }
     if (phase === CameraPhase.Failed) {
-      // 无线的标题是泛化的「没能连上相机」，具体原因放这里；USB 的标题
-      // 已经是原因本身。蓝牙配对失败是个例外：标题只说「配对失败」，
-      // 还需要一行讲清楚链路停在哪、接下来该做什么。
+      // 无线的标题是泛化的「没能连上相机」，具体原因放这里；USB / 蓝牙的标题
+      // 就是原因本身，冒号后那句「下一步」放这里（1.65.2：和读卡失败态同一套
+      // 拆行规则，标题只放结论，动作不挤进 16fp 的标题里）。蓝牙配对失败是个
+      // 例外：标题只说「配对失败」，还需要一行讲清楚链路停在哪、接下来该做什么。
       if (this.bleStuck()) return this.failReason();
-      return isWifiMode(m) ? this.failReason() : '';
+      return isWifiMode(m) ? this.failReason() : this.scanErrorHint();
     }
     if (phase === CameraPhase.Connecting) {
       // 分步进度（AP 交接）优先：交接过程中蓝牙在重连时，别让「配对提示」
@@ -653,6 +666,11 @@ export struct CameraPage {
       // 首配才提示「停在开始配对页」；已配对过的只是重连。
       if (this.svc.bleConnecting && !this.bleKnown()) {
         return $r('app.string.camera_detail_pairing_hint');
+      }
+      // 断链重连连相机广播都扫不到：多半进了待机，让用户去按一下快门。
+      if (this.svc.linkMode === CameraLinkMode.BLE && this.svc.bleReconnecting
+        && this.svc.bleAsleep) {
+        return $r('app.string.camera_detail_ble_asleep');
       }
       return '';
     }
@@ -664,8 +682,57 @@ export struct CameraPage {
     return '';
   }
 
+  /**
+   * 「会话还在、这一轮却读不到卡」：状态头整块换成错误态。
+   *
+   * 相机页的失败有两种。一种是连不上（`Failed`，标题本身就是失败原因）；另一种是
+   * **连上了但读不到卡**——USB 会话在、设备信息也读得到，只有 GetStorageIDs / 取
+   * 元数据被相机拒绝（0x200F 等）。后一种以前是「绿灯 + 已连接」，下面再另起一行
+   * 红字讲错误：一个绿点配一句红字，看着像两个互不相干的结论（用户反馈）。
+   *
+   * 现在错误直接顶到状态头：红灯 + 结论（`headline()`）+ 一行小字提示 + 「重试」，
+   * 抽屉里不再另起红字。`phase()` 仍然是 `Connected`——会话确实还挂着，设备信息
+   * 也还在，只是数据读不出来，主操作因此能让用户在原地重试而不必断开重连。
+   */
+  private scanFailed(): boolean {
+    // 只认 PTP 会话（USB / Wi-Fi）：蓝牙「已配对」没有会话、也不读卡，
+    // `lastScanError` 可能是上一轮连接留下的，不能拿它把状态头改成错误态。
+    return this.svc.connected && this.phase() === CameraPhase.Connected
+      && this.svc.lastScanError !== '';
+  }
+
+  /**
+   * 错误文案拆成「结论」与「下一步」。
+   *
+   * 相机错误文案统一写成「结论：下一步」（`camera_status_*`，三种语言都用冒号
+   * 分隔）。结论进状态头第一行（要一行放得下），冒号后那句动作说明用更小一号的
+   * 字放在第二行。没有冒号的文案（如「相机返回错误 0x2008」）整句当结论，
+   * 不显示第二行。
+   */
+  private scanErrorTitle(): string {
+    const msg = this.svc.lastScanError;
+    const idx = this.scanErrorColon(msg);
+    return idx < 0 ? msg : msg.substring(0, idx);
+  }
+
+  private scanErrorHint(): string {
+    const msg = this.svc.lastScanError;
+    const idx = this.scanErrorColon(msg);
+    return idx < 0 ? '' : msg.substring(idx + 1).trim();
+  }
+
+  /** 全角冒号（中文 / 繁体）与英文的 `": "` 都认，取最先出现的那个。 */
+  private scanErrorColon(msg: string): number {
+    const full = msg.indexOf('：');
+    const half = msg.indexOf(': ');
+    if (full < 0) return half;
+    if (half < 0) return full;
+    return Math.min(full, half);
+  }
+
   private dotColor(): Resource {
     const phase = this.phase();
+    if (this.scanFailed()) return $r('app.color.status_error');
     if (phase === CameraPhase.Connected) return $r('app.color.status_connected');
     if (phase === CameraPhase.Failed) return $r('app.color.status_error');
     if (phase === CameraPhase.Idle) return $r('app.color.text_tertiary');
@@ -676,18 +743,20 @@ export struct CameraPage {
   // 主操作
   // ------------------------------------------------------------------
 
-  /** 未连接时是「搜索 / 配对 / 连接」，已连接时是「断开」。 */
+  /** 未连接时是「搜索 / 配对 / 连接」，已连接时是「断开」（读卡失败时是「重试」）。 */
   private primaryActionLabel(): Resource {
     const phase = this.phase();
     if (phase === CameraPhase.Switching) return $r('app.string.camera_action_switching');
     if (phase === CameraPhase.Disconnecting) return $r('app.string.camera_action_disconnecting');
+    if (this.scanFailed()) return $r('app.string.camera_action_retry');
     if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing) {
       return $r('app.string.camera_action_disconnect');
     }
-    if (phase === CameraPhase.Loading || phase === CameraPhase.Searching) {
-      return this.svc.linkMode === CameraLinkMode.USB
-        ? $r('app.string.camera_main_scanning') : $r('app.string.camera_action_searching');
-    }
+    // 进行中的按钮跟着状态头用同一个动词（1.65.2）：状态头写「正在搜索 USB 相机…」
+    // 时按钮是「搜索中」，写「正在获取元数据…」时才是「扫描中」。以前 USB 两段都
+    // 写「扫描中」，同一件事在一行里有两个叫法。
+    if (phase === CameraPhase.Searching) return $r('app.string.camera_action_searching');
+    if (phase === CameraPhase.Loading) return $r('app.string.camera_main_scanning');
     if (phase === CameraPhase.Connecting) {
       if (this.svc.bleConnecting) return $r('app.string.camera_ble_cancel');
       // 蓝牙断链后的自动重连可以放弃：它可能持续很久，用户不该只能等。
@@ -732,6 +801,9 @@ export struct CameraPage {
 
   private primaryActionFill(): ResourceColor {
     const phase = this.phase();
+    // 读卡失败 = 一次失败后的主操作：「重试」用主色实心，和无线失败那颗一致，
+    // 不能用「断开连接」的中性底——它不是「结束」，而是「再试一次」。
+    if (this.scanFailed()) return $r('app.color.primary');
     if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing
       || phase === CameraPhase.Disconnecting || phase === CameraPhase.Switching) {
       return $r('app.color.action_neutral_fill');
@@ -754,6 +826,7 @@ export struct CameraPage {
 
   private primaryActionTextColor(): ResourceColor {
     const phase = this.phase();
+    if (this.scanFailed()) return $r('app.color.text_on_primary');
     if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing
       || phase === CameraPhase.Disconnecting || phase === CameraPhase.Switching) {
       return $r('app.color.text_primary');
@@ -774,12 +847,24 @@ export struct CameraPage {
   private onPrimaryAction(): void {
     const phase = this.phase();
     if (this.primaryActionDisabled()) return;
+    if (this.scanFailed()) {
+      // 相机还在，只是这一轮读不到卡：沿用同一会话重扫。断开重连要重新握手、
+      // 还要重取设备信息，对「插上卡再试一次」没有帮助，反而把这一屏清掉。
+      // 这里直接走扫描而不是 `searchByMode()`：无线模式下已连接时后者会
+      // 在「已连上」那一行直接 return，点了按钮没有任何反应。
+      // 全量扫描 + 跳过节流：重试就该是「重新读一遍」，不能命中上一轮的快照。
+      this.svc.scanForCamera(false, true);
+      return;
+    }
     if (phase === CameraPhase.Connected || phase === CameraPhase.Pairing) {
       this.requestDisconnect();
       return;
     }
     if (phase === CameraPhase.Connecting && this.svc.bleConnecting) {
+      // 取消要立刻看得见：服务端先把 `bleConnecting` 放掉（界面马上回到
+      // 「已配对 · 未连接」），链路在后台收，这里再补一句确认。
       this.onDisconnectBle();
+      this.toast($r('app.string.camera_ble_cancelled'));
       return;
     }
     if (phase === CameraPhase.Connecting && this.svc.linkMode === CameraLinkMode.BLE
@@ -1135,10 +1220,11 @@ export struct CameraPage {
    * 一大片白；AP 有两张图，给高一点，打开后不用先滚一屏。都还能上拉到 LARGE。
    */
   private guideSheetHeight(): number {
-    // 「连接模式」页比步骤页高：表头 + 六行功能表 + 说明，切页时面板跟着长高；
-    // 回「连接步骤」再按当前模式收回去。
+    // 「连接模式」页比步骤页高：说明 + 表头 + 五行功能表 + 一句总结 + 两份清单。
+    // 清单比表格长，给到 620 才能一屏看完；切页时面板跟着长高，回「连接步骤」
+    // 再按当前模式收回去。
     if (this.guideTab === 1) {
-      return 420;
+      return 690;
     }
     if (this.svc.linkMode === CameraLinkMode.USB) {
       return 240;
@@ -1238,23 +1324,32 @@ export struct CameraPage {
    * 只有 60 多 vp 宽，底色会把表切碎——改成表头那格用主色 + 中等字重。
    */
   @Builder
-  GuideCheckCell(mode: number, supported: boolean) {
+  GuideCheckCell(mode: number, support: number) {
     Stack() {
-      if (supported) {
+      if (support === GUIDE_FULL) {
         SymbolGlyph($r('sys.symbol.checkmark'))
           .fontSize(14)
-          .fontColor([this.svc.linkMode === mode
-            ? $r('app.color.primary') : $r('app.color.text_primary')])
+          .fontColor([this.cellColor(mode)])
+      } else if (support === GUIDE_PARTIAL) {
+        // 半个圆：能做，但没做全（缺什么写在表下面的「部分支持」里）。
+        Text('◐')
+          .fontSize(13)
+          .fontColor(this.cellColor(mode))
       }
     }
     .layoutWeight(1)
     .height('100%')
   }
 
+  private cellColor(mode: number): ResourceColor {
+    return this.svc.linkMode === mode
+      ? $r('app.color.primary') : $r('app.color.text_primary');
+  }
+
   /** 表格的一行：左侧功能名，右侧四个模式的支持标记。 */
   @Builder
-  GuideFeatureRow(label: ResourceStr, usb: boolean, ble: boolean, ap: boolean,
-                  sta: boolean, last: boolean) {
+  GuideFeatureRow(label: ResourceStr, usb: number, ble: number, ap: number,
+                  sta: number, last: boolean) {
     Row() {
       Text(label)
         .fontSize(FontSize.Caption)
@@ -1270,6 +1365,24 @@ export struct CameraPage {
     .width('100%')
     .height(GUIDE_ROW_HEIGHT)
     .border({ width: { bottom: last ? 0 : 0.5 }, color: $r('app.color.divider') })
+  }
+
+  /** 「官方有、我们没有 / 部分支持」列表的一行：一个小圆点 + 一句说明。 */
+  @Builder
+  GuideBullet(label: ResourceStr) {
+    Row({ space: 8 }) {
+      Circle({ width: 3, height: 3 })
+        .fill($r('app.color.text_tertiary'))
+        .margin({ top: 7 })
+      Text(label)
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_tertiary'))
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .padding({ top: 6 })
   }
 
   /** 表头的一格：四种模式名，当前模式那格用主色标出来。 */
@@ -1288,10 +1401,9 @@ export struct CameraPage {
   /**
    * 功能 × 连接模式的支持表。
    *
-   * 行是功能、列是模式：一眼能看出「哪种连接能做什么」。每一条都对应真实行为，
-   * 不是文案上的区分——照片传输只走 USB / Wi-Fi，蓝牙那一条是校时与位置注入；
-   * AP 会让手机加入相机热点（上网中断、还要把相机停在连接画面），STA 则是相机
-   * 加入手机所在网络（相机要能被这个网络找到）。
+   * 行是功能、列是模式：一眼能看出「哪种连接能做什么」。每一条都对应真实行为：
+   * 照片只走 USB / Wi-Fi；GPS 有两个入口（导入时写进照片、蓝牙待机时把位置交给
+   * 相机）；对时和后台守着相机只有蓝牙做得到；AP 会让手机加入相机热点、上网中断。
    */
   @Builder
   GuideModesTable() {
@@ -1311,18 +1423,19 @@ export struct CameraPage {
       .height(GUIDE_ROW_HEIGHT)
       .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
 
+      // 只有「功能」——能在这种连接下做什么事。以前的表把「相机停在连接页」
+      // 「相机在同一网络」这类前置条件也塞成行，和功能混在一起，读下来既不是
+      // 功能也不像限制（用户 1.66.12 反馈「一派胡言」）。前置条件归「连接步骤」页。
       this.GuideFeatureRow($r('app.string.camera_guide_feature_photos'),
-        true, false, true, true, false)
+        GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, GUIDE_FULL, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_exif'),
+        GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, GUIDE_FULL, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_clock'),
-        false, true, true, true, false)
-      this.GuideFeatureRow($r('app.string.camera_guide_feature_pair'),
-        false, true, true, false, false)
-      this.GuideFeatureRow($r('app.string.camera_guide_feature_park'),
-        false, true, true, false, false)
-      this.GuideFeatureRow($r('app.string.camera_guide_feature_same_net'),
-        false, false, false, true, false)
+        GUIDE_NONE, GUIDE_PARTIAL, GUIDE_NONE, GUIDE_NONE, false)
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_standby'),
+        GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_online'),
-        true, true, false, true, true)
+        GUIDE_FULL, GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, true)
     }
     .width('100%')
   }
@@ -1412,10 +1525,39 @@ export struct CameraPage {
               .fontColor($r('app.color.text_tertiary'))
               .width('100%')
             this.GuideModesTable()
+            Text($r('app.string.camera_guide_modes_note'))
+              .fontSize(FontSize.Caption)
+              .lineHeight(18)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+              .padding({ top: 10 })
+
+            // 官方 SnapBridge 有、这里还没有的（用户 1.66.13 要求明示）。
+            Text($r('app.string.camera_guide_official_title'))
+              .fontSize(FontSize.Caption)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ top: 18 })
+            this.GuideBullet($r('app.string.camera_guide_official_1'))
+            this.GuideBullet($r('app.string.camera_guide_official_2'))
+            this.GuideBullet($r('app.string.camera_guide_official_3'))
+            this.GuideBullet($r('app.string.camera_guide_official_4'))
+            this.GuideBullet($r('app.string.camera_guide_official_5'))
+            this.GuideBullet($r('app.string.camera_guide_official_6'))
+
+            Text($r('app.string.camera_guide_partial_title'))
+              .fontSize(FontSize.Caption)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ top: 16 })
+            this.GuideBullet($r('app.string.camera_guide_partial_1'))
+            this.GuideBullet($r('app.string.camera_guide_partial_2'))
           }
           .width('100%')
           .alignItems(HorizontalAlign.Start)
-          .padding({ top: 14, bottom: 32 })
+          .padding({ top: 12, bottom: 16 })
         }
         .width('100%')
         .layoutWeight(1)
@@ -1438,7 +1580,7 @@ export struct CameraPage {
   }
 
   /**
-   * 状态头：进度点 + 一句状态 + 一行阶段细节 +（已连接时）照片数 + 主操作胶囊。
+   * 状态头：进度点 + 一句状态 + 一行说明 +（已连接时）照片数 + 主操作胶囊。
    *
    * 主操作永远是「当前这一步」：未连接是「搜索 / 配对 / 连接」，进行中禁用，
    * 已连接变中性底的「断开连接」。它也是页面上**唯一**的断开入口——同一张卡里
@@ -1449,6 +1591,10 @@ export struct CameraPage {
    * 自己的副行，和状态文案在同一条竖线上。为了让两行合起来只占**一颗主操作胶囊**
    * 的高度（卡片不因此变高），有副行、没有阶段详情时标题让位成 `Section` 小字，
    * 标题 → 副行成为 13/12 的两行节奏。
+   *
+   * **读卡失败也走同一个两行节奏**（1.65.1）：红灯 + 结论（13fp）+「下一步」（10fp）
+   * + 主色「重试」，两行合计仍在一颗胶囊的高度里，抽屉里不再另起红字。
+   * 标题仍是主文本色——和「配对失败」「没能连上相机」一致，红色只给状态点。
    */
   @Builder
   StatusHeader() {
@@ -1465,14 +1611,29 @@ export struct CameraPage {
           .backgroundColor(this.dotColor())
           .flexShrink(0)
       }
-      Column({ space: 3 }) {
+      Column({ space: this.scanFailed() ? 2 : 3 }) {
         Text(this.headline())
-          .fontSize(this.compactHeadline() ? FontSize.Section : FontSize.CardTitle)
+          .fontSize(this.scanFailed() || this.compactHeadline()
+            ? FontSize.Section : FontSize.CardTitle)
           .fontWeight(FontWeight.Medium)
+          // 状态头第一行永远是主文本色（红色只留给点）：失败态靠红灯 + 文案本身，
+          // 不给标题上红色——同一个页面里「配对失败」黑、「相机拒绝访问存储」红，
+          // 会被当成两种不同严重级别（1.65.2 统一）。
           .fontColor(this.compactHeadline()
             ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
           .width('100%')
-          .maxLines(2)
+          .maxLines(this.scanFailed() ? 1 : 2)
+          // 结论必须一行放得下（13fp 下最长的一条是「相机没有可用存储（请插入存储卡）」），
+          // 万一某个语言更长，宁可截断也不要让状态头长高、把两行节奏破掉。
+          .textOverflow({ overflow: this.scanFailed() ? TextOverflow.Ellipsis : TextOverflow.Clip })
+        if (this.scanFailed() && this.scanErrorHint() !== '') {
+          Text(this.scanErrorHint())
+            .fontSize(FontSize.Micro)
+            .lineHeight(14)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .maxLines(2)
+        }
         if (this.detail() !== '') {
           Text(this.detail())
             .fontSize(FontSize.Caption)
@@ -1488,7 +1649,9 @@ export struct CameraPage {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
-      if (this.linked() && this.svc.photoCount > 0) {
+      // 读卡失败时不显示照片数：那一行是「上次扫描留下的旧数字」，挂在红灯旁边
+      // 读起来像「其实连得挺好」；而且它会挤窄文字列，把第二行提示顶成两行。
+      if (this.linked() && !this.scanFailed() && this.svc.photoCount > 0) {
         Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
           .fontSize(FontSize.Caption)
           .fontColor($r('app.color.primary'))
@@ -1582,13 +1745,19 @@ export struct CameraPage {
     .width('100%')
   }
 
-  /** 蓝牙回不来时的说明（只在对它有意义的阶段渲染）。 */
+  /**
+   * 蓝牙回不来时的说明（只在对它有意义的阶段渲染）。
+   *
+   * 字号用「说明」档 12fp（1.65.2）：它是一整句诊断（「相机仍停在 Wi-Fi 模式。
+   * 可检查相机的「Wi-Fi 待机时间」设定，或关机再开。」），10fp 会排成一条又长
+   * 又小的红字；卡内所有说明文字统一 12fp，10fp 只留给状态头里那行紧凑提示。
+   */
   @Builder
   BleHintLine() {
     if (this.svc.bleHint !== '') {
       Text(this.svc.bleHint)
-        .fontSize(FontSize.Micro)
-        .lineHeight(16)
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
         .fontColor($r('app.color.status_error'))
         .width('100%')
     }
@@ -1600,6 +1769,12 @@ export struct CameraPage {
    * 配对设备列表在未配对时出现；配对完成后提示相机会切到热点，主动作是
    * 「连接相机」。以前这里还有一颗「查看照片」按钮，和状态头的「搜索相机」
    * 指向同一条流程，用户得猜点哪个——现在只留状态头那一颗。
+   *
+   * **提示只讲副作用**（1.65.2）：这一行原来写「相机会切到自己的 Wi-Fi 热点传
+   * 照片，配对连接会暂停一次；退出后相机自动回到待机。」，和下面的连接摘要
+   * 「点「连接相机」加入相机热点。」说的是同一件事，而且用 10fp 排在 12fp 的
+   * 摘要上面，一大一小两条提示互相打架。现在它只说摘要里没有的那半句（蓝牙会断、
+   * 退出后回待机），字号也回到「说明」档的 12fp。
    */
   @Builder
   ApControls() {
@@ -1608,8 +1783,8 @@ export struct CameraPage {
     } else {
       if (this.blePaired()) {
         Text($r('app.string.camera_conn_open_wifi_hint'))
-          .fontSize(FontSize.Micro)
-          .lineHeight(16)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
       }
@@ -1797,11 +1972,12 @@ export struct CameraPage {
       }
 
       // 失败原因已经写在状态头的详情行里，这里只在「空闲但网络有条件问题」时
-      // 提醒，避免同一句红字出现两遍。
+      // 提醒，避免同一句红字出现两遍。字号和其它说明文字一致用 12fp（1.65.2）：
+      // 这些是一整句网络诊断，不是标签，10fp 会排成又长又小的一条红字。
       if (this.svc.wifiHint !== '' && this.phase() !== CameraPhase.Failed) {
         Text(this.svc.wifiHint)
-          .fontSize(FontSize.Micro)
-          .lineHeight(16)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
           .fontColor($r('app.color.status_error'))
           .width('100%')
       }
@@ -1813,7 +1989,12 @@ export struct CameraPage {
   @Builder
   ModeControls() {
     if (this.svc.linkMode === CameraLinkMode.BLE) {
-      this.BleCameraList()
+      // 已配对/已连接时列表必须消失：那是「搜索出来的候选」，不是当前相机。
+      // （服务端连上之后也会把 `bleCameras` 清空，这里再兜一层。）
+      if (!this.blePaired()) this.BleCameraList()
+      // 首配被相机拒绝时，这里给一句能直接照做的说明（1.66.1）：
+      // 相机端还记着这台手机，得先去相机菜单删掉本机。
+      this.BleHintLine()
     } else if (this.svc.linkMode === CameraLinkMode.AP) {
       this.ApControls()
     } else if (this.svc.linkMode === CameraLinkMode.STA) {
@@ -2061,16 +2242,9 @@ export struct CameraPage {
           .width('100%')
       }
 
-      // 连接阶段的失败写在状态头的详情行里（唯一一处）；这里只保留「会话还在，
-      // 但这次扫描失败」——那时状态头是「已连接」，需要单独一行讲扫描错误。
-      if (this.svc.lastScanError !== '' && this.svc.connected) {
-        Text(this.svc.lastScanError)
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.status_error'))
-          .width('100%')
-      }
-
+      // 连接阶段的失败写在状态头的详情行里（唯一一处）；「会话还在、这一轮读卡
+      // 失败」也顶到状态头了（1.65.1：红灯 + 结论 +「下一步」+「重试」），
+      // 所以这里不再另有红字——同一个结论在一张卡里出现两遍，谁都会以为是两件事。
       Divider().color($r('app.color.divider'))
 
       // 四选一：不再配一句模式说明，模式差异交给下面的相机操作说明。

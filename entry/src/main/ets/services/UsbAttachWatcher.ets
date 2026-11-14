@@ -13,8 +13,18 @@ const DOMAIN = 0x0000;
 const TAG = 'UsbAttachWatcher';
 
 const EVENT_ATTACHED = 'usual.event.hardware.usb.action.USB_DEVICE_ATTACHED';
+/**
+ * 设备拔出（1.66.0）。
+ *
+ * 相机拔线 / 断电后，正在建立的 PTP 会话不会立刻报错——bulk 端点要等下一次
+ * 传输才知道对端没了，空闲时页面就一直停在「已连接」。系统这个公共事件是
+ * 零成本的拔出信号，交给 `CameraService.onUsbDeviceDetached()` 确认后收尾。
+ */
+const EVENT_DETACHED = 'usual.event.hardware.usb.action.USB_DEVICE_DETACHED';
 /** 相机接入后常会重新枚举，等描述符稳定再查一次设备列表。 */
 const ENUM_SETTLE_MS = 800;
+/** 拔出事件比系统枚举还早：等一拍再看设备列表，避免把「正在重枚举」判成「没了」。 */
+const DETACH_SETTLE_MS = 400;
 /** 同一台相机（VID/PID/产品名）在这个窗口内只提示一次。 */
 const ATTACH_DEDUPE_MS = 15000;
 /** 与 TransferNotice 的 4210 错开。 */
@@ -66,7 +76,7 @@ export class UsbAttachWatcher {
     this.started = true;
     this.appForeground = true;
     const info: commonEventManager.CommonEventSubscribeInfo = {
-      events: [EVENT_ATTACHED]
+      events: [EVENT_ATTACHED, EVENT_DETACHED]
     };
     commonEventManager.createSubscriber(info).then((subscriber: commonEventManager.CommonEventSubscriber) => {
       this.subscriber = subscriber;
@@ -79,6 +89,8 @@ export class UsbAttachWatcher {
             }
             if (data.event === EVENT_ATTACHED) {
               this.onUsbAttached();
+            } else if (data.event === EVENT_DETACHED) {
+              this.onUsbDetached();
             }
           });
         this.log('USB 插入监听已启动');
@@ -186,6 +198,20 @@ export class UsbAttachWatcher {
         });
       }
     }, ENUM_SETTLE_MS);
+  }
+
+  /**
+   * 设备拔出：交给服务层确认「是不是我们这台相机」再收尾。
+   *
+   * 这个事件对任何 USB 设备都会发（鼠标、U 盘），所以不在这里判断，服务层会
+   * 拿会话设备名和设备列表对一次。
+   */
+  private onUsbDetached(): void {
+    setTimeout(() => {
+      CameraService.getInstance().onUsbDeviceDetached().catch((err: Error) => {
+        this.log(`USB 拔出处理失败: ${err.message}`);
+      });
+    }, DETACH_SETTLE_MS);
   }
 
   private findCamera(): usbManager.USBDevice | null {

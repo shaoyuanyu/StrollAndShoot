@@ -159,7 +159,7 @@ async function resolveNetworkBinding(host: string): Promise<NetworkBinding | nul
     for (const net of nets) {
       let props: connection.ConnectionProperties;
       try {
-        props = connection.getConnectionPropertiesSync(net);
+        props = await connection.getConnectionProperties(net);
       } catch (_e) {
         continue;
       }

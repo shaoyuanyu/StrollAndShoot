@@ -142,7 +142,7 @@ async function addressesFromNets(): Promise<string[]> {
     for (const net of nets) {
       let props: connection.ConnectionProperties;
       try {
-        props = connection.getConnectionPropertiesSync(net);
+        props = await connection.getConnectionProperties(net);
       } catch (_e) {
         continue;
       }
@@ -168,10 +168,35 @@ function pushUnique(list: string[], value: string): void {
 }
 
 /**
- * 收集本机网络信息。**任何一步失败都只降级，不抛异常** —— 调用方是扫描
- * 与自动连接，宁可少一个网段也不能因为权限/能力缺失整个流程挂掉。
+ * 上一次快照与它的取用时刻。
+ *
+ * `connection.getAllNets()` 是**主线程任务**：系统网络服务忙时它能在主线程上
+ * 跑好几秒（2026-11-14 19:01 实测 7.5 秒，EventHandler 队列被堵住，系统判
+ * `THREAD_BLOCK_6S` 直接杀进程）。进入 STA 页面、紧接着开始扫描会连着要两次
+ * 快照，第二次没必要再去冒一次这个险，所以结果留 2 秒。
+ */
+let lastSnapshot: LocalNetworkInfo | null = null;
+let lastSnapshotAt: number = 0;
+const SNAPSHOT_TTL_MS = 2000;
+
+/**
+ * 收集本机网络信息（2 秒内复用上次结果）。
+ *
+ * **任何一步失败都只降级，不抛异常** —— 调用方是扫描与自动连接，宁可少一个
+ * 网段也不能因为权限/能力缺失整个流程挂掉。
  */
 export async function collectLocalNetworks(): Promise<LocalNetworkInfo> {
+  const now = Date.now();
+  if (lastSnapshot !== null && now - lastSnapshotAt < SNAPSHOT_TTL_MS) {
+    return lastSnapshot;
+  }
+  const info = await buildLocalNetworks();
+  lastSnapshot = info;
+  lastSnapshotAt = Date.now();
+  return info;
+}
+
+async function buildLocalNetworks(): Promise<LocalNetworkInfo> {
   const addresses: string[] = [];
   for (const ip of await addressesFromNets()) {
     pushUnique(addresses, ip);
@@ -186,7 +211,7 @@ export async function collectLocalNetworks(): Promise<LocalNetworkInfo> {
   }
   if (wifiConnected) {
     try {
-      wifiSsid = wifiManager.getLinkedInfoSync().ssid ?? '';
+      wifiSsid = (await wifiManager.getLinkedInfo()).ssid ?? '';
     } catch (_e) {
       wifiSsid = '';
     }

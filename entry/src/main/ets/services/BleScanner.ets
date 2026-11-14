@@ -19,6 +19,40 @@ export interface BleCameraDevice {
 /** 尼康在 BLE 厂商数据里用的公司 ID。 */
 const NIKON_COMPANY_ID = 0x0399;
 
+/** 首次连接 / 配对时等 GATT 上报状态的上限（相机休眠时唤醒要几秒）。 */
+const CONNECT_TIMEOUT_MS = 10000;
+/** 握手等 stage2 / stage4 的上限。相机醒着是毫秒级，睡着就等满。 */
+const HANDSHAKE_TIMEOUT_MS = 15000;
+/**
+ * 自动重连：一次 GATT 建链的等待上限。
+ *
+ * **不能当成「地址过期就立刻失败」的短超时**：相机半睡时实测建链要 **8 秒**
+ * （2026-11-14：16:51:33 发起 → 41 秒才 STATE_CONNECTED；16:57:25 → 33 同样 8 秒），
+ * 原来给 5 秒等于每次都在成功前一秒放弃，日志里就只剩一串
+ * 「BLE 连接状态: 1 → 连接超时（5s）」。12 秒留出余量（含 MTU 最多 2 秒兜底）。
+ */
+const RECONNECT_CONNECT_MS = 12000;
+/** 自动重连：扫一轮相机的窗口；扫到第一台就提前结束。 */
+const RECONNECT_LISTEN_MS = 20000;
+/** 服务表查询的单次超时：相机睡着时 getServices 能挂十秒。 */
+const SERVICE_TIMEOUT_MS = 4000;
+/**
+ * 发现超时后，等服务发现真正落地的最长时间。
+ *
+ * 超时只是我们不等了，那一笔仍在蓝牙栈里跑（实测约 10 秒才报错）。在这段
+ * 时间里订阅或再发一笔发现，都会排到它后面——而这一步是**在自己的线程上同步
+ * 等**的，于是整个 JS 主线程跟着一起卡住（2026-11-14 18:29 的 THREAD_BLOCK_6S）。
+ */
+const SERVICE_LANDING_MS = 12000;
+/** 自动重连：复用握手的等待上限（相机醒着时毫秒级就回）。 */
+const RECONNECT_HANDSHAKE_MS = 6000;
+/** 自动重连：两轮之间的固定间隔（前台）。不做指数退避——相机随时会醒。 */
+const RECONNECT_GAP_MS = 1000;
+/** 自动重连：后台的间隔（没人看页面，别一直扫）。 */
+const RECONNECT_GAP_BACKGROUND_MS = 15000;
+/** 自动重连：超过这么久还没扫到相机，就从低延迟扫描降到低功耗扫描。 */
+const RECONNECT_FAST_MS = 120000;
+
 /** 尼康智能设备模式的 GATT 服务（LSS / DE00 族）。 */
 export const NIKON_BLE_SERVICE = '0000de00-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_BLE_SERVICE_ALT = '0000de01-3dd4-4255-8d62-6dc7b9bd5561';
@@ -51,6 +85,12 @@ function cccdDescriptor(charUuid: string, indicate: boolean): ble.BLEDescriptor 
     descriptorUuid: CCCD_UUID,
     descriptorValue: value.buffer as ArrayBuffer
   };
+}
+
+/** `getServices()` 的结果。「超时」与「真的没有服务」必须分开：前者不能再发第二笔。 */
+interface ServiceProbe {
+  services: Array<ble.GattService>;
+  timedOut: boolean;
 }
 
 interface PendingChar {
@@ -110,12 +150,29 @@ export class BleScanner {
     }
   };
 
+  /**
+   * 扫描档位。官方《蓝牙重连最佳实践》给的用法是「两阶段」：
+   * 发现阶段用 `SCAN_MODE_LOW_LATENCY` 抢时间，长期盯着用 `SCAN_MODE_LOW_POWER`
+   * 省电——「长时间后台扫描用 LOW_LATENCY 会导致功耗和发热严重」。
+   * 不传 `fast` 就是系统默认的 `SCAN_MODE_LOW_POWER`。
+   */
+  private readonly dutyMode: ble.ScanDuty;
+
+  /**
+   * @param filterDeviceId 只收这个尼康 deviceId（0 = 按广播名筛）。
+   * @param fast 抢时间用低延迟扫描。只在「用户正等着结果」的短扫描里传 true：
+   *   手动搜索、冷启动接回相机、以及刚断链前两分钟的重连。长期盯着必须用
+   *   低功耗档，否则功耗和发热都会上来。
+   */
   constructor(onFound: (device: BleCameraDevice) => void,
               onLog: (msg: string) => void,
-              filterDeviceId: number = 0) {
+              filterDeviceId: number = 0,
+              fast: boolean = false) {
     this.onFound = onFound;
     this.onLog = onLog;
     this.filterDeviceId = filterDeviceId;
+    this.dutyMode = fast ? ble.ScanDuty.SCAN_MODE_LOW_LATENCY
+      : ble.ScanDuty.SCAN_MODE_LOW_POWER;
   }
 
   /** 从厂商数据解析尼康 deviceId（小端 u32；解析不出来返回 0）。 */
@@ -133,9 +190,15 @@ export class BleScanner {
     try {
       ble.on('BLEDeviceFind', this.handleFind);
       // 空数组会被拒（401 Invalid parameter）；一个空 filter 对象表示「不过滤」。
+      // 按**厂商 ID** 过滤是官方推荐的做法：在芯片层就筛掉别人的广播，
+      // 功耗和回调频率都低得多。只有「找一台还没配对的新相机」时才留空
+      // （相机等待配对时广播里不一定带 0x0399）。
       const filter: ble.ScanFilter = {};
-      ble.startBLEScan([filter]);
-      this.onLog('BLE 开始扫描');
+      if (this.filterDeviceId !== 0) filter.manufactureId = NIKON_COMPANY_ID;
+      const options: ble.ScanOptions = { dutyMode: this.dutyMode };
+      ble.startBLEScan([filter], options);
+      this.onLog(`BLE 开始扫描（${this.dutyMode === ble.ScanDuty.SCAN_MODE_LOW_LATENCY
+        ? '低延迟' : '低功耗'}${this.filterDeviceId !== 0 ? '，只收尼康广播' : ''}）`);
     } catch (err) {
       this.scanning = false;
       this.onLog(`BLE 扫描启动失败: ${(err as BusinessError).message}`);
@@ -167,10 +230,29 @@ export class BleScanner {
  */
 export class BleCameraLink {
   private gatt: ble.GattClientDevice | null = null;
+  /**
+   * 本次连接是否已经拿到服务表。
+   *
+   * 这是**订阅特征的前置条件**：`setCharacteristicChangeIndication()` 内部会
+   * 同步调 `GattClient::GetService()` → `GetServices()`，服务表不在缓存里时
+   * 这段发现会**跑在 JS 主线程上**。相机半睡或链路刚抖过时它能卡 6 秒以上，
+   * 系统直接判 2026-11-14 18:29 那次 `THREAD_BLOCK_6S` 闪退。所以服务表没
+   * 就绪时宁可这一轮不连，也不能进那次调用。
+   */
+  private servicesReady: boolean = false;
+  /**
+   * `getServices()` 超时后，那一笔其实还挂在蓝牙栈里。
+   *
+   * 在它回来之前**不能再发第二笔**（第二笔会排在它后面，同样卡主线程），
+   * 也不能订阅（订阅会等它）。这里存一份句柄，用来等它自己落地。
+   */
+  private discoveryInFlight: Promise<void> | null = null;
   private readonly onLog: (msg: string) => void;
   private readonly onState: (connected: boolean) => void;
   private pendingChar: PendingChar | null = null;
   private keepaliveTimer: number = -1;
+  /** 保活连续失败次数：用来兜底「系统没给断链事件、写入却一直失败」的情况。 */
+  private keepaliveFailures: number = 0;
   /** 配对握手是否已完成（只有完成后才应答 0x2008）。 */
   private paired: boolean = false;
   connected: boolean = false;
@@ -199,12 +281,35 @@ export class BleCameraLink {
   private autoReconnect: boolean = false;
   private reconnecting: boolean = false;
   private reconnectTimer: number = -1;
-  private backoffIndex: number = 0;
-  private readonly backoffMs: number[] = [2000, 3000, 5000, 8000, 12000, 20000, 30000];
+  /**
+   * 自动重连**不做指数退避**（1.66.4）。
+   *
+   * 退避是给「对端可能永远不回来」的轮询用的；这里对端是用户手上的相机，
+   * 半按快门就会回来，退避只会把「几秒能接上」拖成几十秒。现在的策略是
+   * **一直监听广播**，代价用「扫描档位」控制：相机不在的前两分钟用
+   * `SCAN_MODE_LOW_LATENCY`（官方两阶段里的发现阶段），之后降到
+   * `SCAN_MODE_LOW_POWER` 长期盯；退到后台直接用 LOW_POWER。
+   */
+  private foreground: boolean = true;
+  /** 本轮「相机不在」从什么时候开始：用来决定用哪一档扫描。 */
+  private outageSince: number = 0;
+  /** 自动重连进行中：服务枚举只试一次、超时更短，别把时间耗在等相机上。 */
+  private reconnectingFast: boolean = false;
+  /** 上层正在主动连接：这段时间内不要再起自动重连，否则两条路会各建一条链路。 */
+  private explicitBusy: boolean = false;
+  /** 上次直连地址失败过：地址多半已经换了，后面的轮次别再白等。 */
+  private staleAddress: boolean = false;
   /** 重连成功后的回调（上层用它恢复校时与保活）。 */
   onReconnected: (serial: string) => void = (_s: string) => {};
   /** 重连状态变化（true = 正在重连），上层用它驱动 UI 文案。 */
   onReconnecting: (reconnecting: boolean) => void = (_v: boolean) => {};
+  /**
+   * 自动重连扫不到相机（连广播都没有）＝相机多半进了待机。
+   *
+   * 这时再怎么重试都要等用户把相机唤醒，页面得说清楚，而不是一直
+   * 「正在重新连接相机…」。上层用它把状态头的详情行换成「相机可能已休眠」。
+   */
+  onReconnectStalled: () => void = () => {};
 
   constructor(onLog: (msg: string) => void,
               onState: (connected: boolean) => void = (_c: boolean) => {}) {
@@ -357,12 +462,20 @@ export class BleCameraLink {
     return false;
   }
 
-  private async connectGatt(deviceId: string): Promise<boolean> {
+  private async connectGatt(deviceId: string, timeoutMs: number = CONNECT_TIMEOUT_MS): Promise<boolean> {
     try {
       const gatt = ble.createGattClientDevice(deviceId);
+      // 新客户端 = 服务表缓存空的：这一轮必须重新发现，订阅前先看 `servicesReady`。
+      this.servicesReady = false;
+      this.discoveryInFlight = null;
       this.gatt = gatt;
       const ok = await new Promise<boolean>((resolve: (v: boolean) => void) => {
         let settled = false;
+        // 超时之后放弃了这个客户端：它可能在我们已经转去扫描之后才连上，
+        // 那时不能再改 `connected` / 发 `onState`（2026-11-14 实测：超时 3 秒后
+        // 仍上报 CONNECTED、6 秒后上报 MTU，留下一条「系统连着、App 以为断了」
+        // 的幽灵链路）。
+        let abandoned = false;
         const finish = (v: boolean): void => {
           if (settled) return;
           settled = true;
@@ -371,6 +484,7 @@ export class BleCameraLink {
         try {
           gatt.on('BLEConnectionStateChange', (state: ble.BLEConnectionChangeState) => {
             this.onLog(`BLE 连接状态: ${state.state}`);
+            if (abandoned) return;
             if (state.state === constant.ProfileConnectionState.STATE_CONNECTED) {
               // 连上就请求 MTU：相机在发现服务前长时间收不到 MTU 请求会断链。
               try {
@@ -386,6 +500,8 @@ export class BleCameraLink {
             } else if (state.state === constant.ProfileConnectionState.STATE_DISCONNECTED) {
               const wasConnected = this.connected;
               this.connected = false;
+              // 链路没了，服务表也作废：之后的读写/订阅一律先重新发现。
+              this.servicesReady = false;
               this.onState(false);
               finish(false);
               // 只对「曾经连上过」的断链排重连；初始连接失败有自己的路径。
@@ -396,6 +512,7 @@ export class BleCameraLink {
           });
           gatt.on('BLEMtuChange', (mtu: number) => {
             this.onLog(`BLE MTU: ${mtu}`);
+            if (abandoned) return;
             finish(true);
           });
           gatt.on('BLECharacteristicChange', (data: ble.BLECharacteristic) => {
@@ -419,9 +536,26 @@ export class BleCameraLink {
         }
         setTimeout(() => {
           if (settled) return;
-          this.onLog('BLE 连接超时（10s 无状态事件）');
+          abandoned = true;
+          this.onLog(`BLE 连接超时（${Math.round(timeoutMs / 1000)}s 无状态事件）`);
           finish(false);
-        }, 10000);
+          // 关掉客户端。留着的话它会在我们转去扫描之后才连上，而 `this.gatt`
+          // 已经指向别处，之后所有读写都打在一个没人管的对象上。
+          // 先 `disconnect()` 再 `close()`：前者才会向相机发终止指示，让相机
+          // 尽快放掉这条链路；只 close 的话相机可能还占着它唯一的连接槽，
+          // 后续每次连接都得到超时（2026-11-14 实测怀疑点）。
+          try {
+            gatt.disconnect();
+          } catch (_e) {
+            // 还没连上，忽略
+          }
+          try {
+            gatt.close();
+          } catch (_e) {
+            // 已经关了
+          }
+          if (this.gatt === gatt) this.gatt = null;
+        }, timeoutMs);
       });
       this.connected = ok;
       if (ok) {
@@ -435,41 +569,131 @@ export class BleCameraLink {
   }
 
   /** 列出服务与特征 UUID，用于确认相机 GATT 结构。 */
-  async listServices(): Promise<string[]> {
-    // 服务发现是异步的：刚连上/刚协商完 MTU 时 getServices 可能返回空，
-    // 这里重试三次（间隔 600ms），拿到非空结果为止。
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const gatt = this.gatt;
-      if (gatt === null) return [];
-      try {
-        const services = await gatt.getServices();
-        if (services.length > 0) {
-          const lines: string[] = [];
-          for (const service of services) {
-            const chars = service.characteristics ?? [];
-            lines.push(`${service.serviceUuid} (${chars.length} 个特征)`);
-            for (const ch of chars) {
-              lines.push(`  ${ch.characteristicUuid}`);
-            }
-          }
-          this.onLog(`BLE 服务: ${lines.length} 行`);
-          return lines;
-        }
-      } catch (err) {
-        this.onLog(`BLE 取服务失败(${attempt + 1}/3): ${(err as BusinessError).message}`);
-      }
-      await new Promise<void>((resolve: () => void) => {
-        setTimeout(resolve, 600);
+  /**
+   * `getServices()` 带超时。
+   *
+   * 相机睡着时它能**挂十秒才报 Operation failed**（2026-11-14 实测：16:51:46
+   * 开始、16:52:03 才回来第二笔），而重连这条路上最不该做的就是等它——
+   * 叫醒相机靠的是握手第一帧的重发，不是服务表。所以自己包一层超时。
+   */
+  private servicesOrTimeout(gatt: ble.GattClientDevice,
+                            timeoutMs: number): Promise<ServiceProbe> {
+    return new Promise<ServiceProbe>((resolve: (v: ServiceProbe) => void) => {
+      let settled = false;
+      const finish = (services: Array<ble.GattService>, timedOut: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ services: services, timedOut: timedOut } as ServiceProbe);
+      };
+      const timer = setTimeout(() => { finish([], true); }, timeoutMs);
+      const discovery = gatt.getServices();
+      // 记下这一笔：超时只是我们不等了，蓝牙栈里它还在跑。在它落地之前既不能
+      // 再发一笔发现（会排队），也不能订阅（订阅会等它）——两者都会卡住主线程。
+      this.discoveryInFlight = discovery.then(() => {
+        // 等它落地即可，成功失败都不重要：调用方会自己补探。
+      }, () => {
+        // 同上
+      }).then(() => {
+        this.discoveryInFlight = null;
       });
+      discovery.then((list: Array<ble.GattService>) => {
+        finish(list, false);
+      }).catch(() => {
+        finish([], false);
+      });
+    });
+  }
+
+  /**
+   * 断开之前，先等在途的服务发现落地。
+   *
+   * `gatt.disconnect()` / `gatt.close()` 都是**同步** napi 调用，内部要拿蓝牙栈
+   * 里这个 GATT 客户端的锁；服务发现还在跑时，主线程就跟着一起等。2026-11-14
+   * 19:01 实测等了 7 秒——faultlog 里那段被算在名为 `getAllNets` 的 EventHandler
+   * 任务头上（任务名是投递它的那个 napi 回调，不是真正卡住的地方），真正的栈在
+   * 3 秒样本里：`GattClient::Disconnect()` 等锁。
+   *
+   * 所以断开前统一等一拍：发现落地（成功/失败都算）再断。最多等
+   * [SERVICE_LANDING_MS]，等不到也不能一直挂着——那就照断，但至少不是在最忙的
+   * 时候撞上去。
+   */
+  private async settleDiscovery(): Promise<void> {
+    if (this.discoveryInFlight === null) return;
+    this.onLog('断开前先等服务发现落地（避免主线程等蓝牙栈的锁）');
+    await this.waitDiscovery(SERVICE_LANDING_MS);
+  }
+
+  /**
+   * 等上一次超时的服务发现自己落地（最多 [timeoutMs]）。
+   *
+   * true = 已经没有在途的发现，可以安全地再探一次；false = 它还挂着，
+   * 这一轮只能放弃，绝不能在这时订阅。
+   */
+  private async waitDiscovery(timeoutMs: number): Promise<boolean> {
+    const inFlight = this.discoveryInFlight;
+    if (inFlight === null) return true;
+    return await new Promise<boolean>((resolve: (v: boolean) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      }, timeoutMs);
+      inFlight.then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      }).catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
+  /**
+   * 只查一次服务表，纯诊断用（没有界面读它）。
+   *
+   * **超时之后绝不再发第二笔**：第一笔还挂在蓝牙栈里，第二笔会排队等它，
+   * 而这个等待会卡住 JS 主线程——2026-11-14 17:41 就是这么 freeze 的
+   * （THREAD_BLOCK_3S/6S，紧接着 `bt_fwk_gatt_client (GetServices)timeout`）。
+   */
+  async listServices(): Promise<string[]> {
+    const gatt = this.gatt;
+    if (gatt === null) return [];
+    const probe = await this.servicesOrTimeout(gatt, SERVICE_TIMEOUT_MS);
+    if (probe.timedOut) {
+      this.onLog('BLE 服务表查询超时（不再重试）');
+      return [];
     }
-    this.onLog('BLE 服务枚举为空（3 次重试均无结果）');
-    return [];
+    const services = probe.services;
+    if (services.length === 0) {
+      this.onLog('BLE 服务表为空');
+      return [];
+    }
+    const lines: string[] = [];
+    for (const service of services) {
+      const chars = service.characteristics ?? [];
+      lines.push(`${service.serviceUuid} (${chars.length} 个特征)`);
+      for (const ch of chars) {
+        lines.push(`  ${ch.characteristicUuid}`);
+      }
+    }
+    this.onLog(`BLE 服务: ${lines.length} 行`);
+    return lines;
   }
 
   /** 开启某个特征的 notify（0x2008 用 notify，不是 indicate）。 */
   async enableNotification(charUuid: string): Promise<void> {
     const gatt = this.gatt;
     if (gatt === null) throw new Error('BLE 未连接');
+    if (!this.servicesReady) {
+      // 与 enableIndication 同理：订阅会在主线程上同步发现服务。
+      throw new Error('服务表未就绪，跳过订阅');
+    }
     const char: ble.BLECharacteristic = {
       serviceUuid: NIKON_BLE_SERVICE,
       characteristicUuid: charUuid,
@@ -500,6 +724,10 @@ export class BleCameraLink {
   async readCharacteristic(charUuid: string): Promise<Uint8Array | null> {
     const gatt = this.gatt;
     if (gatt === null) return null;
+    if (!this.servicesReady) {
+      // 同写特征：读也要先按 UUID 解析特征，没服务表就可能卡在主线程。
+      return null;
+    }
     const char: ble.BLECharacteristic = {
       serviceUuid: NIKON_BLE_SERVICE,
       characteristicUuid: charUuid,
@@ -703,8 +931,10 @@ export class BleCameraLink {
   startKeepalive(intervalMs: number, offsetMinutes: number,
                  fixProvider: () => BleGeoFix | null): void {
     this.stopKeepalive();
+    this.keepaliveFailures = 0;
     this.keepaliveTimer = setInterval(() => {
       this.writeTime(offsetMinutes).then(() => {
+        this.keepaliveFailures = 0;
         const fix = fixProvider();
         if (fix !== null) {
           return this.writeLocation(fix);
@@ -712,8 +942,29 @@ export class BleCameraLink {
         return Promise.resolve();
       }).catch((err: Error) => {
         this.onLog(`BLE 保活失败: ${err.message}`);
+        this.handleKeepaliveFailure();
       });
     }, intervalMs);
+  }
+
+  /**
+   * 保活连续失败 → 判定链路已断（1.66.0）。
+   *
+   * 相机断电、走出范围时通常会有 `BLEConnectionStateChange`，但偶尔只剩「写入
+   * 一直报错、系统不发断链事件」：那之后页面会一直显示「已连接」。连续两次
+   * （45 秒一拍，约 90 秒）都写不进去就按断链处理：停保活、关 GATT，交给上层
+   * 的自动重连接手。**一次不判**——相机忙的时候偶尔会拒收一笔。
+   */
+  private handleKeepaliveFailure(): void {
+    this.keepaliveFailures++;
+    if (this.keepaliveFailures < 2) return;
+    this.keepaliveFailures = 0;
+    this.onLog('BLE 保活连续失败：判定链路已断，按断链处理');
+    this.disconnectInner().then(() => {
+      this.scheduleReconnect();
+    }).catch((_e: Error) => {
+      // 已经断了：重连由上层自己排
+    });
   }
 
   stopKeepalive(): void {
@@ -727,6 +978,10 @@ export class BleCameraLink {
   async enableIndication(charUuid: string): Promise<void> {
     const gatt = this.gatt;
     if (gatt === null) throw new Error('BLE 未连接');
+    if (!this.servicesReady) {
+      // 进 setCharacteristicChangeIndication 就会在 JS 主线程上同步发现服务。
+      throw new Error('服务表未就绪，跳过订阅');
+    }
     const char: ble.BLECharacteristic = {
       serviceUuid: NIKON_BLE_SERVICE,
       characteristicUuid: charUuid,
@@ -757,6 +1012,11 @@ export class BleCameraLink {
   async writeCharacteristic(charUuid: string, value: Uint8Array): Promise<void> {
     const gatt = this.gatt;
     if (gatt === null) throw new Error('BLE 未连接');
+    if (!this.servicesReady) {
+      // 写特征同样要按 UUID 找特征（GetGattcCharacteristic → GetServices），
+      // 服务表不在缓存里时这段发现在主线程上同步跑——和订阅是同一条险路。
+      throw new Error('服务表未就绪，跳过写入');
+    }
     const char: ble.BLECharacteristic = {
       serviceUuid: NIKON_BLE_SERVICE,
       characteristicUuid: charUuid,
@@ -901,8 +1161,13 @@ export class BleCameraLink {
 
     // ---------- 断链让位 + 经典绑定 ----------
     // 相机要等 BLE 释放才暴露经典蓝牙；让位窗太短会把相机射频楔死。
+    //
+    // **这里必须用 `disconnectInner()`，不能用 `disconnect()`**：后者会置上
+    // 用户取消标记（它给「取消连接」按钮用），于是断链 3 秒后自己就会
+    // 判定「用户已取消（经典绑定未做）」——首配永远走不到经典绑定这一步。
+    // 4b5bd97 引入取消标记时踩过，2026-11-14 真机上就是这个现象。
     this.onLog('配对: 段 1 完成，断开 BLE 让相机暴露经典蓝牙');
-    await this.disconnect();
+    await this.disconnectInner();
     await BleCameraLink.sleep(3000);
     if (this.cancelled) {
       this.onLog('配对: 用户已取消（经典绑定未做）');
@@ -990,23 +1255,47 @@ export class BleCameraLink {
    * `setCharacteristicChangeIndication` 会报 401 Invalid parameter
    * （2026-11-11 真机实测：段 2 回链后就断在这儿）。
    */
-  private async ensureServices(): Promise<void> {
+  /**
+   * @param fast 连接的是**已配对**的相机（复用握手）。相机睡着时
+   *   `getServices()` 会挂好几秒才失败，等它没意义——叫醒相机靠的是握手
+   *   第一帧每 2 秒重发。这时只试一次、2.5 秒就走，把时间让给 stage1。
+   * @returns 服务表是否真的拿到。**返回 false 时调用方必须放弃这一轮**：
+   *   没有服务表的订阅会在主线程上同步做一遍服务发现，直接把界面卡死。
+   */
+  private async ensureServices(fast: boolean = false): Promise<boolean> {
     const gatt = this.gatt;
-    if (gatt === null) return;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        const services = await gatt.getServices();
-        if (services.length > 0) {
-          // 服务表到位后再等一拍，让链路加密/参数更新落定。
-          await BleCameraLink.sleep(300);
-          return;
+    if (gatt === null) return false;
+    this.servicesReady = false;
+    const quick = fast || this.reconnectingFast;
+    const attempts = quick ? 1 : 5;
+    const perCall = quick ? 2500 : SERVICE_TIMEOUT_MS;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const probe = await this.servicesOrTimeout(gatt, perCall);
+      if (probe.services.length > 0) {
+        // 服务表到位后再等一拍，让链路加密/参数更新落定。
+        this.servicesReady = true;
+        await BleCameraLink.sleep(300);
+        return true;
+      }
+      // 超时说明这一笔还挂在蓝牙栈里：再发一笔就会排队等它、把 JS 线程卡死。
+      if (probe.timedOut) {
+        // 等它自己落地，然后补探一次（这次是全新一笔，不会排队）。
+        if (!await this.waitDiscovery(SERVICE_LANDING_MS)) {
+          this.onLog('配对: 服务发现一直没回来，本轮放弃（不在主线程上冒卡死的险）');
+          return false;
         }
-      } catch (_e) {
-        // 重试
+        const again = await this.servicesOrTimeout(gatt, perCall);
+        if (again.services.length > 0) {
+          this.servicesReady = true;
+          await BleCameraLink.sleep(300);
+          return true;
+        }
+        return false;
       }
       await BleCameraLink.sleep(400);
     }
-    this.onLog('配对: GATT 服务表仍为空，订阅可能失败');
+    this.onLog('配对: GATT 服务表为空，本轮不订阅');
+    return false;
   }
 
   /** 写 0x2002 控制器名（32B ASCII 零填充）。 */
@@ -1027,14 +1316,23 @@ export class BleCameraLink {
    * 全表读取（那只会增加 GATT 流量，增大被踢链的机会）。
    */
   private async handshake(pairing: NikonPairing, stage1: PairingMessage,
-                          resume: boolean = false): Promise<string | null> {
+                          resume: boolean = false,
+                          timeoutMs: number = HANDSHAKE_TIMEOUT_MS): Promise<string | null> {
     if (!this.connected) {
       this.onLog('配对: 链路不在，握手跳过');
       return null;
     }
     // bond 之后重连，GATT 服务缓存往往是空的；不先拉一次服务表，
     // setCharacteristicChangeIndication 会直接报 401 Invalid parameter。
-    await this.ensureServices();
+    // 复用握手（连的是一台已配对的相机）时不等服务表：相机半睡时
+    // `getServices()` 能挂十秒，而 stage1 重发本身就是叫醒手段。
+    if (!await this.ensureServices(resume)) {
+      // **拿不到服务表就绝不能往下走**：订阅内部会同步发现服务，相机半睡时
+      // 卡满 6 秒，系统判 THREAD_BLOCK_6S 闪退（2026-11-14 18:29）。这一轮
+      // 放弃，交给重连循环；下一轮相机多半已经醒了。
+      this.onLog('配对: 服务表未就绪，本轮不订阅（避免主线程卡死）');
+      return null;
+    }
     // 先开 0x2008 通知，相机半睡时也要靠 GATT 流量叫醒。
     try {
       await this.enableIndication(NIKON_CHAR_CONTROL);
@@ -1045,7 +1343,7 @@ export class BleCameraLink {
     await this.enableIndication(NIKON_CHAR_PAIRING);
     this.onLog(`配对: 0x2000 indicate 已开启（${resume ? '复用' : '首配'}）`);
 
-    const stage2Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, 15000);
+    const stage2Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, timeoutMs);
     await this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw);
     this.onLog('配对: stage1 已发送');
     // 相机半睡时 GATT 服务器不回 stage2，约 12 秒后被踢链。每 2 秒重发一次
@@ -1068,7 +1366,7 @@ export class BleCameraLink {
     if (result === null) {
       return null;
     }
-    const stage4Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, 15000);
+    const stage4Promise = this.waitCharacteristic(NIKON_CHAR_PAIRING, timeoutMs);
     await this.writeCharacteristic(NIKON_CHAR_PAIRING, result.message.raw);
     this.onLog('配对: stage3 已发送');
     const stage4 = decodePairingMessage(await stage4Promise);
@@ -1116,10 +1414,57 @@ export class BleCameraLink {
     return false;
   }
 
+  /** 「等相机回来」的循环是否开着（后台保活要看它，别在断链那一瞬间把任务放掉）。 */
+  watchArmed(): boolean {
+    return this.autoReconnect;
+  }
+
+  /** 应用前后台切换：前台重连更勤（用户随时会唤醒相机），后台放缓。 */
+  setForeground(foreground: boolean): void {
+    this.foreground = foreground;
+    if (!foreground || !this.autoReconnect || this.reconnecting || this.connected) return;
+    // 从后台回来时不要把后台那 15 秒等满；顺带兜一层「循环已经断了」的情况：
+    // 没有在途重连、也没有排队的计时器，就地补一轮。
+    if (this.reconnectTimer >= 0) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = -1;
+      void this.tryAutoReconnect();
+    }, 500);
+  }
+
+  /**
+   * 上层要主动连一次：先把「等相机回来」的循环停掉。
+   *
+   * 不停的话会出现两条路同时 `createGattClientDevice()` + 握手——同一个特征上
+   * 第二次订阅会被拒（`Please call the interface only after the previous callback
+   * has been completed`），日志里 17:47 就是两条「BLE 直连」各建了一条链路。
+   */
+  pauseReconnectWatch(): void {
+    this.explicitBusy = true;
+    this.disableAutoReconnect();
+  }
+
+  /**
+   * 现在就把「等相机回来」的循环开起来。
+   *
+   * 给「已配对、但这次没连上」用：相机睡着了（或者刚被唤醒、还没开始广播），
+   * 不需要用户再点一次「连接相机」，后台每秒碰一次，醒了自己接上。
+   * 用户点「断开连接」时 `disconnect()` 会把它关掉。
+   */
+  wakeReconnectWatch(): void {
+    this.explicitBusy = false;
+    if (!this.autoReconnect) this.enableAutoReconnect();
+    // 刚才直连失败的那个地址大概率已经作废，别再每轮白等 5 秒。
+    this.staleAddress = true;
+    this.scheduleReconnect();
+  }
+
   /** 开启断链自动重连（相机会休眠，链路断了自己爬起来）。 */
   enableAutoReconnect(): void {
+    this.explicitBusy = false;
     this.autoReconnect = true;
-    this.backoffIndex = 0;
+    this.outageSince = 0;
+    this.staleAddress = false;
   }
 
   /** 关闭自动重连并取消在途重试（用户主动断开时调）。 */
@@ -1133,12 +1478,14 @@ export class BleCameraLink {
     }
   }
 
-  /** 断链沿：按退避排一次重连。 */
+  /**
+   * 断链沿：排下一轮重连。
+   *
+   * 不递增等待时间——相机随时会醒，间隔固定 1 秒（后台 15 秒，没人看）。
+   */
   private scheduleReconnect(): void {
     if (!this.autoReconnect || this.reconnecting || this.reconnectTimer >= 0) return;
-    const delay = this.backoffMs[Math.min(this.backoffIndex, this.backoffMs.length - 1)];
-    this.backoffIndex++;
-    this.onLog(`${Math.round(delay / 1000)} 秒后自动重连（第 ${this.backoffIndex} 次）`);
+    const delay = this.foreground ? RECONNECT_GAP_MS : RECONNECT_GAP_BACKGROUND_MS;
     this.onReconnecting(true);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = -1;
@@ -1153,17 +1500,28 @@ export class BleCameraLink {
    * 重发（每 2 秒）就是唤醒手段。
    */
   private async tryAutoReconnect(): Promise<void> {
-    if (!this.autoReconnect || this.reconnecting) return;
+    if (!this.autoReconnect || this.reconnecting || this.explicitBusy) return;
     const store = BleIdentityStore.getInstance();
     if (!store.hasIdentity()) return;
     this.reconnecting = true;
+    this.reconnectingFast = true;
+    if (this.outageSince === 0) this.outageSince = Date.now();
+    let failed = false;
     this.onLog('BLE 自动重连中…');
     try {
       await this.disconnectInner();
-      if (this.deviceId.length > 0 && !await this.connectGatt(this.deviceId)) {
-        await this.recoverByScan(store.identityDevice);
-      } else if (this.deviceId.length === 0) {
-        await this.recoverByScan(store.identityDevice);
+      // 先试上次的地址（`staleAddress` 为假时）：地址没变就能省掉一轮扫描。
+      // 超时用 `RECONNECT_CONNECT_MS`——相机半睡时建链要 8 秒，给短了等于
+      // 每次都在成功前一秒放弃。
+      let direct = false;
+      if (this.deviceId.length > 0 && !this.staleAddress) {
+        direct = await this.connectGatt(this.deviceId, RECONNECT_CONNECT_MS);
+        // 这个地址已经连不上了：相机换了随机地址，下一轮直接跳过它去扫描，
+        // 别再每轮白等一个连接超时。
+        this.staleAddress = !direct;
+      }
+      if (!direct) {
+        await this.recoverByScan(store.identityDevice, RECONNECT_LISTEN_MS);
       }
       if (!this.connected) {
         throw new Error('没有可用的链路');
@@ -1171,53 +1529,83 @@ export class BleCameraLink {
       const blowfish = new NikonBlowfish(this.onLog);
       const pairing = new NikonPairing(blowfish, this.onLog);
       const stage1 = pairing.createStage1(store.identityDevice, store.identityNonce);
-      const serial = await this.handshake(pairing, stage1, true);
+      // 相机醒着时几毫秒就回 stage2；等 15 秒只会让「这一轮没连上」变成很长的空转。
+      const serial = await this.handshake(pairing, stage1, true, RECONNECT_HANDSHAKE_MS);
       if (serial === null) {
         throw new Error('复用握手未通过');
       }
       await this.writeControllerName();
       this.paired = true;
-      this.backoffIndex = 0;
+      this.outageSince = 0;
       this.onLog(`BLE 自动重连成功（序列号 ${serial}）`);
       this.onReconnecting(false);
       this.onReconnected(serial);
     } catch (err) {
+      failed = true;
       this.onLog(`BLE 自动重连失败: ${(err as Error).message}`);
-      this.scheduleReconnect();
     } finally {
       this.reconnecting = false;
+      this.reconnectingFast = false;
     }
+    // **必须放在 finally 之后**：`scheduleReconnect()` 会检查 `reconnecting`，
+    // 在 catch 里直接排会被自己挡掉，返回前 `reconnecting` 还是 true。以前就是
+    // 这样——每次断链只重试一轮，然后整条重连循环就没了。用户看到的是「相机唤醒
+    // 一分钟也没连上」，日志里只有一行「BLE 自动重连失败」然后完全安静
+    // （2026-11-14 实测定位）。
+    if (failed) this.scheduleReconnect();
   }
 
-  /** 扫描找相机（休眠相机广播无名字，按尼康 deviceId 认）。 */
-  private async recoverByScan(nikonDeviceId: number): Promise<void> {
+  /**
+   * 扫描找相机（休眠相机广播无名字，按尼康 deviceId 认）。
+   *
+   * **扫到第一台就收工**（1.66.3）：相机被半按快门唤醒后 1 秒内就会重新广播，
+   * 干等满整个窗口只会推迟连接。窗口是用来兜「还没醒」的，不是用来凑数的。
+   */
+  private async recoverByScan(nikonDeviceId: number,
+                              windowMs: number = RECONNECT_LISTEN_MS): Promise<void> {
     const found: BleCameraDevice[] = [];
+    // 两阶段（官方《蓝牙重连最佳实践》）：刚断的前两分钟抢时间用低延迟扫描，
+    // 之后降档长期盯；后台一律低功耗。
+    const fast = this.foreground
+      && (this.outageSince === 0 || Date.now() - this.outageSince < RECONNECT_FAST_MS);
     const scanner = new BleScanner(
       (dev: BleCameraDevice) => { found.push(dev); },
       (msg: string) => this.onLog(msg),
-      nikonDeviceId);
+      nikonDeviceId,
+      fast);
     scanner.start();
-    await BleCameraLink.sleep(6000);
-    scanner.stop();
-    for (const dev of found) {
-      if (await this.connectGatt(dev.deviceId)) {
-        this.deviceId = dev.deviceId;
-        if (this.cameraName.length === 0) {
-          this.cameraName = dev.name;
-        }
-        return;
-      }
+    const deadline = Date.now() + windowMs;
+    while (found.length === 0 && Date.now() < deadline) {
+      await BleCameraLink.sleep(150);
     }
-    this.onLog('自动重连: 扫描没有找到相机');
+    scanner.stop();
+    if (found.length === 0) {
+      this.onLog('自动重连: 扫描没有找到相机');
+      this.onReconnectStalled();
+      return;
+    }
+    const dev = found[0];
+    if (await this.connectGatt(dev.deviceId, RECONNECT_CONNECT_MS)) {
+      this.deviceId = dev.deviceId;
+      this.staleAddress = false;
+      if (this.cameraName.length === 0) {
+        this.cameraName = dev.name;
+      }
+    } else {
+      this.onLog(`自动重连: 扫到相机但连不上（${dev.deviceId}）`);
+    }
   }
 
   /** 清链路但保留自动重连开关（重连流程内部用）。 */
   private async disconnectInner(): Promise<void> {
+    await this.settleDiscovery();
     this.stopKeepalive();
     const gatt = this.gatt;
     const wasConnected = this.connected;
     this.gatt = null;
     this.connected = false;
+    this.servicesReady = false;
+    this.discoveryInFlight = null;
     if (wasConnected) {
       this.onState(false);
     }
@@ -1235,6 +1623,7 @@ export class BleCameraLink {
   }
 
   async disconnect(): Promise<void> {
+    await this.settleDiscovery();
     this.cancelled = true;
     this.disableAutoReconnect();
     this.paired = false;
@@ -1242,6 +1631,8 @@ export class BleCameraLink {
     const wasConnected = this.connected;
     this.gatt = null;
     this.connected = false;
+    this.servicesReady = false;
+    this.discoveryInFlight = null;
     if (wasConnected) {
       this.onState(false);
     }

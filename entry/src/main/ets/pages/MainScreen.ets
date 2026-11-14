@@ -127,7 +127,9 @@ export struct MainScreen {
     this.svc.initLinkMode();
     this.svc.initCameraModel();
     if (this.svc.linkMode !== CameraLinkMode.USB) {
-      setTimeout(() => { this.svc.autoConnectBle(); }, 800);
+      // 第二个参数是「安静模式」：这一次连接不是用户点的，成不了就回到未连接，
+      // 不把「连接失败」摆到屏幕上。
+      setTimeout(() => { this.svc.autoConnectBle(true, true); }, 800);
     }
     // 由通知冷启动时，UsbAttachWatcher 可能在 MainScreen 创建前就递增了版本；
     // @Monitor 不会为初始值触发，这里补一次。
@@ -186,6 +188,23 @@ export struct MainScreen {
       this.getUIContext().getPromptAction().showToast({ message: message, duration: 3000 });
     } catch (_e) {
       // toast 不可用（例如页面正在退出）时不影响扫描主流程
+    }
+  }
+
+  /**
+   * 服务层的轻量提示（1.66.0）：只弹 toast，不改页面状态。
+   *
+   * 目前用于「USB 相机被拔出」「无线断了且重连放弃」。和 `scanErrorVersion`
+   * 分开：那个会同时把页面切成失败态，而这类事件要的是「页面回到未连接」。
+   */
+  @Monitor('svc.noticeVersion')
+  onServiceNotice(): void {
+    const message = this.svc.noticeText;
+    if (message === '') return;
+    try {
+      this.getUIContext().getPromptAction().showToast({ message: message, duration: 3000 });
+    } catch (_e) {
+      // toast 不可用（例如页面正在退出）时不影响状态流转
     }
   }
 
@@ -1140,6 +1159,10 @@ export struct MainScreen {
                 } else {
                   this.svc.scanForCamera(true, true);
                 }
+              }).catch((err: Error) => {
+                // 没有 catch 的 Promise 在 ArkTS 里是 unhandled rejection：
+                // 不一定立刻炸，但会成为下次崩溃里最难查的那种。
+                this.svc.getLog().add(`无线连接异常: ${err.message}`);
               });
             },
             onCompletePairing: () => {

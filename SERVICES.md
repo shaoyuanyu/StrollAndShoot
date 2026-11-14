@@ -50,6 +50,37 @@
 
 **不要**试图用静态订阅 / `START_ABILITIES_FROM_BACKGROUND` 做自动拉起：前者仅系统应用，后者仅系统应用可申请；真要系统级体验只能预置应用/系统应用。
 
+### 相机掉线检测与心跳（1.66.0）
+
+「连上之后相机被拔掉 / 断电 / 链路断掉，页面还停在『已连接』」是三条链路各自的
+盲区，处理方式也不同：
+
+| 链路 | 手段 | 时效 | 为什么 |
+|---|---|---|---|
+| USB | 订阅 `usual.event.hardware.usb.action.USB_DEVICE_DETACHED` | 立即（+400ms 枚举确认） | 拔线 / 断电时系统会发事件；PTP 的 bulk 端点要等下一次传输才报错，空闲时永远不会自己发现 |
+| Wi-Fi | 应用层心跳：`GetDeviceInfo`，15 秒一拍、6 秒超时 | ≤ 21 秒 | PTP/IP 跑在 TCP 上，对端断电时没有 FIN，socket 不会报错（半开连接）。`TCPExtraOptions.keepAlive` 只能开关、不能配 keepidle，系统默认几小时才探一次 |
+| 蓝牙 | GATT `BLEConnectionStateChange` + 保活连续失败兜底 | 立即 / ≤ 90 秒 | 断链事件本来就管用；保活写入（45 秒一拍）连续两次失败同样按断链处理 |
+
+- **USB**：`UsbAttachWatcher` 订阅拔出事件后延时 400ms 调
+  `CameraService.onUsbDeviceDetached()`；服务端拿会话的 `connectedDeviceName`
+  和设备列表对一次（事件对任何 USB 设备都会发，鼠标、U 盘也会触发）。
+  确认是我们这台 → `disconnectInternal()` 收尾（等价一次主动断开：清照片、关会话、
+  撤长时任务）→ `notify('USB 相机已断开连接')` 弹一条 toast。扫描中不弹这条，
+  让扫描自己的失败路径说话（「USB 通信失败…」更准确）。
+- **Wi-Fi 心跳**（`startWatchdog()` / `watchdogTick()` / `pingWireless()`）：
+  常驻一个 15 秒定时器，每拍自己判断「该不该探」——比在每条连接 / 断开 / 切模式
+  路径上成对 start/stop 更难漏。跳过条件：应用在后台、没连上、无线扫描/连接/
+  重连/配对中（这些本身就在跑流量，失败会自己报上来）。
+  一次心跳超时 → `onWifiBroken('心跳超时')` → 关掉旧 socket、按退避自动重连；
+  重连退避用尽 → `failWireless(...)`（状态头显示「没能连上相机 + 原因 + 重试」）
+  + toast「无线连接已断开」。
+- **蓝牙**：`BleCameraLink.handleKeepaliveFailure()`，保活连续失败 2 次（约 90 秒）
+  才判死；一次不判——相机忙时偶尔会拒收一笔。判定后 `disconnectInner()` +
+  `scheduleReconnect()`，页面走既有的「正在重新连接相机…」。
+- **提示通道**：`CameraService.notify(text)` 只递增 `noticeVersion` 并弹 toast，
+  **不写 `lastScanError`**——那不是「连不上」，不该把页面切成失败态。
+  `MainScreen.@Monitor('svc.noticeVersion')` 负责弹。
+
 ### 下载注册表与「最近删除」
 
 - 键为 `${cameraIdentity}::${filename}::${size}`；旧版 `${filename}::${size}` 记录仍可兼容读取。
@@ -378,6 +409,15 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 超时）。而且**必须先断开 BLE 再做发现**——相机要等 BLE 链路释放才在配对态暴露
 经典蓝牙。
 
+**段 1 之后的断链必须用 `disconnectInner()`，不能用 `disconnect()`**（2026-11-14
+真机定位）：`disconnect()` 是「取消连接」按钮的入口，它会置上用户取消标记
+（`cancelled`），而首配正好要主动断一次链让相机暴露经典蓝牙。用了它，断链 3 秒后
+流程自己就判定「用户已取消（经典绑定未做）」直接退出——首配永远走不到经典绑定。
+现象是日志里 `配对: 段 1 完成，断开 BLE…` → `BLE 连接状态: 3` → `配对: 用户已取消
+（经典绑定未做）` 三行连着出现，页面上只看到「配对失败」。`4b5bd97` 引入取消标记时
+踩进这个坑，从 2026-11-11 18:02 起首配一直是坏的；`reconnectForResume()` 与保活
+兜底用的也是 `disconnectInner()`，同一个道理。
+
 第 2 步的让位窗不能省：ZPill 记录过「零缓冲直发配对把相机射频楔死，杀应用才解」。
 
 *身份持久化与复用（必须做，否则只能配一次）*
@@ -409,24 +449,190 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 - `SavedCamera.isMock?: boolean` 标出调试包的虚拟相机。它走 USB/PTP，**没有蓝牙配对
   那一步**，`rememberActive()` 永远不会被它触发；不补一条记录的话，冷启动后标题、
   立牌、当前相机都退回「相机」，每轮测试都要重新搜一次。
-- `SavedCameraStore.rememberMock(modelKey, serial, name)` 建/更新这条记录（key 优先用
-  `MOCK-0001` 序列号），由 `CameraService.rememberMockCamera()` 在 USB 会话建立
-  （`ensureUsbSession` 末尾）与机型/序列号识别时调用；`sessionIsMock` 为假时直接返回。
-  同一个「key|机型|广播名」只记一行日志，连接过程中机型分几步到位不会刷屏。
+- `SavedCameraStore.rememberMock(modelKey, serial, name)` 建/更新这条记录，key 是
+  **`mock:<modelKey>`**（1.66.1 之前用序列号，见下文「模拟记录不能占真机的身份」），
+  由 `CameraService.rememberMockCamera()` 在 USB 会话建立（`ensureUsbSession` 末尾）
+  与机型/序列号识别时调用；`sessionIsMock` 为假时直接返回。同一个「key|机型|广播名」
+  只记一行日志，连接过程中机型分几步到位不会刷屏。
 - `activate()` 遇到 `isMock` **不写 `BleIdentityStore`，反而把它清掉**：留着上一台真机
   的身份，相机页会把这台模拟机显示成「已配对」的蓝牙相机。
 - `updateCurrentMeta()` 重建记录时必须带上传入记录的 `isMock`，否则一次机型/序列号
   更新就会把标记丢掉。
-- `remove(key)` 删除一条记录：删的是当前那台就清活动身份，并回退到最近连接过的那台
-  （`sorted()[0]`）。相机侧不知道自己被忘了，重新配对即可再用。
+- `remove(key)` 删除一条记录：删的是当前那台就清活动身份，并回退到
+  `defaultRecord()`（真机优先，见下文）。相机侧不知道自己被忘了，重新配对即可再用。
 - 界面上的「显式区分」：`CameraService.mockSession()` 供相机页在设备信息里写
   「设备来源 = 模拟相机（调试包）」，`PairedCamerasPage` 用 `isMock` 画「模拟」胶囊。
 
-*容易踩的三个坑*
+*蓝牙：相机待机、重连与「幽灵链路」（1.66.3）*
+
+- **相机会在待机时收掉 BLE**：两份真机日志（11-11 17:36、11-14 16:19）都是「保活
+  写入成功后 11 秒 / 只有连接动作时 29–56 秒」就断链，**加频保活没用**——那是相机自己
+  的待机计时，不看有没有流量。所以 45 秒保活保持不变，别为了「保持在线」去调它。
+- 断链后 `tryAutoReconnect()` 一直重试（不设上限：用户唤醒相机之后要靠它自动接回来）。
+  节奏见下面「重连要多快」。
+- **连扫描都扫不到相机**时调 `onReconnectStalled()`，
+  `CameraService.bleAsleep` 置真，相机页的 `detail()` 换成「相机可能已休眠，按快门唤醒」；
+  重连成功 / 主动断开 / 重新发起连接都会清掉这个标记。
+- **`connectGatt()` 10 秒超时必须关掉这个 GATT 客户端**：不关的话它会在 App 已经转去
+  扫描之后才连上，留下「系统连着、`this.connected === false`」的幽灵链路（11-14 16:20
+  实测：16:20:02 超时 → 16:20:05 仍上报 CONNECTED → 16:20:11 上报 MTU）。现在超时分支
+  `gatt.close()` 并让该客户端的后到事件直接返回。
+- **连上之后清空 `bleCameras`**：那是「搜索出来的候选」，留着会在状态头下面挂一张
+  相机列表；页面侧 `ModeControls()` 在 `blePaired()` 时也不再渲染它。
+
+*重连要多快（1.66.4）*
+
+出门拍摄就是一拍一停：相机待机二十几秒、半按快门又醒。重连这条路上原来全是「等很久」——
+每轮先直连旧地址等满 10 秒、再扫 6 秒、握手 15 秒，退避还是 2/3/5/8/12/20/30 秒，最坏
+四十多秒才回到「已配对」。现在按「相机随时会醒」来配：
+
+| 环节 | 原来 | 现在 |
+|---|---|---|
+| 重试间隔 | 2/3/5/8/12/20/30 秒退避 | **不退避**：前台固定 1 秒，后台 15 秒 |
+| 监听窗口 | 6 秒，扫满才走 | **20 秒上限、扫到第一台立刻结束**（150ms 轮询）→ 实际上一直在听 |
+| 直连上次地址 | 10 秒超时 | **5 秒**，失败一次后置 `staleAddress`，后续轮次跳过它（地址每轮都换） |
+| 复用握手 | 15 秒 | **6 秒**（相机醒着是毫秒级） |
+| 服务表枚举 | 每笔 `getServices()` 可能挂 10 秒，`ensureServices` 试 5 次 | 单次 **4 秒超时**；重连期间只试 **1 次 / 2.5 秒**——叫醒相机靠 stage1 重发，不是服务表 |
+| 回前台 | 等上一轮排的 30 秒 | **500ms 内补一轮** |
+
+**为什么不退避**：退避是给「对端可能永远不回来」的轮询用的。这里的对端是用户手上的
+相机，半按快门就回来，退避只会把「几秒能接上」拖成几十秒。代价用**扫描档位**控制，
+不走等待——官方《蓝牙重连最佳实践》的「两阶段」正是这个思路：
+
+| 场景 | 扫描档位 | 依据 |
+|---|---|---|
+| 手动搜索、冷启动接回、刚断链的前 2 分钟 | `SCAN_MODE_LOW_LATENCY` | 「阶段一：低延迟快速发现」 |
+| 断链超过 2 分钟仍不在（相机大概关机了） | `SCAN_MODE_LOW_POWER` | 「阶段二：省电监控」 |
+| 退到后台 | 一律 `SCAN_MODE_LOW_POWER` | 「长时间后台扫描用 LOW_LATENCY 会导致功耗和发热严重」 |
+| 按尼康 deviceId 重连时的广播过滤 | 芯片层 `manufactureId = 0x0399` | 「系统层过滤优先…大幅降低功耗和回调频率」 |
+
+结果：相机唤醒后**典型 2–4 秒**回到「已配对」，最坏（刚好处在 1 秒间隔的那一下）约 8 秒。
+
+**2026-11-14 真机定位到的三个「重连根本不发生」**（都在这一版修掉）：
+
+1. **循环第一轮之后就死了**：`tryAutoReconnect()` 的 `catch` 里调 `scheduleReconnect()`，
+   而那时 `reconnecting` 还是 `true`，`scheduleReconnect()` 的守卫直接 return；`finally`
+   再把标记放下，从此再没人排下一轮。日志特征：`BLE 自动重连失败` 之后再无声息。
+   现在把重排放在 `finally` **之后**。
+2. **启动时连不上就没人管**：`enableAutoReconnect()` 只在配对成功后调用，冷启动那次
+   连不上就停在「已配对 + 连接相机」，相机醒了也不会自动连。现在失败路径调
+   `keepWaitingForCamera()` → `wakeReconnectWatch()`（已配对才开；首配失败不开）。
+3. **两处扫描互相掐**：`ble.stopBLEScan()` 是全局的。`autoConnectBle()` 的「按设备号重扫」
+   和重连监听同时开着时，一个先停就把另一个的射频也停了，对方还以为自己在扫（白扫一整窗）。
+   现在 `connectBle(..., armWatch=false)`：先把这一轮扫完，最后才开监听。
+4. 连接超时从 5 秒改回 **12 秒**：相机半睡时实测建链要 **8 秒**（16:51:33→41、16:57:25→33），
+   5 秒等于每次都在成功前一秒放弃。超时分支还会先 `gatt.disconnect()` 再 `close()`，
+   让相机早点放掉它唯一的连接槽。
+
+**闪退（freeze）一次，也是它**：17:41:06 连上相机后，`getServices()` 卡了 10 秒，
+JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（hilog 里紧跟着
+`bt_fwk_gatt_client (GetServices:550)timeout`）。根因是**超时之后又发了第二笔**：
+`listServices()` 原来 3 次重试、我们自己的 4 秒超时只是不再等，但第一笔 native 调用
+还挂在蓝牙栈里，第二笔排它后面，这一等就卡在主线程上。现在：
+
+- `servicesOrTimeout()` 返回 `{ services, timedOut }`，**超时就 break，绝不再发第二笔**；
+- `listServices()` 只查一次，而且**从 `connectBle()` 里删掉了**——它纯粹给日志用，
+  没有任何界面读 `bleServices`（1.66.7）。握手需要的服务表由 `ensureServices()` 自己查；
+- `ensureServices()` 在重连/复用握手时只试一次、2.5 秒，超时同样收手。
+
+*后台时连接与重连还能不能跑（2026-11-14 实测）*
+
+- **BLE 重连在后台继续跑**，但系统会节流定时器、并把扫描降档。真机日志（17:54:20
+  退后台之后）：设计 20 秒的扫描窗口实际跑了 35–59 秒、15 秒的间隔跑了 27 秒，
+  扫描档位自动降到 `SCAN_MODE_LOW_POWER`。结果就是「后台也能自己连回来，只是从
+  几秒变成几十秒」。
+- **长时任务按原因分两种模式（1.66.11）**：通知栏那句「正在运行 XXX 任务」是系统按
+  `BackgroundMode` 生成的、应用改不了。传照片用 `DATA_TRANSFER`（「数据传输任务」），
+  只是蓝牙长连/等重连用 `BLUETOOTH_INTERACTION`（真机实测通知变成「正在运行蓝牙相关
+  任务」）。两者切换时先停再起（同一 UIAbility 只能有一个任务），`module.json5` 的
+  `backgroundModes` 必须同时声明 `dataTransfer` 和 `bluetoothInteraction`。
+  决策只在 `CameraService.applyBackgroundTask()` 一处，`beginTransferTask()` /
+  `endTransferTask()` 退化成引用计数。
+- **后台保活（1.66.10，用户选的方案 2）**：`CameraService.syncBackgroundTask()` 把
+  「PTP 会话 / 蓝牙已连 / 正在重连 / 等待循环还开着（`watchArmed()`）」都算作需要保活，
+  退后台时申请 `dataTransfer` 长时任务，BLE 状态一变再同步一次；回前台或用户主动断开
+  时释放。**代价是后台期间通知栏常驻一条系统长时任务通知，文案应用改不了**；相机一直
+  关着时这条会一直挂着（低功耗扫描 + 15 秒间隔）。
+  - 判断条件必须带上 `watchArmed()`：只看 `bleReconnecting` 的话，断链那一瞬间它还没
+    置上，会让任务「释放 → 立刻重申请」（真机日志 18:04:56 那种抖动）。
+  - 真机实测（18:07:27 退后台 → 18:07:37 相机睡 → 18:07:52 重连 → 18:08:36 连上），
+    全程在后台完成。
+  - 传照片（`dataTransfer`）与蓝牙待机共用 CameraService 的同一个引用计数；GPS 轨迹是
+    另一处 `startBackgroundRunning(LOCATION)`，两者并存的系统行为尚未专门验证。
+- **无线心跳后台是关的**（`setAppForeground(false)` → `stopWatchdog()`）：没有界面要
+  更新，也没必要陪相机跑流量。断链由回前台的第一拍（6 秒超时）发现，而不是后台。
+  真要让后台也探测，就得持续发 PTP/IP 心跳 + 可能持有任务，收益不大。
+- 后台扫描**不要**提档到 `LOW_LATENCY`：官方《蓝牙重连最佳实践》明确「长时间后台
+  扫描用 LOW_LATENCY 会导致功耗和发热严重」。
+
+**两条路不能同时建链路（1.66.8）**：`autoConnectBle()` 的主动连接和「等相机回来」的
+自动重连会同一秒各建一条 GATT 链路（日志：17:47 两条 `BLE 直连`、两次 `连接状态: 2`、
+两次 `已连接`），第二个 `setCharacteristicChangeIndication` 被拒
+（`Please call the interface only after the previous callback has been completed`），
+其中一条握手白跑。现在 `connectBle()` 一进来先 `pauseReconnectWatch()`，
+`tryAutoReconnect()` 也认 `explicitBusy` 标记；失败后统一由 `keepWaitingForCamera()`
+重新开循环。
+`onReconnectStalled()` 仍负责「相机根本没广播」的判断——那时页面写「相机可能已休眠」。
+
+*模拟记录不能占真机的身份（1.66.1）*
+
+1.66.0 真机上出过一次「已配对变未连接、重连只能首配、首配被秒拒」。链条：
+
+1. `rememberMockCamera()` 用 `CameraModelStore.serial` 当 key，而那个值常常是上一台
+   真机留下的（`bleCameraName` 断开时不清，`onCameraSerialChanged` 又优先取它尾段）；
+2. 于是模拟相机的记录 key 就是真机的序列号 `8079350`，`indexOf()` 按序列号匹配，
+   把真机那条记录**整个覆盖**成 `isMock: true`；
+3. 下次冷启动 `bootstrap()` → `activate()` 看到 `isMock` → 清空 `BleIdentityStore`；
+4. 蓝牙页从「已配对」退回「未连接」，用户只能重新搜索、走首配，而相机端还记着
+   这台手机，首配会被 `Remote device has an error` 秒拒——身份回不来了。
+
+现在四条一起兜：
+
+- **key 带前缀**：`rememberMock()` 的 key 是 `mock:<modelKey>`，且只在 `isMock` 记录里
+  找同一条，不可能再按序列号撞上真机。
+- **序列号只认自己的**：`rememberMockCamera()` 用 `deviceSerialNumber`（模拟相机上报
+  `MOCK-0001`）；`onCameraSerialChanged()` 在 `sessionIsMock` 时**不看** `bleCameraName`。
+- **模拟会话不写当前记录**：`updateCurrentMeta()` 在 `sessionIsMock` 时整段跳过——它写的
+  是「当前选中的那条记录」，模拟会话写进去就会把机型/序列号灌进上一台真机记录。
+  `updateCurrentMeta()` 自己也要带上传入记录的 `isMock`（以前整个漏掉；真机记录上
+  不要写 `isMock: undefined`）。
+- **冷启动真机优先**：`bootstrap()` 先 `normalizeMockRecords()`（纯数字序列号的模拟记录
+  直接丢、其余改 `mock:` 前缀并去重），再按 `defaultRecord()` 选默认相机——有真机就
+  是真机，模拟记录只有在调试开关打开、且一台真机都没有时才当默认。
+
+- **身份只是没装回活动位**：`CameraService.adoptSavedBleIdentity()` 在自动连接 / 按模式
+  搜索 / 无线搜索之前调用，缺身份就从 `SavedCameraStore.pickReal()`（当前记录是真机就用
+  它，当前是模拟记录就退回最近连接过的那台真机）`activate()` 回来。`currentKey` 为空
+  （用户点了「连接新相机」）时返回 null，不装回。
+- **扫到就直连**：`connectIfPaired()` 在蓝牙模式下把扫描命中的已保存相机按身份直接连上
+  （`handOver=false`），不再让用户从列表里点、更不走首配。
+- **标题栏不挂「已不存在的相机」**：`CameraModelStore` 只是展示缓存，身份在
+  `saved_cameras`。`initCameraModel()` 发现 `current()` 为空就把 `CameraModelStore`
+  一起清掉（标题退回「相机」），`remove()` 删到一台不剩时同样清；否则相机页会一边
+  写「未连接 + 搜索相机」，一边把上次那台的型号与序列号挂在标题栏。
+
+*容易踩的四个坑*
 
 - **回链后必须先拉服务表**：`bond` 之后 GATT 服务缓存是空的，不先 `getServices()`
   就订阅特征会报 `401 Invalid parameter`（本项目段 2 第一次就这么断的）。
   `handshake()` 开头的 `ensureServices()` 负责这件事。
+- **订阅特征会在主线程里同步做服务发现**（1.66.12）：`setCharacteristicChangeIndication()`
+  的 napi 实现是 `setCharacteristicChangeInner → GetGattcCharacteristic →
+  GattClient::GetService → GetServices()`，最后一步**在自己的线程上等**
+  （`pthread_cond_timedwait`）。服务表不在缓存里时，这一段就是主线程被占住
+  6 秒以上——2026-11-14 18:29:05 的 `THREAD_BLOCK_6S` 闪退正是它，栈顶三帧
+  依次是 `__timedwait_cp → condition_variable::__do_timed_wait → GetServices()`，
+  再往下才是 `BleScanner.ets` 的 `enableIndication`。所以：
+  - `ensureServices()` 现在返回布尔值；拿不到服务表时 `handshake()` **直接放弃
+    这一轮**，绝不再进订阅；
+  - `enableIndication()` / `enableNotification()` 自己再挡一道：`servicesReady`
+    为假就抛错（错误文案「服务表未就绪，跳过订阅」）；
+  - `getServices()` 超时只是我们不等了，那一笔仍在蓝牙栈里跑（实测约 10 秒
+    才报错）。`discoveryInFlight` 记住它，`waitDiscovery()` 等它落地后再补探
+    一次；在它回来之前既不订阅也不发第二笔发现（第二笔会排在它后面，一样卡
+    主线程——1.66.7 那次的成因）。
+  - 教训通用化：**任何会「按 UUID 找特征」的 napi 调用都可能触发这次同步发现**，
+    不只是 `getServices()`。判断标准是「服务表到底建好了没有」，不是「哪个接口」。
 - **读特征之间要留间隔**：连续 8 个 `readCharacteristicValue` 打出去会全部撞上
   `2900099`（官方对该错误码的解释之一就是「前一个非监听类 BLE 接口没回调完」）。
   现在每次读之间隔 150ms，失败退避重试 3 次。
@@ -449,9 +655,41 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 | `0x2a19` | 电池（`de00` 服务下的 SIG 采纳特征） |
 
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
+- **冷启动那一次连接不算用户操作**（1.66.13）：`autoConnectBle(silent, quiet)` 的第二个
+  参数只给 `MainScreen.aboutToAppear` 用。`quiet` 时失败走 `resetColdStartTraces()`：
+  关掉可能建了一半的 GATT，清 `bleHint / bleSerial / bleCameras / bleAsleep /
+  bleReconnecting / lastScanError / wirelessFailed / wifiHint / wirelessStage /
+  wifiAutoConnecting / wifiReconnecting`，再 `syncBackgroundTask()`。**不要**在这条路上
+  调 `keepWaitingForCamera()`：那会让页面挂上「正在重新连接相机…」，而这次连接根本没
+  人点过。无线那半条（`autoLinkWifi`）仍捎带试一次，成功就保留连接、失败才清痕迹。
+- **取消连接要有立刻的反馈**（1.66.12）：连接/首配串了好几段 `await`，链路自己
+  超时要 10 秒以上。`cancelBleConnect()` 先把 `bleConnecting` 放掉（界面马上回到
+  「已配对 · 未连接」），再去关 GATT；`bleConnectSeq` 自增让在途那一轮在下一个
+  `await` 回来后看到序号对不上、安静退出，**不报「蓝牙连接失败」**（明明是用户
+  自己取消的）。在途流程的 `finally` 也按序号判断，不抹掉新一轮的 `bleConnecting`。
 - 相机 2 分钟没有 BLE 流量会断链，45 秒一拍留足余量。
 - 配对完成后**先等 2.5 秒**再写 `0x2006`（ZPill 的 writeGate）：相机刚收口时注入
   会话还没醒，立刻写会被拒甚至被踢链。
+
+**主线程禁区：会同步等系统服务的接口（1.66.16 汇总）**
+
+HarmonyOS 有一批 napi 是**同步**的：调用发生在 JS 线程上，内部一次 binder
+往返或一把蓝牙栈的锁，慢起来就是 `THREAD_BLOCK_3S/6S`。2026-11-14 一天 10 次闪退
+全部出在这张清单上（8 次订阅、2 次断开）。写新代码前先对一遍：
+
+| 接口 | 危险点 | 现在的规矩 |
+|---|---|---|
+| `gatt.setCharacteristicChangeIndication()` / `…Notification()` | 内部按 UUID 找特征，服务表不在缓存里时**同步**做服务发现（`GetServices` 等 6 秒） | `servicesReady` 为假直接抛错；握手在 `ensureServices()` 失败时整轮放弃 |
+| `gatt.writeCharacteristicValue()` / `readCharacteristicValue()` | 同上（`GetGattcCharacteristic → GetService → GetServices`） | 同样 `servicesReady` 门禁；链路断开事件里把 `servicesReady` 清掉 |
+| `gatt.disconnect()` / `gatt.close()` | 要拿蓝牙栈里这个客户端的锁，发现还挂着时主线程跟着等（实测 7 秒） | `settleDiscovery()`：在途发现先等它落地再断；`resetColdStartTraces()` 先清页面状态再收链路 |
+| `gatt.getServices()` | 相机半睡时能挂十秒；**超时后不能补发第二笔** | `servicesOrTimeout()` 自己带超时，`discoveryInFlight` 记在途的一笔，`waitDiscovery()` 等它落地再补探 |
+| `connection.getAllNets()` | 会往主线程投任务，系统网络服务忙时几秒 | 冷启动不调；只有真要网段扫描才取，结果缓存 2 秒 |
+| `connection.getConnectionPropertiesSync()` / `wifiManager.getLinkedInfoSync()` | 同步 binder，常出现在异步续体里 | 已换 `await getConnectionProperties()` / `await getLinkedInfo()` |
+| `wifiManager.isConnected()` / `getIpInfo()` / `isHotspotActive()` | 只有同步版 | 保留，但**不要在轮询里高频调**；AP 上链轮询已改 async `getLinkedInfo()` |
+| `fileIo.*Sync` | 大文件（原图/RAW）复制会按住主线程 | 日志/设置这类小文件可以用；照片复制改 `await fileIo.copyFile(fd, fd)` |
+
+判断口径：**这个接口背后有没有系统服务/binder/蓝牙栈？** 有，就先想到「它可能同步等
+锁」，再决定能不能在 UI 线程上直接调。
 
 **BLE 与 Wi-Fi 互斥：把「交接」当成一次代价高的动作（1.41.1）**
 
@@ -553,6 +791,44 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
 
 `SubnetScanner` 用它的 `subnets` 展开 /24，并**把热点网段排在最前**：热点没有
 外网、mDNS 常被挡，网段扫描往往是唯一出路，不能让它排在办公网后面等十几秒。
+
+*网络枚举的调用点与「任务名会骗人」（1.66.14 / 1.66.15）*
+
+- **冷启动不取网络快照**：`autoLinkWifi()` 先试 `WifiLinkStore` 里记住的地址，
+  只有真要网段扫描（`allowScan=true`）时才调 `collectLocalNetworks()`。冷启动那条路
+  （`allowScan=false`）根本用不到快照。
+- `collectLocalNetworks()` 带 **2 秒结果缓存**：进 STA 页面取一次、紧接着开始扫描
+  又要一次，第二次直接复用。
+- **同步的伴随接口要换成异步**：`getConnectionPropertiesSync()` / `getLinkedInfoSync()`
+  都是同步 napi，绑在 JS 线程上做 binder 往返。它们常在 `getAllNets()` 的 `.then`
+  里执行，而那段续体就跑在主线程的 EventHandler 任务里——慢起来整段都算在主线程
+  头上。现在已改成 `await connection.getConnectionProperties(net)` /
+  `await wifiManager.getLinkedInfo()`（`WifiPtpLink.resolveNetworkBinding` 也改了）。
+  `wifiManager.isConnected() / getIpInfo() / isHotspotActive()` 只有同步版本，保留。
+
+**但 2026-11-14 19:01 那次闪退的真凶不是网络接口**：faultlog 的 EventHandler 段写着
+`task name = getAllNets，执行 7.5s`，很容易据此认定是它——**任务名只是投递这段 JS 续体
+的那个 napi 回调名**。3 秒采样的真实栈是：
+
+```
+#00 __timedwait_cp
+#01 __pthread_mutex_timedlock_inner
+#03 libbtframework GattClient::Disconnect()+208
+#08 BleScanner.ets:1609 disconnect
+#09 CameraService.ets:2418 resetColdStartTraces
+#10 CameraService.ets:2399 autoConnectBle
+```
+
+即：冷启动自动连接失败后 `resetColdStartTraces()` 去 `bleLink.disconnect()`，
+而 `gatt.disconnect()` 是同步 napi，要拿蓝牙栈里这个 GATT 客户端的锁——服务发现
+还在跑，主线程跟着等 7 秒。现在的规矩：
+
+- `BleCameraLink.disconnect()` / `disconnectInner()` 开头先 `settleDiscovery()`：
+  在途发现没落地就**先等它**（最多 `SERVICE_LANDING_MS`）再断。
+- `resetColdStartTraces()` **先清页面状态、再收链路**：收尾可能要等几秒，不能让
+  「安静回到未连接」跟着拖。
+- 排查时以**采样栈**为准；EventHandler 的任务名、`getAllNets` 这种 napi 名字都会把
+  人带偏。
 
 *自动接续的三个触发点*
 

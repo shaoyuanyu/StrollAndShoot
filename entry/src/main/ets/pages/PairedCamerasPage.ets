@@ -87,7 +87,18 @@ export struct PairedCamerasPage {
             this.toast($r('app.string.camera_paired_need_disconnect'));
             return;
           }
+          const wasCurrent = cam.key === this.cameraStore.currentKey;
           this.cameraStore.remove(cam.key);
+          if (!wasCurrent) return;
+          // 删的是当前这台：相机页的标题/立牌要跟着换——要么切到回退的那台，
+          // 要么回到「相机」。否则标题栏会继续挂着刚删掉的相机的型号与序列号
+          // （1.66.1）。
+          const cur = this.cameraStore.current();
+          if (cur !== null) {
+            this.svc.applySavedCamera(cur);
+          } else {
+            this.svc.applyNewCameraSelection();
+          }
         }
       }
     });

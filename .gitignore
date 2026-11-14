@@ -22,3 +22,6 @@
 /.profile
 /build-profile.json5
 /.dsh-session-images
+
+# 临时文件（截图、抓到的 faultlog）
+.scratch/

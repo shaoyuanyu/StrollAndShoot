@@ -89,6 +89,24 @@ const METADATA_REUSE_PROBE = 8;
 const THUMB_PIPELINE = 8;
 /** 等用户回答「是否启用缓存」的上限；超时按启用处理，避免扫描被对话框卡死。 */
 const CACHING_PROMPT_TIMEOUT_MS = 90 * 1000;
+/**
+ * 无线心跳周期（1.66.0）：前台且已连上无线时，每隔这么久发一条 `GetDeviceInfo`。
+ *
+ * 为什么需要它：PTP/IP 跑在 TCP 上。相机突然断电、手机切换网络时，对端不会发
+ * FIN，socket 也不会报错——那是一条**半开**连接，App 会一直停在「已连接」，
+ * 点什么都失败（用户反馈「相机断了页面没反应」）。TCP 自带的 keepalive 默认要
+ * 几小时才探一次，`socket` 的 `TCPExtraOptions` 也只给 `keepAlive: boolean`、
+ * 不能配 keepidle，所以只能自己在应用层拍。15 秒是「用户能察觉」与「少打扰
+ * 相机」之间的折中；应用进后台就整条停掉。
+ */
+const WIRELESS_HEARTBEAT_MS = 15000;
+/**
+ * 心跳多久没响应就判定链路已断。
+ *
+ * PTP/IP 单笔事务自带 30 秒超时，对「看一眼还在不在」太慢了；心跳只用这条
+ * 兜底，真正的超时要短。
+ */
+const WIRELESS_HEARTBEAT_TIMEOUT_MS = 6000;
 
 // ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
 
@@ -152,6 +170,15 @@ export class CameraService {
 
   // State
   @Trace statusText: string = L10n.isReady() ? L10n.tr('camera_status_ready') : '';
+  /**
+   * 轻量提示：只弹一次 toast，**不改变页面状态**（1.66.0）。
+   *
+   * 与 `scanErrorVersion` 分开：那个会把原因写进 `lastScanError`，页面随之变成
+   * 失败态。而「USB 相机被拔掉」「无线断了」这类事件要的是「页面回到未连接 +
+   * 一句提示」，不是让用户去修一个已经不存在的连接。
+   */
+  @Trace noticeVersion: number = 0;
+  @Trace noticeText: string = '';
   @Trace cameraName: string = '';
   @Trace photoCount: number = 0;
   @Trace photos: PhotoEntry[] = [];
@@ -238,6 +265,12 @@ export class CameraService {
   private readonly wifiBackoffMs: number[] = [2000, 3000, 5000, 8000, 12000, 20000, 30000];
   /** 用户显式断开时置位，避免自动重连把刚断开的相机又接回来。 */
   private wifiAutoReconnectArmed: boolean = false;
+  /** 前台标记：无线心跳只在应用前台跑，后台不做无谓的 Wi-Fi 流量。 */
+  private appForeground: boolean = true;
+  /** 无线心跳定时器；-1 表示没起来。 */
+  private watchdogTimer: number = -1;
+  /** 上一拍心跳还没落地：不要叠着发。 */
+  private watchdogBusy: boolean = false;
   /**
    * 最近一次「把相机从 BLE 模式推到 Wi-Fi 模式」的时间。
    *
@@ -317,9 +350,24 @@ export class CameraService {
   @Trace switchingTo: number = -1;
   /** BLE 扫描到的相机（实验功能）。 */
   @Trace bleCameras: BleCameraDevice[] = [];
+  /**
+   * 蓝牙断链后连扫描都找不到相机（1.66.3）。
+   *
+   * 相机进了待机就把 BLE 广播也一起收掉，这时自动重连会一直失败——
+   * 页面不能一直写「正在重新连接相机…」，要告诉用户「唤醒相机就好」。
+   */
+  @Trace bleAsleep: boolean = false;
   @Trace bleScanning: boolean = false;
   /** BLE 连接进行中（bond + GATT 最长几十秒，UI 必须给反馈）。 */
   @Trace bleConnecting: boolean = false;
+  /**
+   * BLE 连接轮次。
+   *
+   * 连接/首配是几段 await 串起来的：中途点「取消」、紧接着又点一次「连接」时，
+   * 旧流程从 await 里醒过来不能接着往下写状态（会把新一轮的 `bleConnecting`
+   * 抹掉、还会报一条假的「连接失败」）。每轮开始时自增，流程里对不上就安静退出。
+   */
+  private bleConnectSeq: number = 0;
   /** BLE 已连接。 */
   @Trace bleConnected: boolean = false;
   /** 已连接相机的 GATT 服务列表（调试用）。 */
@@ -733,6 +781,13 @@ export class CameraService {
    * 与 `beginTransferTask()` 共用引用计数，避免与扫描/下载抢同一个任务。
    */
   private sessionKeepAlive: boolean = false;
+  /** 当前长时任务用的模式（决定系统通知那句话）。 */
+  private transferTaskMode: backgroundTaskManager.BackgroundMode =
+    backgroundTaskManager.BackgroundMode.DATA_TRANSFER;
+  /** 长时任务正在停/起：避免同一时刻两次切换。 */
+  private taskBusy: boolean = false;
+  /** 切换期间又有新的需求：这一轮结束后补一次。 */
+  private taskApplyPending: boolean = false;
   /** 通知栏进度环（系统 downloadTemplate）的定时刷新句柄与当前进度。 */
   private noticeTimerId: number = -1;
   private noticeCurrent: number = 0;
@@ -879,10 +934,65 @@ export class CameraService {
     TransferNotice.update(this.context, '正在导入照片', detail, pct).catch((_e: Error) => { /* 通知失败不影响传输 */ });
   }
 
-  /** 传输开始：申请后台长时任务（可重入，按引用计数）。 */
+  /** 传输开始：只管引用计数，真正的长时任务由 `applyBackgroundTask()` 统一申请。 */
   private async beginTransferTask(): Promise<void> {
     this.transferTaskRefs++;
     this.startNoticeTimer();
+    await this.applyBackgroundTask();
+  }
+
+  /** 传输结束：引用减一，交给 `applyBackgroundTask()` 决定是换模式还是释放。 */
+  private async endTransferTask(): Promise<void> {
+    if (this.transferTaskRefs > 0) {
+      this.transferTaskRefs--;
+    }
+    await this.applyBackgroundTask();
+  }
+
+  /**
+   * 后台长时任务的唯一决策点（1.66.11）。
+   *
+   * 通知栏那句话是**系统按 `BackgroundMode` 生成的，应用改不了**。原来不管什么原因
+   * 都申请 `DATA_TRANSFER`，于是「只是蓝牙待机」也会显示「正在运行数据传输任务」——
+   * 用户一眼就看出名不副实。现在按真实原因分两种模式：
+   *
+   * - 正在传照片（`transferTaskRefs > 0`）→ `DATA_TRANSFER`（系统通知：数据传输任务）
+   * - 只是蓝牙长连 / 等重连（`sessionKeepAlive`）→ `BLUETOOTH_INTERACTION`（蓝牙业务）
+   *
+   * 传照片优先：传输期间显示的必须是「数据传输」。两者切换时先停再起（同一个
+   * UIAbility 同时只能有一个长时任务）。
+   */
+  private async applyBackgroundTask(): Promise<void> {
+    if (this.taskBusy) {
+      // 正在停/起：记一笔，等这一轮结束再补齐。
+      this.taskApplyPending = true;
+      return;
+    }
+    this.taskBusy = true;
+    try {
+      do {
+        this.taskApplyPending = false;
+        const transfer = this.transferTaskRefs > 0;
+        const wantBt = this.sessionKeepAlive && !transfer;
+        if (!transfer && !wantBt) {
+          if (this.transferTaskOn) await this.stopTransferTask();
+          continue;
+        }
+        const mode = transfer
+          ? backgroundTaskManager.BackgroundMode.DATA_TRANSFER
+          : backgroundTaskManager.BackgroundMode.BLUETOOTH_INTERACTION;
+        if (this.transferTaskOn && this.transferTaskMode === mode) continue;
+        if (this.transferTaskOn) await this.stopTransferTask();
+        await this.startBackgroundTask(mode);
+      } while (this.taskApplyPending);
+    } finally {
+      this.taskBusy = false;
+    }
+  }
+
+  /** 真正申请系统长时任务。失败不抛：后台可能被挂起，但不该打断前台动作。 */
+  private async startBackgroundTask(
+    mode: backgroundTaskManager.BackgroundMode): Promise<void> {
     if (this.transferTaskOn || this.transferTaskStarting || this.context === null) {
       return;
     }
@@ -898,32 +1008,17 @@ export class CameraService {
         actionFlags: [wantAgent.WantAgentFlags.CONSTANT_FLAG]
       };
       const wa: WantAgent = await wantAgent.getWantAgent(info);
-      await backgroundTaskManager.startBackgroundRunning(this.context,
-        backgroundTaskManager.BackgroundMode.DATA_TRANSFER, wa);
+      await backgroundTaskManager.startBackgroundRunning(this.context, mode, wa);
       this.transferTaskOn = true;
-      this.log.add('后台传输长时任务已申请');
-      // 申请完成前最后一个引用已经释放（进后台后马上回前台）：立刻收掉。
-      if (this.transferTaskRefs <= 0) {
-        await this.stopTransferTask();
-      }
+      this.transferTaskMode = mode;
+      this.log.add(mode === backgroundTaskManager.BackgroundMode.DATA_TRANSFER
+        ? '后台传输长时任务已申请' : '后台蓝牙长时任务已申请（保持长连）');
     } catch (err) {
-      // 与定位长时任务冲突（同一 UIAbility 同时只允许一个）或系统拒绝时不要打断传输，
-      // 只是退到后台后可能被挂起。
-      this.log.add(`后台传输长时任务申请失败: ${(err as BusinessError).message}`);
+      // 与定位长时任务冲突（同一 UIAbility 同时只允许一个）或系统拒绝时不要打断流程。
+      this.log.add(`长时任务申请失败: ${(err as BusinessError).message}`);
     } finally {
       this.transferTaskStarting = false;
     }
-  }
-
-  /** 传输结束：最后一个引用释放时取消长时任务。 */
-  private async endTransferTask(): Promise<void> {
-    if (this.transferTaskRefs > 0) {
-      this.transferTaskRefs--;
-    }
-    if (this.transferTaskRefs > 0) {
-      return;
-    }
-    await this.stopTransferTask();
   }
 
   /** 真正释放系统长时任务；先翻 `transferTaskOn`，防止并发 stop 同一任务。 */
@@ -950,25 +1045,41 @@ export class CameraService {
    * 不受影响。
    */
   onAppBackground(): void {
-    if (!this.connected || this.sessionKeepAlive) {
-      return;
-    }
-    this.sessionKeepAlive = true;
-    this.log.add('退到后台：为保持相机会话申请长时任务');
-    this.beginTransferTask().catch((_e: Error) => {
-      // 申请失败时系统可能仍会保留进程一小段时间，不影响前台
-    });
+    // 后台不做无线心跳：没有界面要更新，也没必要陪相机跑流量。
+    this.setAppForeground(false);
+    this.syncBackgroundTask();
   }
 
-  /** 应用回到前台：释放后台保活引用。 */
+  /** 应用回到前台：释放后台保活引用，并恢复无线心跳。 */
   onAppForeground(): void {
-    if (!this.sessionKeepAlive) {
-      return;
-    }
-    this.sessionKeepAlive = false;
-    this.log.add('回到前台：释放相机会话的后台长时任务');
-    this.endTransferTask().catch((_e: Error) => {
-      // 释放失败只影响通知，不影响连接
+    this.setAppForeground(true);
+    this.syncBackgroundTask();
+  }
+
+  /**
+   * 后台保活的统一入口（1.66.9）。
+   *
+   * 原来只有「PTP 会话还在（这次真的在传照片）」才申请长时任务。蓝牙待机时进程可以
+   * 被系统冻结，冻结期间定时器和 BLE 回调都不跑，相机唤醒也连不回来（真机实测：后台
+   * 的重连窗口被拉长到 35–59 秒，再久就被冻结）。
+   *
+   * 现在「蓝牙待机连着」「正在等相机回来」也算需要保活——用户选了「后台纯待机也不
+   * 断线」，代价是**通知栏常驻一条系统长时任务通知**（内容应用改不了）。
+   * 相机一直关着时这条保活会一直挂着，扫描降到低功耗档、间隔 15 秒。
+   */
+  private syncBackgroundTask(): void {
+    // 「等待循环还开着」也算需要保活：断链那一刻 `bleReconnecting` 还没置上，
+    // 只看它会让任务先被释放、随即又申请一次（真机日志里 18:04:56 就是这么抖的）。
+    const watching = this.bleLink !== null && this.bleLink.watchArmed();
+    const need = !this.appForeground
+      && (this.connected || this.bleConnected || this.bleReconnecting || watching);
+    if (need === this.sessionKeepAlive) return;
+    this.sessionKeepAlive = need;
+    this.log.add(need
+      ? (this.connected ? '退到后台：为保持相机会话保活' : '退到后台：为保持蓝牙长连与重连保活')
+      : '不再需要后台保活');
+    this.applyBackgroundTask().catch((_e: Error) => {
+      // 申请/释放失败只影响通知与后台存活，不影响前台
     });
   }
 
@@ -1224,7 +1335,9 @@ export class CameraService {
         const srcFile = fileIo.openSync(srcFileUris[i], fileIo.OpenMode.READ_ONLY);
         const desFile = fileIo.openSync(desFileUris[i],
           fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
-        fileIo.copyFileSync(srcFile.fd, desFile.fd);
+        // 用异步复制：原图/RAW 动辄几十 MB，`copyFileSync` 会把主线程按住到
+        // 写完（1.66.15 排查时列出的一条主线程阻塞风险）。
+        await fileIo.copyFile(srcFile.fd, desFile.fd);
         fileIo.closeSync(srcFile);
         fileIo.closeSync(desFile);
         if (i < sandboxResults.length) {
@@ -1924,8 +2037,15 @@ export class CameraService {
           if (!this.bleCameras.some((d: BleCameraDevice) => d.deviceId === device.deviceId)) {
             this.bleCameras = this.bleCameras.concat([device]);
           }
+          // 扫到一台已经配对过的相机：别让用户从列表里再点一次、更别走首配
+          // （相机那边还记着这份身份，全新 stage1 会被秒拒）。
+          this.connectIfPaired(device);
         },
-        (msg: string) => { this.log.add(msg); });
+        (msg: string) => { this.log.add(msg); },
+        0,
+        // 用户按「搜索相机」正盯着页面等结果：这一轮用低延迟扫描，
+        // 8 秒窗口内就该把相机报上来（默认低功耗档常常要等好几秒）。
+        true);
     }
     this.bleScanner.start();
     if (this.bleScanTimer >= 0) clearTimeout(this.bleScanTimer);
@@ -1936,6 +2056,32 @@ export class CameraService {
       if (this.bleScanner !== null) this.bleScanner.stop();
       this.bleScanning = false;
     }, durationMs);
+  }
+
+  /**
+   * 扫描命中的相机如果已经配对过，直接按保存的身份连上。
+   *
+   * 只有「蓝牙」模式这么做：那个模式的主操作就是「连回这台相机」，让用户从
+   * 列表里再点一次没有意义，更不能走首配（相机那边还记着这份身份，全新的
+   * stage1 会被 `Remote device has an error` 秒拒）。AP / STA 的扫描是在找一台
+   * **新**相机（配对完还要交接热点），仍然留给用户在列表里选。
+   */
+  private connectIfPaired(device: BleCameraDevice): void {
+    if (this.linkMode !== CameraLinkMode.BLE) return;
+    if (this.bleConnecting || this.bleConnected) return;
+    if (this.bleScanEpoch !== this.linkEpoch) return;
+    const store = SavedCameraStore.getInstance();
+    const rec = store.findReal(cameraSerialFromBleName(device.name), device.name);
+    if (rec === null || rec.identityDevice === 0) return;
+    this.log.add(`BLE 扫描命中已配对相机（${device.name}），按保存的身份直接连接`);
+    store.activate(rec.key);
+    // `connectBle()` 自己会停掉扫描，同时把 `bleConnecting` 置上，
+    // 同一次广播里重复进来的回调因此不会并发连两遍。
+    // 蓝牙模式只是待机（校时 / 定位），不写 0x2005：相机一旦被推到 Wi-Fi 模式，
+    // 刚建立的 BLE 链路立刻就掉了。
+    this.connectBle(device.deviceId, device.name, false, false).catch((err: Error) => {
+      this.log.add(`BLE 连接失败: ${err.message}`);
+    });
   }
 
   /** 停止 BLE 扫描。 */
@@ -1962,16 +2108,28 @@ export class CameraService {
    * 往页面写红色错误 + 弹 toast。冷启动的自动连接是后台行为，用户没点任何东西，
    * 失败只记日志——以前每次开机都红着一行「蓝牙连接相机失败」。
    */
+  /**
+   * @param armWatch 失败后要不要转入「等相机回来」的后台循环。默认要；
+   *   `autoConnectBle()` 自己还要接着扫一轮时会传 false，扫完统一开——两边同时
+   *   开扫描会互相 `stopBLEScan()`，白扫一整窗（2026-11-14 实测）。
+   */
   async connectBle(deviceId: string, deviceName: string = '',
-                   handOver: boolean = true, silent: boolean = false): Promise<boolean> {
+                   handOver: boolean = true, silent: boolean = false,
+                   armWatch: boolean = true): Promise<boolean> {
     if (this.bleConnecting) {
       this.log.add('BLE 正在连接中，忽略重复点击');
       return false;
     }
     const epoch = this.linkEpoch;
+    this.bleConnectSeq = this.bleConnectSeq + 1;
+    const seq = this.bleConnectSeq;
     this.stopBleScan();
+    // 主动连接期间先停掉「等相机回来」的循环：两条路同时建链路会撞在同一个
+    // BLE 特征上（17:47 实测：两条「BLE 直连」各连了一次，第二次订阅被拒）。
+    if (this.bleLink !== null) this.bleLink.pauseReconnectWatch();
     this.bleConnecting = true;
     this.bleConnected = false;
+    this.bleAsleep = false;
     this.bleServices = [];
     try {
       if (this.bleLink === null) {
@@ -1983,7 +2141,11 @@ export class CameraService {
               this.bleServices = [];
               this.bleSerial = '';
             }
+            // 后台时蓝牙链路的断/连会影响「要不要保活」。
+            this.syncBackgroundTask();
           });
+        // 重连节奏按当前前后台状态起算：冷启动时一般在前台。
+        this.bleLink.setForeground(this.appForeground);
       }
       this.bleCameraName = deviceName;
       const ok = await this.bleLink.connect(deviceId);
@@ -1993,6 +2155,11 @@ export class CameraService {
         await this.dropCancelledBleLink();
         return false;
       }
+      if (this.bleConnectSeq !== seq) {
+        // 用户取消：不给红色失败、不开「等相机回来」，界面已经回到未连接。
+        this.log.add('BLE 连接已取消（用户）');
+        return false;
+      }
       if (!ok) {
         this.bleServices = [];
         if (silent) {
@@ -2000,19 +2167,13 @@ export class CameraService {
         } else {
           this.reportScanFailure(L10n.tr('camera_status_ble_connect_failed'));
         }
+        if (armWatch) this.keepWaitingForCamera();
         return false;
       }
       this.bleConnected = true;
-      this.bleServices = await this.bleLink.listServices();
-      if (!this.epochCurrent(epoch)) {
-        this.log.add('BLE 连接已被切模式取消（服务枚举后）');
-        await this.dropCancelledBleLink();
-        return false;
-      }
-      for (const line of this.bleServices) {
-        this.log.add(`GATT ${line}`);
-      }
-      this.log.add(`BLE 服务枚举完成: ${this.bleServices.length} 行`);
+      // **不在这里枚举服务表**（1.66.7）：它纯粹是日志用的，而相机半睡时
+      // `getServices()` 能挂 10 秒并卡住 JS 主线程（2026-11-14 17:41 的
+      // THREAD_BLOCK_3S 闪退）。握手里有 `ensureServices()`，需要时它自己查一次。
       // 服务枚举完直接走两段式配对（相机需停在「开始配对」页）。
       // 广播名要传给配对层：经典蓝牙绑定时靠它匹配相机。
       // 三个条件缺一不可：
@@ -2024,6 +2185,10 @@ export class CameraService {
       if (wantHandover && !canHandover) {
         this.log.add('BLE 待机：交接冷却中，这次不把相机推到 Wi-Fi 模式');
       }
+      // 没有落盘身份 = 这一次走的是「首配」。相机端如果还记着这台手机，
+      // 全新的 stage1 会被 `Remote device has an error` 秒拒，那时必须让用户
+      // 先去相机菜单里删掉本机——这不是重试能解决的。
+      const freshPairing = !BleIdentityStore.getInstance().hasIdentity();
       const serial = await this.bleLink.pair(deviceName, canHandover);
       // 配对期间切了模式：相机那边可能已经认了这台手机，但这次流程到此为止，
       // 不再继续交接、也不把「配对成功」写进新模式。
@@ -2032,16 +2197,26 @@ export class CameraService {
         await this.dropCancelledBleLink();
         return false;
       }
+      if (this.bleConnectSeq !== seq) {
+        this.log.add('BLE 配对已取消（用户）');
+        return false;
+      }
       if (canHandover) {
         this.lastHandoverAt = Date.now();
       }
       if (serial === null) {
         this.bleSerial = '';
+        if (freshPairing) this.bleHint = L10n.tr('camera_ble_hint_repair');
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');
+        if (armWatch) this.keepWaitingForCamera();
         return false;
       }
       this.bleSerial = serial;
       this.bleHint = '';
+      this.bleAsleep = false;
+      // 已经连上了，之前「搜到的那几台」不再有意义：留着会在状态头下面
+      // 一直挂一张相机列表（用户反馈 1.66.3）。
+      this.bleCameras = [];
       SavedCameraStore.getInstance().rememberActive();
       this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
 
@@ -2050,6 +2225,8 @@ export class CameraService {
         this.bleSerial = serial;
         this.bleConnected = true;
         this.bleReconnecting = false;
+        this.bleAsleep = false;
+        this.syncBackgroundTask();
         SavedCameraStore.getInstance().rememberActive();
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
@@ -2058,6 +2235,13 @@ export class CameraService {
       };
       this.bleLink.onReconnecting = (reconnecting: boolean) => {
         this.bleReconnecting = reconnecting;
+        if (!reconnecting) this.bleAsleep = false;
+        this.syncBackgroundTask();
+      };
+      this.bleLink.onReconnectStalled = () => {
+        if (this.bleAsleep) return;
+        this.bleAsleep = true;
+        this.log.add('BLE 重连扫不到相机：判定相机已休眠（唤醒后会自动连回来）');
       };
       this.bleLink.enableAutoReconnect();
       // 配对成功后才允许写 0x2006/0x2007：先校时，再按 45s 保活（顺带持续校时）。
@@ -2072,9 +2256,11 @@ export class CameraService {
       }
       return true;
     } finally {
-      // 切模式时 `cancelInFlightLink()` 已经把标记清掉；新一轮可能已经重新
-      // 开始连接，旧流程不能把它的 `bleConnecting` 抹成 false。
-      if (this.epochCurrent(epoch)) this.bleConnecting = false;
+      // 切模式时 `cancelInFlightLink()` 已经把标记清掉；用户取消后马上又重新
+      // 连、或者新一轮已经开始时，旧流程不能把它的 `bleConnecting` 抹成 false。
+      if (this.epochCurrent(epoch) && this.bleConnectSeq === seq) {
+        this.bleConnecting = false;
+      }
     }
   }
 
@@ -2131,23 +2317,67 @@ export class CameraService {
   }
 
   /**
+   * 一台**已配对**的相机这次没连上（多半是睡着了）：把「等它回来」的循环开起来。
+   *
+   * 没有这一步，失败路径就到此为止——用户看到的是「已配对 + 连接相机」，
+   * 相机唤醒之后什么都不会发生，得自己再点一次。首配失败不走这里：
+   * 那台相机还没有身份，等它也没用。
+   */
+  private keepWaitingForCamera(): void {
+    if (this.bleLink === null) return;
+    if (!BleIdentityStore.getInstance().hasIdentity()) return;
+    this.log.add('BLE 没连上：转入后台等待相机重新广播');
+    this.bleLink.wakeReconnectWatch();
+  }
+
+  /**
+   * 把已配对相机的蓝牙身份装回「活动身份」。
+   *
+   * `BleIdentityStore` 只存**一台**的身份（底层很多代码直接读它），完整的多相机
+   * 身份在 `SavedCameraStore` 里。身份被清掉不等于相机没配过对——只要仓库里还有
+   * 这台相机的 device/nonce，装回来就能走复用握手，不用再让用户去相机上重新配对。
+   *
+   * 1.66.0 踩过：模拟相机的记录占用了真机序列号，冷启动 `activate()` 顺手清空了
+   * 身份，于是「已配对」变「未连接」，重连只能首配，而相机那边还记着这台手机，
+   * 首配被 `Remote device has an error` 秒拒。
+   *
+   * @returns 现在有可用身份就返回 true。
+   */
+  private adoptSavedBleIdentity(): boolean {
+    const active = BleIdentityStore.getInstance();
+    if (active.hasIdentity()) return true;
+    const store = SavedCameraStore.getInstance();
+    const rec = store.pickReal();
+    if (rec === null || rec.identityDevice === 0) return false;
+    store.activate(rec.key);
+    this.log.add(`蓝牙身份: 从已配对相机的记录装回（${rec.cameraName}）`);
+    return BleIdentityStore.getInstance().hasIdentity();
+  }
+
+  /**
    * App 启动 / 回前台时自动接上已配对的相机。
    *
-   * 相机休眠时 BLE 仍可连，握手阶段的 stage1 重发负责把它唤醒；连不上就
-   * 置空交给用户的显式操作，不在前台反复刷扫描。
+   * 相机休眠时 BLE 仍可连，握手阶段的 stage1 重发负责把它唤醒。
+   *
+   * @param silent 连不上时不往页面上报失败。
+   * @param quiet **冷启动那一次**专用的「完全不留痕」：失败后回到未连接——不报错、
+   *   不进「等相机回来」、不留「正在重连/已休眠」。这次连接不是用户发起的，他
+   *   想连的时候自己会点「连接相机」；把失败摆到屏幕上只会让人以为要处理什么。
    */
-  async autoConnectBle(silent: boolean = true): Promise<boolean> {
+  async autoConnectBle(silent: boolean = true, quiet: boolean = false): Promise<boolean> {
     if (this.bleConnected || this.bleConnecting) return this.bleConnected;
     const epoch = this.linkEpoch;
+    this.adoptSavedBleIdentity();
     const store = BleIdentityStore.getInstance();
     if (!store.hasIdentity() || store.deviceId.length === 0) {
       // 没有 BLE 身份不代表无线也连不上：上次连过的无线地址还在，值得先试
       // 一次（用户可能只想要相册，不需要蓝牙保活/地理标记）。
-      await this.autoLinkWifi('cold-start-no-ble', false);
+      if (await this.autoLinkWifi('cold-start-no-ble', false)) return false;
+      if (quiet) await this.resetColdStartTraces();
       return false;
     }
     this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）（仅待机，不切无线）`);
-    if (await this.connectBle(store.deviceId, store.cameraName, false, silent)) {
+    if (await this.connectBle(store.deviceId, store.cameraName, false, silent, false)) {
       return this.epochCurrent(epoch);
     }
     if (!this.epochCurrent(epoch)) return false;
@@ -2157,15 +2387,57 @@ export class CameraService {
     const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
     if (!this.epochCurrent(epoch)) return false;
     for (const dev of devices) {
-      if (await this.connectBle(dev.deviceId, dev.name, false, silent)) {
+      if (await this.connectBle(dev.deviceId, dev.name, false, silent, false)) {
         return this.epochCurrent(epoch);
       }
       if (!this.epochCurrent(epoch)) return false;
     }
     // BLE 这条路彻底不通时，无线这半条仍单独试一次（比如蓝牙被系统关了、
     // 但手机还挂在相机所在的热点上）。
-    await this.autoLinkWifi('cold-start-ble-failed', false);
+    if (await this.autoLinkWifi('cold-start-ble-failed', false)) return false;
+    if (!this.epochCurrent(epoch)) return false;
+    if (quiet) {
+      // 冷启动的自动连接不是用户发起的：失败就彻底安静地回到未连接。
+      await this.resetColdStartTraces();
+      this.log.add('BLE 自动连接未成：安静回到未连接（不进入重连等待）');
+      return false;
+    }
+    // 这一轮全都没成：现在才开「等相机回来」的循环，避免和上面的扫描抢射频。
+    this.keepWaitingForCamera();
     return false;
+  }
+
+  /**
+   * 把一次「冷启动自动连接」失败留下的痕迹清干净（1.66.13）。
+   *
+   * 页面的状态头、提示行、错误行全部由这些字段派生：只要它们还在，一次用户
+   * 根本没发起的尝试就会在屏幕上留下「连接失败 / 正在重新连接 / 相机可能已休眠」。
+   * 这里统一清掉，并关掉可能已经建了一半的 GATT 链路，让页面回到「未连接」。
+   */
+  private async resetColdStartTraces(): Promise<void> {
+    // **先清页面状态，再去收链路**：链路收尾可能要等服务发现落地（几秒），
+    // 让它先跑就等于把「安静回到未连接」拖到几秒之后。
+    this.bleConnecting = false;
+    this.bleConnected = false;
+    this.bleReconnecting = false;
+    this.bleAsleep = false;
+    this.bleCameras = [];
+    this.bleServices = [];
+    this.bleHint = '';
+    this.bleSerial = '';
+    this.lastScanError = '';
+    this.wirelessFailed = '';
+    this.wifiHint = '';
+    this.wirelessStage = '';
+    this.wifiAutoConnecting = false;
+    this.wifiReconnecting = false;
+    this.syncBackgroundTask();
+    if (this.bleLink === null) return;
+    try {
+      await this.bleLink.disconnect();
+    } catch (_e) {
+      // 关不掉也不影响页面
+    }
   }
 
   /** 按尼康 deviceId 扫一段时间的相机（会自己停）。 */
@@ -2176,7 +2448,8 @@ export class CameraService {
       const scanner = new BleScanner(
         (dev: BleCameraDevice) => { found.push(dev); },
         (msg: string) => this.log.add(msg),
-        nikonDeviceId);
+        nikonDeviceId,
+        true);
       scanner.start();
       setTimeout(() => {
         scanner.stop();
@@ -2185,13 +2458,46 @@ export class CameraService {
     });
   }
 
-  /** 断开 BLE。 */
+  /** 断开 BLE（连接还在进行中时等同「取消连接」）。 */
   async disconnectBle(): Promise<void> {
+    if (this.bleConnecting) {
+      await this.cancelBleConnect();
+      return;
+    }
     this.disconnecting = true;
     try {
       await this.disconnectBleInternal();
     } finally {
       this.disconnecting = false;
+    }
+  }
+
+  /**
+   * 用户取消正在进行的 BLE 连接（含首配的两段式握手）。
+   *
+   * **点一下就必须有反应**：先把界面放掉（`bleConnecting` 立刻归位），再去收
+   * 链路。链路自己超时要 10 秒以上，等它等于让用户对着一个没反应的按钮干看。
+   * 在途的 `connectBle()` 会在下一个 await 之后看到取消标记，安静退出。
+   */
+  async cancelBleConnect(): Promise<void> {
+    if (!this.bleConnecting) return;
+    // 让在途的那一轮看到序号对不上，安静退出（不报失败、不再写状态）。
+    this.bleConnectSeq = this.bleConnectSeq + 1;
+    this.log.add('BLE 连接已取消（用户）');
+    this.bleConnecting = false;
+    this.bleConnected = false;
+    this.bleReconnecting = false;
+    this.bleAsleep = false;
+    this.bleCameras = [];
+    this.bleHint = '';
+    this.bleServices = [];
+    this.bleSerial = '';
+    this.syncBackgroundTask();
+    if (this.bleLink === null) return;
+    try {
+      await this.bleLink.disconnect();
+    } catch (_e) {
+      // 取消本来就是收尾，链路关不掉也不影响界面
     }
   }
 
@@ -2202,15 +2508,20 @@ export class CameraService {
     if (this.bleLink !== null) {
       // 无线会话还在用的时候不能写 0x2005=0x80：STA 模式下这一笔会让相机
       // 退出网络，顺手把正在用的 PTP 会话也断掉。只在「只连着蓝牙」时关。
-      if (!this.wireless) {
+      // 还没配对成功（`bleSerial` 为空）时也不写：那时相机根本不认这个会话，
+      // 这一笔只会白等 5 秒超时。
+      if (!this.wireless && this.bleSerial !== '') {
         await this.bleLink.closeCameraWifi();
       }
       await this.bleLink.disconnect();
     }
     this.bleConnected = false;
     this.bleReconnecting = false;
+    this.bleAsleep = false;
     this.bleServices = [];
     this.bleSerial = '';
+    // 用户主动断开：后台不必再为蓝牙保活。
+    this.syncBackgroundTask();
     // 取消连接/配对失败留下的提示不再成立
     this.bleHint = '';
     this.bleCameras = [];
@@ -2235,6 +2546,15 @@ export class CameraService {
    */
   initCameraModel(): void {
     const store = CameraModelStore.getInstance();
+    // `camera_model` 是「上次认出过的机型」，属于展示缓存，不是身份。仓库里一台
+    // 相机都没有时不能拿它当标题：页面上会一边写「未连接 + 搜索相机」，一边把
+    // 一台已不存在的相机型号和序列号挂在标题栏（1.66.1 用户指出）。
+    // `MainScreen` 已先初始化过 `SavedCameraStore`，这里的 `current()` 是迁移之后的结果。
+    if (SavedCameraStore.getInstance().current() === null) {
+      store.clear();
+      this.cameraModel = '';
+      return;
+    }
     if (store.key !== '') {
       this.cameraModel = store.key;
     }
@@ -2283,8 +2603,12 @@ export class CameraService {
     if (key === this.cameraModel) return;
     this.cameraModel = key;
     CameraModelStore.getInstance().set(key);
-    SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel,
-      CameraModelStore.getInstance().serial);
+    // 模拟相机自己那条记录由 `rememberMockCamera()` 写：走 `updateCurrentMeta()`
+    // 会把模拟相机的机型/序列号写进**上一台**（当前选中的）真机记录里。
+    if (!this.sessionIsMock) {
+      SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel,
+        CameraModelStore.getInstance().serial);
+    }
     this.rememberMockCamera();
     this.log.add(`相机立牌: ${raw} → ${key}`);
   }
@@ -2299,11 +2623,17 @@ export class CameraService {
   @Monitor('deviceSerialNumber', 'bleCameraName')
   onCameraSerialChanged(): void {
     if (this.cameraModel === '') return;
-    const fromName = cameraSerialFromBleName(this.bleCameraName);
+    // 模拟相机（调试包）只认自己上报的 `MOCK-0001`。`bleCameraName` 是上一台
+    // 真机蓝牙连接留下的（断开时不清），拿它的尾段当序列号会把模拟相机记成
+    // 真机的 8079350，进而顶掉那条真机记录（1.66.1 修的串号污染）。
+    const fromName = this.sessionIsMock ? '' : cameraSerialFromBleName(this.bleCameraName);
     const serial = fromName !== '' ? fromName : this.deviceSerialNumber.replace(/^0+/, '');
     if (serial === '') return;
     CameraModelStore.getInstance().setSerial(serial);
-    SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel, serial);
+    // 同上：模拟相机别把序列号写进当前选中的真机记录。
+    if (!this.sessionIsMock) {
+      SavedCameraStore.getInstance().updateCurrentMeta(this.cameraModel, serial);
+    }
     this.rememberMockCamera();
     this.log.add(`机身序列号: ${serial}`);
   }
@@ -2488,6 +2818,9 @@ export class CameraService {
     if (this.connected && this.wireless) return;
     this.wirelessFailed = '';
     const epoch = this.linkEpoch;
+    // 身份可能只是没装回活动位（多相机 / 上次是模拟相机），先补一次再判断
+    // 「配没配过对」，否则会把一台已配对的相机当成新相机去扫蓝牙。
+    this.adoptSavedBleIdentity();
     const store = BleIdentityStore.getInstance();
     const paired = store.hasIdentity() && store.deviceId.length > 0;
     if (this.linkMode === CameraLinkMode.AP) {
@@ -2858,6 +3191,131 @@ export class CameraService {
     this.wifiReconnectIndex = 0;
   }
 
+  // ------------------------------------------------------------------
+  // 相机在线检测（1.66.0）
+  //
+  // 两条链路各用最合适的手段，都不靠「下一次操作失败」去发现：
+  // - USB：系统公共事件 `USB_DEVICE_DETACHED`——拔线/断电都会立刻发，零轮询；
+  // - Wi-Fi：TCP 半开时没有任何事件，只能自己发心跳（前台、15 秒、一条 GetDeviceInfo）。
+  // BLE 的 GATT 断链事件本来就管用，`BleCameraLink` 的保活失败再兜一层底。
+  // ------------------------------------------------------------------
+
+  /** 应用前后台切换：后台停心跳，回前台先补一次（不用等满一个周期）。 */
+  setAppForeground(foreground: boolean): void {
+    this.appForeground = foreground;
+    // 蓝牙自动重连的节奏也跟着前台/后台走：前台压到 8 秒以内，用户抬眼时
+    // 链路已经回来了；后台没必要一直扫（1.66.3）。
+    if (this.bleLink !== null) this.bleLink.setForeground(foreground);
+    if (!foreground) {
+      this.stopWatchdog();
+      return;
+    }
+    this.startWatchdog();
+    this.watchdogTick();
+  }
+
+  /**
+   * 启动无线心跳。
+   *
+   * 一个常驻的 15 秒定时器，每一拍自己判断「现在该不该探」——比在每条连接 /
+   * 断开 / 切模式的路径上成对 start/stop 更难漏（漏一处就会一直探一条已经
+   * 不存在的链路）。
+   */
+  startWatchdog(): void {
+    if (this.watchdogTimer >= 0) return;
+    this.watchdogTimer = setInterval(() => { this.watchdogTick(); }, WIRELESS_HEARTBEAT_MS);
+    this.log.add(`无线心跳已启动（每 ${WIRELESS_HEARTBEAT_MS / 1000} 秒一次）`);
+  }
+
+  stopWatchdog(): void {
+    if (this.watchdogTimer < 0) return;
+    clearInterval(this.watchdogTimer);
+    this.watchdogTimer = -1;
+    this.watchdogBusy = false;
+    this.log.add('无线心跳已停止（应用退到后台）');
+  }
+
+  private watchdogTick(): void {
+    if (!this.appForeground || this.watchdogBusy) return;
+    // USB 有拔出事件，不需要轮询；扫描 / 连接 / 重连本身就在跑流量，
+    // 失败会从它们自己的路径里报上来。
+    if (!this.connected || !this.wireless) return;
+    if (this.scanning || this.wifiConnecting || this.wifiAutoConnecting
+      || this.wifiReconnecting || this.pairingRequired) {
+      return;
+    }
+    this.watchdogBusy = true;
+    this.pingWireless().then((alive: boolean) => {
+      this.watchdogBusy = false;
+      if (alive || !this.connected || !this.wireless) return;
+      this.log.add('无线心跳无响应：判定链路已断开');
+      this.onWifiBroken('心跳超时');
+    }).catch((err: Error) => {
+      this.watchdogBusy = false;
+      this.log.add(`无线心跳异常: ${err.message}`);
+    });
+  }
+
+  /** 一条 `GetDeviceInfo`，超过 [WIRELESS_HEARTBEAT_TIMEOUT_MS] 没回来就算断了。 */
+  private pingWireless(): Promise<boolean> {
+    return new Promise<boolean>((resolve: (v: boolean) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      }, WIRELESS_HEARTBEAT_TIMEOUT_MS);
+      this.session.getDeviceInfo(PtpPriority.SCAN).then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      }).catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      });
+    });
+  }
+
+  /**
+   * USB 相机拔出（`UsbAttachWatcher` 订阅系统公共事件后调进来）。
+   *
+   * 拔线不会让正在跑的命令立刻报错：PTP 的 bulk 端点要等下一次传输才知道对端
+   * 没了，所以**空闲时**页面会一直停在「已连接」。这里用系统事件主动确认一次：
+   * 会话那台设备确实不在枚举列表里，就按「相机没了」收尾——回到未连接 + 一条
+   * toast，抽屉自己变回「用数据线连接相机」的引导。
+   */
+  async onUsbDeviceDetached(): Promise<void> {
+    if (!this.connected || this.wireless) return;
+    if (this.disconnecting) return;
+    const deviceName = this.session.connectedDeviceName;
+    if (deviceName === '') return;
+    const cameras: usbManager.USBDevice[] = this.sessionIsMock
+      ? MockPtpDevice.findCameras() : PtpSession.findCameras();
+    const stillThere = cameras.some((c: usbManager.USBDevice) => c.name === deviceName);
+    if (stillThere) {
+      this.log.add(`USB 拔出事件：会话设备 ${deviceName} 仍在，忽略`);
+      return;
+    }
+    this.log.add(`USB 相机已拔出（会话设备 ${deviceName}），收掉会话`);
+    const wasScanning = this.scanning;
+    await this.disconnectInternal();
+    if (!wasScanning) {
+      // 扫描中就让扫描自己的失败路径说话（「USB 通信失败…」更准确，
+      // 也不会连着弹两条 toast）。
+      this.notify(L10n.tr('camera_status_usb_lost'));
+    }
+  }
+
+  /** 轻量提示：只弹一次 toast，不动页面状态。 */
+  notify(text: string): void {
+    this.noticeText = text;
+    this.noticeVersion++;
+    this.log.add(`[提示] ${text}`);
+  }
+
   private makeWifiSession(): WifiPtpSession {
     const s = new WifiPtpSession();
     s.setLog((m: string) => this.log.add(m));
@@ -2875,17 +3333,35 @@ export class CameraService {
    * 自动重连不会启动。
    */
   private onWifiBroken(reason: string): void {
-    if (!this.wifiAutoReconnectArmed) {
-      this.log.add(`无线链路断开（未启用自动重连）: ${reason}`);
-      return;
-    }
     if (this.wifiReconnecting) return;
-    this.log.add(`无线链路断开，准备自动重连: ${reason}`);
-    this.wifiReconnecting = true;
     this.connected = false;
     this.usable = false;
+    // 会话已经死了：把旧 socket 收掉。`closeSessionAndPipe()` 会先试 CloseSession，
+    // 半开链路上要等满事务超时，所以不等它——只是别再拿着这条链路。
+    this.dropBrokenWifiSession();
+    if (!this.wifiAutoReconnectArmed) {
+      // 用户刚断开 / 还在建链：不自动重连，但结论要留在页面上，否则页面会
+      // 悄悄退回「未连接」，用户不知道相机是怎么没的。
+      this.log.add(`无线链路断开（未启用自动重连）: ${reason}`);
+      this.failWireless(L10n.tr('camera_status_wifi_disconnected'));
+      return;
+    }
+    this.log.add(`无线链路断开，准备自动重连: ${reason}`);
+    this.wifiReconnecting = true;
     this.wifiReconnectIndex = 0;
     this.scheduleWifiReconnect();
+  }
+
+  /** 把已经判定断开的无线会话收掉（best effort，不阻塞重连）。 */
+  private dropBrokenWifiSession(): void {
+    const wifi = this.wifiSession;
+    this.wifiSession = null;
+    this.pairingRequired = false;
+    this.pairingCode = '';
+    if (wifi === null) return;
+    wifi.closeSessionAndPipe().catch((err: Error) => {
+      this.log.add(`关闭断开的无线会话失败: ${err.message}`);
+    });
   }
 
   private scheduleWifiReconnect(): void {
@@ -2925,7 +3401,11 @@ export class CameraService {
       this.wifiReconnecting = false;
       this.wifiReconnectIndex = 0;
       this.log.add('无线自动重连放弃（退避用尽）');
-      this.statusText = L10n.tr('camera_status_wifi_connect_failed', this.wifiHost);
+      // 以前只写 statusText：重连一停页面就退回「未连接」，用户不知道相机是
+      // 怎么没的。改成把结论写进 `wirelessFailed`（状态头显示「没能连上相机 +
+      // 原因 + 重试」），再补一条 toast（1.66.0）。
+      this.failWireless(L10n.tr('camera_status_wifi_connect_failed', this.wifiHost));
+      this.notify(L10n.tr('camera_status_wifi_disconnected'));
       return;
     }
     this.scheduleWifiReconnect();
@@ -2951,14 +3431,6 @@ export class CameraService {
     this.wifiAutoConnecting = true;
     this.wirelessFailed = '';
     try {
-      const nets = await collectLocalNetworks();
-      // 等网络快照期间切了模式：这一轮直接作废，不写网络快照、不继续连。
-      if (!this.epochCurrent(epoch)) {
-        this.log.add(`自动无线（${source}）已被切模式取消`);
-        return false;
-      }
-        this.log.add(`自动无线（${source}）: ${nets.summary}`);
-
       const store = WifiLinkStore.getInstance();
       if (store.hasHost()) {
         this.log.add(`自动无线: 先试上次地址 ${store.host}:${store.port}`);
@@ -2971,9 +3443,20 @@ export class CameraService {
         this.log.add('自动无线: 上次地址不通，改为扫描');
       }
       if (!allowScan) {
-        this.log.add('自动无线: 本次不走网段扫描（冷启动先只试记住的地址）');
+        this.log.add(`自动无线（${source}）: 本次不走网段扫描（只试记住的地址）`);
         return false;
       }
+      // **网络快照要等到真要扫描时再取**（1.66.14）：`connection.getAllNets()`
+      // 的实现在系统网络服务忙的时候会在主线程上跑好几秒（2026-11-14 19:01 实测
+      // 7.5 秒，EventHandler 队列被它堵住 → THREAD_BLOCK_6S 闪退）。冷启动只试
+      // 记住的地址，根本用不到这份快照，就不该为它冒卡死的险。
+      const nets = await collectLocalNetworks();
+      // 等网络快照期间切了模式：这一轮直接作废，不写网络快照、不继续连。
+      if (!this.epochCurrent(epoch)) {
+        this.log.add(`自动无线（${source}）已被切模式取消`);
+        return false;
+      }
+      this.log.add(`自动无线（${source}）: ${nets.summary}`);
 
       // 上限比一整轮网段扫描还长：命中就提前收工，没命中就让它跑完，
       // 不人为截断搜索（截断会把「慢但能找到」变成「找不到」）。
@@ -4086,7 +4569,8 @@ export class CameraService {
       const modDate = entry.modificationDate || '';
       const cached = this.thumbCache.findCached(key, modDate);
       if (cached) {
-        cacheLoads.push(this.loadCachedThumbnail(entry.handle, key, cached).then(() => {}));
+        cacheLoads.push(this.loadCachedThumbnail(entry.handle, key, cached)
+          .then(() => {}).catch(() => {}));
       }
     }
 
@@ -4709,9 +5193,9 @@ export class CameraService {
    */
   private rememberMockCamera(): void {
     if (!this.sessionIsMock) return;
-    const model = CameraModelStore.getInstance();
-    const serial = model.serial !== ''
-      ? model.serial : this.deviceSerialNumber.replace(/^0+/, '');
+    // 只用模拟相机自己上报的序列号。`CameraModelStore.serial` 可能还是上一台
+    // 真机留下的，拿它当 key 会把真机那条记录顶掉（1.66.1）。
+    const serial = this.deviceSerialNumber.replace(/^0+/, '');
     const name = this.cameraName !== '' ? this.cameraName : 'MOCK-PTP-CAMERA';
     const rec = SavedCameraStore.getInstance().rememberMock(this.cameraModel, serial, name);
     if (rec === null) return;
