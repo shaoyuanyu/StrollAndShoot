@@ -710,6 +710,33 @@ furble / nsg / kotlin-poc / ZPill / N-Link 都没做传图——它们根本没�
 SPP 服务 UUID 与 PTP 封装（鸿蒙有 `@ohos.bluetooth.socket`，首配也已经做过经典
 蓝牙绑定），属于新的研究项，不能和「读图」混在一起估工期。
 
+*SPP + PTP 可行性探针（1.68.1，仅调试包）*
+
+`entry/src/main/ets/debug/BtSppProbe.ets`，由 `EntryAbility.onNewWant` 的
+`--ps spp` 触发（`MockPtpDevice.isDebugBuild()` 为真才执行）：
+
+```bash
+hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb        # PTP/USB 容器 + 标准 SPP
+hdc shell aa start -a EntryAbility -b <bundle> --ps spp ip         # PTP/IP OperationRequest
+hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 128 位 UUID 再试
+```
+
+`frame` = `usb`（默认，先 `buildOpenSession(1)` 再 `buildGetDeviceInfo()`）/
+`ip` / `usb-noopen`；`uuidKey` = `1101`（标准 SPP，默认）/ `de00` / `de01`。
+流程：从系统已配对列表按名字/序列号找相机的**经典地址**（经典地址没有落盘）→
+`sppConnect`（RFCOMM、secure）→ 按 **492 字节**（`0x2004` 尾部的
+`sppMaxDataLength`）切片写 PTP → 读 5–6 秒，原始 hex 落 AppLog（前缀 `[SPP]`）。
+
+判读：
+
+- 收到 `← nB xx xx …` → SPP 通道成立、封装有回应；按 hex 的长度/魔数继续解；
+- 连不上 → 看日志里的 `code`：`2900099` 多为 UUID 不在 SDP 里或相机没进经典模式，
+  `2900003` 是蓝牙总开关关着，超时多半是相机在休眠；
+- 相机在 Wi-Fi 模式时 BLE 不在，经典 SPP 是否可用**未知**——探针建议在相机醒着的
+  蓝牙待机态下跑（App 里连着或刚断开都行，日志会打印当前 BLE 状态）。
+
+探针不写持久化、不改连接状态，跑完关 socket；release 包没有入口。
+
 [MXWF0/SnapBridge-Enhanced]: https://github.com/MXWF0/SnapBridge-Enhanced
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
 - **冷启动那一次连接不算用户操作**（1.66.13）：`autoConnectBle(silent, quiet)` 的第二个

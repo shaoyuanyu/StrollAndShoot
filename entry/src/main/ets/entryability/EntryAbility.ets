@@ -6,6 +6,7 @@ import { L10n } from '../utils/L10n';
 import { saveWindowSnapshot, saveWindowSnapshotBurst } from '../utils/WindowShot';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { CameraStateDemo } from '../debug/CameraStateDemo';
+import { BtSppProbe } from '../debug/BtSppProbe';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { GpsGeocoder } from '../services/GpsGeocoder';
@@ -34,6 +35,15 @@ export default class EntryAbility extends UIAbility {
       if (MockPtpDevice.isDebugBuild()) {
         CameraStateDemo.apply(String(demo));
         hilog.info(DOMAIN, TAG, 'camera state demo: %{public}s', String(demo));
+      }
+      return;
+    }
+    const spp = want.parameters ? want.parameters['spp'] : undefined;
+    if (spp !== undefined) {
+      // 2MP 自动传图协议探针（蓝牙经典 SPP + PTP），仅调试包。
+      if (MockPtpDevice.isDebugBuild()) {
+        BtSppProbe.run(String(spp));
+        hilog.info(DOMAIN, TAG, 'bt spp probe: %{public}s', String(spp));
       }
       return;
     }
