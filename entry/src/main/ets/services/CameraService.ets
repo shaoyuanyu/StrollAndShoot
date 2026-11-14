@@ -2308,7 +2308,13 @@ export class CameraService {
       // 1. 这次调用真的要交接（用户主动选相机，不是冷启动/自动重连）；
       // 2. 无线会话没在跑（跑了再推一次会把正在传的 PTP 掐断）；
       // 3. 不在冷却期内（BLE/Wi-Fi 互斥，来回推会让相机在两个模式间乒乓）。
-      const wantHandover = handOver && !(this.connected && this.wireless);
+      // **蓝牙模式不允许从「搜索相机」的列表配对时顺手交接 Wi-Fi**（1.68.6）：
+      // 用户选的链路是蓝牙待机，只想把相机连上；有没有 Wi-Fi 由相机页上那条
+      // 「浏览与下载照片」显式决定（走 `browsePhotosOverWifi`，那里会自己唤醒）。
+      // 这条在 1.67.0 把 BLE 也归到 AP 交接之后暴露：首次配对会擅自写
+      // 0x2005=0x01 并去加入热点，用户什么都没点就被推去 Wi-Fi。
+      const wantHandover = handOver && isWifiMode(this.linkMode)
+        && !(this.connected && this.wireless);
       const canHandover = wantHandover && this.handoverAllowed();
       if (wantHandover && !canHandover) {
         this.log.add('BLE 待机：交接冷却中，这次不把相机推到 Wi-Fi 模式');

@@ -816,9 +816,44 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 1
 - 试过 PTP/USB 容器、`OpenSession`、2/4 字节长度前缀、PTP/IP 容器、1 字节触发，
   作为第一笔写都只会成功/失败，没有一个拿到回执。
 
-判断：这对特征更像**固件/设定下发的私有控制通道**（官方有「固件下载并传给相机」
-这项能力），不像 PTP 数据通道；没有它的会话/帧头就驱动不了。缩略图也走 PTP，
-所以「蓝牙模式看相机缩略图」在鸿蒙上同样没有可用通道——除非拿到这条私有通道的协议。
+判断：这对特征更像**固件/设定下发的私有控制通道**，不像 PTP 数据通道；没有它的
+会话/帧头就驱动不了。
+
+**官方 2.14.3 APK 定案（2026-11-14，用户提供的现装包）**
+
+用 apktool 拆 `SnapBridge-2.14.3.3000.apk`（classes.dex 只有 8.7MB，其余是 native
+库），`BleLssService.smali` 给出了官方命名：
+
+| 特征 | 官方常量 |
+|---|---|
+| `0x2009` | `LSS_FEATURE` |
+| `0x200a` | `LSS_CABLE_ATTACHMENT` |
+| `0x2020` | **`LSS_STATUS_FOR_CONTROL`** |
+| `0x2021` | **`LSS_CONTROL_POINT_FOR_CONTROL`** |
+| `0x2080` | `LSS_CATEGORY_INFO` |
+| `0x2081` | `LSS_STATUS_FOR_CAPTURE` |
+
+也就是说 `0x2020/0x2021` 是**蓝牙遥控（remote）那套控制点/状态**，不是图像通道；
+之前往它写 PTP 没有回执、还留下 busy，原因就是发错了地方。BLE 传图/缩略图到此
+可以确定没有——官方自己也只在 SPP 上跑 PTP。
+
+`snapbridge/ptpclient/s.smali` 还给出了 SPP 的完整封装（如果哪天真有 channel API
+就能直接实现）：
+
+- 命令/数据包：`u16 0xA5A5 + u8 type + u8 0/1 + u32 bodyLen`，body 是
+  **PTP/USB 容器**（`len + 0x0001 + opcode + tid + params`）；
+- 握手包：`u16 0xA1A1 + u16 code + u32 16 + 16B`（两个 8 字节值）；
+- 响应：`0xA2A2`；事件：`0xA5A5 + 0x02 + 0x03 + ...`；
+- 客户端用反射 `createInsecureRfcommSocket(1)` 按 **channel 1** 直连；
+  服务端是 `listenUsingRfcommWithServiceRecord("SnapBridge", 0x1101)`。
+
+**2026-11-14 22:59 真机：重新配对 + 服务端在场，相机仍不连**
+
+按 A1000 的经验把 App 的配对记录、相机的配对都清掉，重走一次首配；期间手机上
+一直有一个 `sppListen("SnapBridge", 0x1101)` 在等（5 分钟窗口，覆盖整个经典绑定
+过程）。结果：22:59:06 经典绑定完成、22:59:12 段 2 握手完成，**相机一次都没有发起
+RFCOMM**；服务端 accept 超时。结合前面客户端方向卡在 `sdp_disconnect 0xfff2`，
+SPP 两个方向在 Z50II + 鸿蒙上都是死路。
 
 注意：探针会留下 busy 状态，跑完最好重启相机。
 

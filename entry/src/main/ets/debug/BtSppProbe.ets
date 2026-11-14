@@ -2,6 +2,7 @@ import { connection as btConnection, socket as btSocket } from '@kit.Connectivit
 import { BusinessError } from '@kit.BasicServicesKit';
 import rawPtp from 'libentry.so';
 import { BleIdentityStore } from '../services/BleIdentityStore';
+import { SavedCameraStore } from '../services/SavedCameraStore';
 import { CameraService } from '../services/CameraService';
 
 /**
@@ -50,6 +51,10 @@ export class BtSppProbe {
 
   /** 探针入口（EntryAbility.onNewWant 在调试包里调）。 */
   static run(arg: string): void {
+    if (arg.trim() === 'reset') {
+      BtSppProbeResetPairing.run();
+      return;
+    }
     BtSppProbe.runInner(arg).catch((err: Error) => {
       BtSppProbe.log(`异常终止: ${err.message}`);
     });
@@ -136,13 +141,13 @@ export class BtSppProbe {
     const serverId = await BtSppProbe.startServer(BtSppProbe.UUID_STANDARD);
     if (serverId < 0) return;
     try {
-      const clientId = await BtSppProbe.accept(serverId, 30000);
+      // 等 5 分钟：相机关机再开时可能会主动连回已绑定的手机，留够时间。
+      const clientId = await BtSppProbe.accept(serverId, 300000);
       if (clientId < 0) return;
       try {
-        await BtSppProbe.writeAll(clientId, rawPtp.buildOpenSession(1));
-        await BtSppProbe.sleep(400);
-        await BtSppProbe.writeAll(clientId, rawPtp.buildGetDeviceInfo());
-        await BtSppProbe.readFor(clientId, 6000);
+        // 先只读：相机连上来的第一个包就是它的握手，别急着写 PTP。
+        BtSppProbe.log('先读相机发来的握手（10 秒）');
+        await BtSppProbe.readFor(clientId, 10000);
       } finally {
         try {
           btSocket.sppCloseClientSocket(clientId);
@@ -177,7 +182,9 @@ export class BtSppProbe {
           secure: true,
           type: btSocket.SppType.SPP_RFCOMM
         };
-        btSocket.sppListen('StrollAndShoot', options, (err: BusinessError, serverId: number) => {
+        // 官方用 `listenUsingRfcommWithServiceRecord("SnapBridge", 0x1101)`：
+        // 服务名可能也是相机匹配的一部分，别用自己的名字。
+        btSocket.sppListen('SnapBridge', options, (err: BusinessError, serverId: number) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
@@ -430,4 +437,27 @@ interface ProbeArg {
   establish: number;
   /** 连接前先断开 BLE（不写 0x2005=0x80）。 */
   drop: boolean;
+}
+
+/** 探针用：清掉本机的配对身份与真机记录，让 App 回到「搜索相机」首配状态。 */
+class BtSppProbeResetPairing {
+  static run(): void {
+    const log = (msg: string): void => {
+      CameraService.getInstance().getLog().add(`[SPP] ${msg}`);
+    };
+    try {
+      BleIdentityStore.getInstance().clear();
+      const store = SavedCameraStore.getInstance();
+      const keys: string[] = [];
+      for (const cam of store.cameras) {
+        if (cam.isMock !== true) keys.push(cam.key);
+      }
+      for (const key of keys) {
+        store.remove(key);
+      }
+      log(`已清掉配对身份与 ${keys.length} 台真机记录；请到相机页点「搜索相机」重新首配`);
+    } catch (err) {
+      log(`重置失败: ${(err as Error).message}`);
+    }
+  }
 }
