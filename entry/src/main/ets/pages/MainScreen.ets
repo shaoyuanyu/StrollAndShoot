@@ -1174,6 +1174,9 @@ export struct MainScreen {
             onDisconnectBle: () => {
               this.svc.disconnectBle();
             },
+            onOpenBleRemote: () => {
+              this.pageInfos.pushPath({ name: 'BleRemotePage' });
+            },
             onSelectMode: (mode: number) => {
               this.svc.setLinkMode(mode);
             },

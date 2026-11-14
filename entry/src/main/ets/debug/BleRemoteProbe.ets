@@ -157,18 +157,44 @@ export class BleRemoteProbe {
   private static async shot(): Promise<void> {
     const link = await BleRemoteProbe.prepare();
     if (link === null) return;
-    const steps: number[][] = [
-      [BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_ON],
-      [BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_OFF],
-      [BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_ON],
-      [BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_OFF]
-    ];
-    for (const step of steps) {
-      const label = `按键 ${BleRemoteProbe.keyName(step[0])} ${step[1] === 1 ? 'ON' : 'OFF'}`;
-      if (!await BleRemoteProbe.write(link, label, BleRemoteProbe.frame(BleRemoteProbe.OP_KEY, step))) return;
-      await BleRemoteProbe.sleep(700);
-    }
+    await BleRemoteProbe.logStatus(link, '开始前');
+
+    await BleRemoteProbe.press(link, BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_ON, '半按 ON', 450);
+    await BleRemoteProbe.logStatus(link, '半按后');
+    await BleRemoteProbe.press(link, BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_OFF, '半按 OFF', 250);
+    await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_ON, '全按 ON', 150);
+    await BleRemoteProbe.logStatus(link, '全按后 150ms');
+    await BleRemoteProbe.sleep(450);
+    await BleRemoteProbe.logStatus(link, '全按后 600ms');
+    await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_OFF, '全按 OFF', 900);
+    await BleRemoteProbe.logStatus(link, '释放后');
     BleRemoteProbe.log('快门序列结束（相机没反应说明 0x11 还没进遥控，先跑 on）');
+  }
+
+  /** 发一个按键并等 [gapMs]，失败返回 false。 */
+  private static async press(link: BleCameraLink, key: number, op: number,
+                             label: string, gapMs: number): Promise<boolean> {
+    if (!await BleRemoteProbe.write(link, label,
+      BleRemoteProbe.frame(BleRemoteProbe.OP_KEY, [key, op]))) return false;
+    await BleRemoteProbe.sleep(gapMs);
+    return true;
+  }
+
+  /** 读 0x2020 并把拍摄状态/限制位解出来写日志（不依赖通知）。 */
+  private static async logStatus(link: BleCameraLink, when: string): Promise<void> {
+    const r = await link.readWithReason(BleRemoteProbe.CH_STATUS);
+    if (r.value === null) {
+      BleRemoteProbe.log(`${when} 读 0x2020 失败: ${r.error}`);
+      return;
+    }
+    const v = r.value;
+    const main = v.length > 0 ? v[0] : -1;
+    const sub = v.length > 1 ? v[1] : -1;
+    const capture = v.length > 2 ? v[2] : -1;
+    const restriction = v.length > 3 ? v[3] : -1;
+    BleRemoteProbe.log(`${when} 状态 main=${main} sub=${sub} capture=${capture}`
+      + ` restriction=0x${restriction.toString(16)}`);
+    await BleRemoteProbe.sleep(150);
   }
 
   private static async movie(): Promise<void> {

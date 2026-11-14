@@ -18,7 +18,7 @@ import { PtpScheduler } from './PtpScheduler';
 import { WifiPtpSession } from './WifiPtpSession';
 import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
-import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
+import { BleScanner, BleCameraLink, type BleCameraDevice, type BleRemoteStatus } from './BleScanner';
 import { BleTimePayload, type BleGeoFix } from './BlePayloads';
 import { BleIdentityStore } from './BleIdentityStore';
 import { SavedCameraStore, type SavedCamera } from './SavedCameraStore';
@@ -133,6 +133,9 @@ const BLE_KEEPALIVE_MS = 45000;
  * 固件版本更没必要重读，每次连接只读一次。
  */
 const BLE_INFO_REFRESH_MS = 300000;
+/** 蓝牙遥控按键值（官方 `KeyCode`）。 */
+const BLE_KEY_HALF = 2;
+const BLE_KEY_FULL = 3;
 /**
  * 直连「缓存热点」的等上链时限（1.68.0）。
  *
@@ -435,6 +438,23 @@ export class CameraService {
   @Trace bleBatteryPercent: number = -1;
   @Trace blePowerState: number = -1;
   @Trace bleFirmware: string = '';
+  /**
+   * 蓝牙遥控（1.70.0）。
+   *
+   * `bleRemoteActive` 只在 0x11 进遥控成功后为真；相机在遥控模式下会**锁住
+   * 回放/菜单**，所以页面退出、App 退后台、链路断开都必须把它放回去
+   * （`stopBleRemote()`），不能只靠用户返回。
+   */
+  @Trace bleRemoteActive: boolean = false;
+  @Trace bleRemoteEntering: boolean = false;
+  @Trace bleRemoteError: string = '';
+  /** 0x2020 状态：0 NOT_CONTROL / 1 PHOTO / 2 PLAY / 3 MENU。 */
+  @Trace bleRemoteMain: number = -1;
+  /** 0 NONE / 1 SHOOTING / 2 BULB / 3 TIME。 */
+  @Trace bleRemoteCapture: number = 0;
+  /** bit0 释放受限 / bit1 录像受限 / bit2 照片错误 / bit3 录像错误。 */
+  @Trace bleRemoteRestriction: number = 0;
+  @Trace bleRemoteFocus: boolean = false;
   /** 断链后正在自动重连（相机会休眠，链路断了自己爬起来）。 */
   @Trace bleReconnecting: boolean = false;
   /**
@@ -2294,6 +2314,10 @@ export class CameraService {
               this.bleServices = [];
               this.bleSerial = '';
               this.stopBleInfoWatch();
+              // 链路断了，相机那边的遥控会话也随之结束；本地状态必须归位。
+              this.bleRemoteActive = false;
+              this.bleRemoteEntering = false;
+              this.clearRemoteState();
               // **不要在这里停位置注入**：相机半睡时链路十几秒就断一次，一断就
               // 退订的话，连续定位永远等不到第一拍（1.66.18 真机日志：整段会话
               // 只有一次 0x2007，之后每次重连都从零开始）。注入的生命周期跟着
@@ -2397,7 +2421,7 @@ export class CameraService {
         SavedCameraStore.getInstance().rememberActive();
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
-        this.startBleInfoWatch(1500);
+        this.startBleInfoWatch(5500);
         // 重连只恢复待机（校时/GPS）。**不要**在这里补写 0x2005：
         // 相机刚从 Wi-Fi 回落才连得上，再推一次就又把它踢走（乒乓）。
       };
@@ -2418,7 +2442,7 @@ export class CameraService {
       this.startBleKeepalive(2500);
       // 相机侧只读状态（电量/唤醒/固件）：等握手收口、保活首写之后再读，
       // 否则第一笔就撞在相机还没醒的 GATT 上。
-      this.startBleInfoWatch(3000);
+      this.startBleInfoWatch(5500);
       if (canHandover) {
         // 已经把相机推到 Wi-Fi 模式：按当前模式接着收口。
         this.afterHandover(epoch).catch((err: Error) => {
@@ -2576,7 +2600,12 @@ export class CameraService {
     if (this.bleInfoBusy) return;
     this.bleInfoBusy = true;
     try {
-      const battery = await link.readBattery();
+      let battery = await link.readBattery();
+      // 2900099 = 上一笔非监听类 BLE 接口还没回调完；隔 400ms 重试一次就能过。
+      if (battery.value === null && battery.error.includes('2900099')) {
+        await this.bleInfoSleep(400);
+        battery = await link.readBattery();
+      }
       if (battery.value !== null && battery.value.length > 0) {
         const pct = battery.value[0];
         if (pct <= 100) {
@@ -2590,8 +2619,12 @@ export class CameraService {
         this.log.add(`BLE 电量读取失败: ${battery.error}`);
       }
 
-      await this.bleInfoSleep(150);
-      const power = await link.readPower();
+      await this.bleInfoSleep(250);
+      let power = await link.readPower();
+      if (power.value === null && power.error.includes('2900099')) {
+        await this.bleInfoSleep(400);
+        power = await link.readPower();
+      }
       if (power.value !== null && power.value.length > 0) {
         this.blePowerState = power.value[0];
       } else if (!this.bleInfoLoggedPower) {
@@ -2602,7 +2635,7 @@ export class CameraService {
       // 固件版本不会变：每次连接只读一次；读空也算读过，免得每 5 分钟重试。
       if (this.bleFirmware === '' && !this.bleInfoFirmwareTried) {
         this.bleInfoFirmwareTried = true;
-        await this.bleInfoSleep(150);
+        await this.bleInfoSleep(250);
         const fw = await link.readFirmware();
         if (fw.value !== null) {
           const text = util.TextDecoder.create('utf-8')
@@ -2631,6 +2664,128 @@ export class CameraService {
     return new Promise<void>((resolve: () => void) => {
       setTimeout(resolve, ms);
     });
+  }
+
+  // ---- 蓝牙遥控（1.70.0）----
+
+  /**
+   * 进入蓝牙遥控。
+   *
+   * 先开 0x2020/0x2021 的指示（响应从 0x2021 回来），再写 `0x11=1`。
+   * **相机在遥控模式下会锁住回放/菜单**，所以只要进入到这一步，调用方就必须
+   * 保证 `stopBleRemote()` 最终会被调用（页面退出 / App 退后台 / 链路断开）。
+   */
+  async startBleRemote(): Promise<boolean> {
+    if (this.bleRemoteActive) return true;
+    if (this.bleRemoteEntering) return false;
+    const link = this.bleLink;
+    if (link === null || !this.bleConnected || this.bleSerial === '') {
+      this.bleRemoteError = L10n.tr('camera_remote_not_connected');
+      return false;
+    }
+    this.bleRemoteEntering = true;
+    this.bleRemoteError = '';
+    try {
+      link.onRemoteStatus = (status: BleRemoteStatus) => {
+        this.applyRemoteStatus(status);
+      };
+      await link.enableRemoteIndications();
+      const code = await link.enterRemote();
+      // 5 = ALREADY_IN_PROGRESS：相机以前就停在遥控模式，直接当作已进入。
+      if (code !== 1 && code !== 5) {
+        this.bleRemoteError = L10n.tr('camera_remote_enter_failed');
+        this.log.add(`蓝牙遥控: 进入失败 code=${code}`);
+        return false;
+      }
+      this.bleRemoteActive = true;
+      this.log.add(`蓝牙遥控: 已进入（code=${code}）`);
+      const status = await link.readRemoteStatus();
+      if (status !== null) this.applyRemoteStatus(status);
+      return true;
+    } catch (err) {
+      this.bleRemoteError = (err as Error).message;
+      this.log.add(`蓝牙遥控: 进入异常 ${this.bleRemoteError}`);
+      return false;
+    } finally {
+      this.bleRemoteEntering = false;
+    }
+  }
+
+  /** 退出遥控（幂等）。链路已经断了就只清本地状态，不再写 GATT。 */
+  async stopBleRemote(): Promise<void> {
+    const link = this.bleLink;
+    const wasActive = this.bleRemoteActive;
+    this.bleRemoteActive = false;
+    this.bleRemoteEntering = false;
+    if (link !== null) {
+      link.onRemoteStatus = (_status: BleRemoteStatus) => {};
+      if (wasActive && link.connected) {
+        try {
+          const code = await link.exitRemote();
+          this.log.add(`蓝牙遥控: 退出（code=${code}）`);
+        } catch (err) {
+          this.log.add(`蓝牙遥控: 退出失败 ${(err as Error).message}`);
+        }
+      }
+    }
+    this.clearRemoteState();
+  }
+
+  /** 半按（对焦）。页面按下时调用。 */
+  async bleRemoteHalfPress(on: boolean): Promise<void> {
+    const link = this.bleLink;
+    if (link === null || !this.bleRemoteActive) return;
+    try {
+      await link.remoteKey(BLE_KEY_HALF, on);
+    } catch (err) {
+      this.bleRemoteError = (err as Error).message;
+      this.log.add(`蓝牙遥控: 半按失败 ${this.bleRemoteError}`);
+    }
+  }
+
+  /**
+   * 松手拍摄：半按 OFF → 全按 ON，600ms 后补一次全按 OFF 复位。
+   *
+   * 官方的触摸序列是「全按 OFF（保险）→ 半按 OFF → 全按 ON」，触发在全按
+   * ON 上；这里用同样的顺序，只把保险那一笔省掉（进入遥控时相机已经复位）。
+   */
+  async bleRemoteShoot(): Promise<void> {
+    const link = this.bleLink;
+    if (link === null || !this.bleRemoteActive) return;
+    try {
+      await link.remoteKey(BLE_KEY_HALF, false);
+      const code = await link.remoteKey(BLE_KEY_FULL, true);
+      if (code !== 1) {
+        this.bleRemoteError = L10n.tr('camera_remote_release_failed');
+        this.log.add(`蓝牙遥控: 快门失败 code=${code}`);
+        return;
+      }
+      this.log.add('蓝牙遥控: 快门已触发');
+      setTimeout(() => {
+        if (this.bleLink === link && this.bleRemoteActive) {
+          link.remoteKey(BLE_KEY_FULL, false).catch((_e: Error) => {
+            // 复位失败不影响下一张：下一次全按 ON 之前还会再清理
+          });
+        }
+      }, 600);
+    } catch (err) {
+      this.bleRemoteError = (err as Error).message;
+      this.log.add(`蓝牙遥控: 快门异常 ${this.bleRemoteError}`);
+    }
+  }
+
+  private applyRemoteStatus(status: BleRemoteStatus): void {
+    this.bleRemoteMain = status.main;
+    this.bleRemoteCapture = status.capture;
+    this.bleRemoteRestriction = status.restriction;
+    this.bleRemoteFocus = status.focus;
+  }
+
+  private clearRemoteState(): void {
+    this.bleRemoteMain = -1;
+    this.bleRemoteCapture = 0;
+    this.bleRemoteRestriction = 0;
+    this.bleRemoteFocus = false;
   }
 
   /** 写完一帧位置后读回 0x2007：全 0 = 相机没记下来，跟我们一致 = 存住了。 */
@@ -2848,6 +3003,10 @@ export class CameraService {
   }
 
   private async disconnectBleInternal(): Promise<void> {
+    // 遥控会话必须先放掉：相机停在遥控模式时回放/菜单是锁死的。
+    if (this.bleRemoteActive || this.bleRemoteEntering) {
+      await this.stopBleRemote();
+    }
     // 用户显式断开：先撤掉无线侧的自动重连，免得刚点完「断开」又被接回来。
     this.wifiAutoReconnectArmed = false;
     this.cancelWifiReconnect();
@@ -3004,6 +3163,9 @@ export class CameraService {
     this.lastScanError = '';
     this.bleSerial = '';
     this.resetBleInfo();
+    this.bleRemoteActive = false;
+    this.bleRemoteEntering = false;
+    this.clearRemoteState();
     this.bleCameraName = record.cameraName;
     this.cameraModel = record.modelKey;
     this.wifiHost = '';
@@ -3026,6 +3188,9 @@ export class CameraService {
     this.lastScanError = '';
     this.bleSerial = '';
     this.resetBleInfo();
+    this.bleRemoteActive = false;
+    this.bleRemoteEntering = false;
+    this.clearRemoteState();
     this.bleCameraName = '';
     this.cameraModel = '';
     this.wifiHost = '';
@@ -3818,6 +3983,13 @@ export class CameraService {
   /** 应用前后台切换：后台停心跳，回前台先补一次（不用等满一个周期）。 */
   setAppForeground(foreground: boolean): void {
     this.appForeground = foreground;
+    // 退后台一定要退出遥控：相机在遥控模式下会锁住回放/菜单，
+    // 不能因为用户切了个应用就把相机留在那个状态。
+    if (!foreground && (this.bleRemoteActive || this.bleRemoteEntering)) {
+      this.stopBleRemote().catch((_e: Error) => {
+        // 退后台时链路可能已经断了，日志里已经有结论
+      });
+    }
     // 蓝牙自动重连的节奏也跟着前台/后台走：前台压到 8 秒以内，用户抬眼时
     // 链路已经回来了；后台没必要一直扫（1.66.3）。
     if (this.bleLink !== null) this.bleLink.setForeground(foreground);

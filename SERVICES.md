@@ -741,6 +741,57 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps blectl off
   `link.onAnyNotification` 是只给调试探针用的旁路，不影响原有 0x2008/配对分发。
 - 每轮只发一笔请求，失败即停（控制点 busy 要相机断电重启才恢复），不做循环重试。
 
+*蓝牙遥控：从探针到页面（1.70.0，2026-11-14 真机跑通）*
+
+Z50II（固件 1.04）对 0x2021 的能力查询回应 `SUCCESS`：
+
+```
+→ 0x2021  04 00 01 00                         能力查询
+← 0x2021  0c 00 01 01 01 01 03 00 07 00 00 00
+          └ 12B   └op  └成功 └特性 └相机 └遥控
+```
+
+- `characteristicFlags = 0x01`（`lssStatusForControl` 可用）
+- `cameraControlFlags = 0x01`（**支持蓝牙遥控**）
+- `remoteControlFlags = 0x0003`（shootingInfo + shootingEvent；playbackEvent 不支持）
+- `shootingOperationFlags = 0x0007`（间隔定时 / 延时摄影 / 焦点移位）
+- Z50II 的 GATT 表里**没有 `0x2081`**（LSS_STATUS_FOR_CAPTURE），读它返回 `401`；
+  拍摄状态只能看 `0x2020` 的 byte2（`StillCaptureStatus`），且这个位在这台机身上
+  **不随静态拍摄变化**——按快门前后都是 `0`，所以"有没有拍下来"BLE 侧无法确认，
+  以相机屏幕/照片数为准。
+
+*协议与实现*
+
+- 帧格式：`u16 LE 总长 | u8 opcode | u8 0 | body`；
+  `0x11` 进/出遥控（body = 1/0）、`0x12` 按键（body = keyCode, keyOperation）。
+  keyCode：2 半按、3 全按、4 录像；keyOperation：0 OFF、1 ON。
+- 响应码：`1` SUCCESS、`2` 不支持该 op、`3` 参数错、`4` 操作失败、`5` 已在遥控中
+  （APK `ResponseCode` 的 byte 值；`startBleRemote()` 把 5 也当作已进入）。
+- 链路层 API（`BleCameraLink`）：`enableRemoteIndications()`（0x2020/0x2021 都是
+  **indicate**）、`enterRemote()` / `exitRemote()`、`remoteKey()`、`readRemoteStatus()`。
+  响应等待用独立的 `remotePending`，不和配对的 `pendingChar` 抢。
+- `0x2020` 16B 状态解析（与 APK `V$a` 对拍）：byte0 主状态（0 NOT_CONTROL /
+  1 PHOTO / 2 PLAY / 3 MENU）、byte1 子状态、byte2 拍摄状态（0 NONE / 1 SHOOTING）、
+  byte3 限制位（bit0 释放受限、bit1 录像受限、bit2 照片错误、bit3 录像错误）、
+  byte4 bit0 对焦。
+
+*生命周期（真机踩过的坑）*
+
+相机进入遥控模式后会**锁住回放与菜单**（用户在相机上翻不了照片）。所以：
+
+- 页面出现 → `startBleRemote()`；页面消失 → `stopBleRemote()`（写 `0x11=0`）。
+- App 退后台 → `setAppForeground(false)` 里同样调用 `stopBleRemote()`。
+- 链路断开 → `onState(false)` 直接清本地遥控状态（相机侧随断链结束）。
+- 用户主动断开 BLE → `disconnectBleInternal()` 先 `stopBleRemote()` 再收链路。
+- 页面上的快门只在「遥控已进入 + 主状态 PHOTO + 释放没被限制」时可按；
+  相机停在回放/菜单时按钮置灰并写明原因。
+
+*快门序列*
+
+按下 = 半按 ON（对焦）；松手 = 半按 OFF → 全按 ON（触发），600ms 后补一笔全按 OFF
+复位。官方在松手时还会先补一笔全按 OFF 做保险，我们省掉——进入遥控时按钮状态
+本来就是干净的。`bleRemoteError` 会接住写入失败/超时，页面显示红字。
+
 **2MP 自动传图走的是蓝牙经典（BTC/SPP）+ PTP，不是 BLE（2026-11-14 查证）**
 
 社区对官方 SnapBridge v2.13.3 的静态逆向（[MXWF0/SnapBridge-Enhanced] 的

@@ -245,6 +245,78 @@
       "value": "已连接，枚举到 %1$d 行 GATT 服务"
     },
     {
+      "name": "camera_remote_title",
+      "value": "遥控拍摄"
+    },
+    {
+      "name": "camera_remote_action",
+      "value": "遥控拍摄"
+    },
+    {
+      "name": "camera_remote_action_desc",
+      "value": "用手机当快门，相机保持蓝牙待机"
+    },
+    {
+      "name": "camera_remote_entering",
+      "value": "正在进入遥控…"
+    },
+    {
+      "name": "camera_remote_inactive",
+      "value": "遥控未开启"
+    },
+    {
+      "name": "camera_remote_ready",
+      "value": "按住快门对焦，松手拍摄"
+    },
+    {
+      "name": "camera_remote_focusing",
+      "value": "正在对焦…"
+    },
+    {
+      "name": "camera_remote_shooting",
+      "value": "拍摄中…"
+    },
+    {
+      "name": "camera_remote_locked",
+      "value": "相机暂时不能释放快门"
+    },
+    {
+      "name": "camera_remote_play_mode",
+      "value": "相机在回放模式，切回拍摄后才能遥控"
+    },
+    {
+      "name": "camera_remote_menu_mode",
+      "value": "相机在菜单，切回拍摄后才能遥控"
+    },
+    {
+      "name": "camera_remote_not_control",
+      "value": "相机没进入遥控模式"
+    },
+    {
+      "name": "camera_remote_reenter",
+      "value": "重新进入遥控"
+    },
+    {
+      "name": "camera_remote_hint",
+      "value": "离开这一页会退出遥控，相机恢复普通拍摄"
+    },
+    {
+      "name": "camera_remote_battery",
+      "value": "电量 %1$d%%"
+    },
+    {
+      "name": "camera_remote_not_connected",
+      "value": "相机没连上"
+    },
+    {
+      "name": "camera_remote_enter_failed",
+      "value": "相机拒绝进入遥控"
+    },
+    {
+      "name": "camera_remote_release_failed",
+      "value": "快门释放失败"
+    },
+    {
       "name": "camera_status_ble_permission",
       "value": "需要蓝牙权限才能搜索相机"
     },
@@ -1565,20 +1637,20 @@
       "value": "后台保持连接"
     },
     {
+      "name": "camera_guide_feature_remote",
+      "value": "遥控拍摄"
+    },
+    {
       "name": "camera_guide_feature_online",
       "value": "手机照常上网"
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "蓝牙平时只做待机与位置注入；点「浏览与下载照片」临时加入相机热点，手机暂时没有外网，断开后自动回蓝牙。照片仍走 Wi-Fi。"
+      "value": "蓝牙平时只做待机、位置注入与遥控拍摄；点「浏览与下载照片」临时加入相机热点，手机暂时没有外网，断开后自动回蓝牙。照片仍走 Wi-Fi。"
     },
     {
       "name": "camera_guide_official_title",
       "value": "官方 SnapBridge 有、我们还没有"
-    },
-    {
-      "name": "camera_guide_official_1",
-      "value": "蓝牙遥控：快门、录像、对焦、间隔／延时拍摄"
     },
     {
       "name": "camera_guide_official_2",
@@ -1611,6 +1683,10 @@
     {
       "name": "camera_guide_partial_2",
       "value": "后台保活：只有蓝牙有长时任务；Wi-Fi AP / STA 退后台会断开，回前台一两秒自动重连。"
+    },
+    {
+      "name": "camera_guide_partial_3",
+      "value": "蓝牙遥控：快门（按住对焦、松手拍摄）已可用；录像、间隔／延时与播放／菜单遥控还没有。"
     },
     {
       "name": "camera_title_with_serial",

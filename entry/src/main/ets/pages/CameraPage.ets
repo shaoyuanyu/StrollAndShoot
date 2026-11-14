@@ -312,6 +312,7 @@ export struct CameraPage {
   @Event onConnectBle: (deviceId: string, deviceName: string) => void =
     (_id: string, _name: string) => {};
   @Event onDisconnectBle: () => void = () => {};
+  @Event onOpenBleRemote: () => void = () => {};
   /** 切换链路模式（USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA）。 */
   @Event onSelectMode: (mode: number) => void = (_m: number) => {};
   /** 锁定确认后：先断开当前连接，再切到新模式（由 MainScreen 串行执行）。 */
@@ -1315,10 +1316,11 @@ export struct CameraPage {
   private guideSheetHeight(): number {
     // 「连接模式」页比步骤页高：说明 + 表头 + 五行功能表 + 一句总结 + 两份清单。
     // 1.66.20 把「部分支持」两条改写成实测结论（各两三行），690 → 740；1.67.0 表下
-    // 那句总结又长了一行（蓝牙的按需浏览），740 → 760。1280×2832 上一屏仍看得全；
+    // 那句总结又长了一行（蓝牙的按需浏览），740 → 760；1.70.0 表里多了一行「遥控拍摄」
+    // 且「部分支持」多一条（蓝牙遥控只做了快门），760 → 800。1280×2832 一屏仍看得全；
     // 再长就会被 LARGE 夹住改成滚动——加内容前先量一屏。
     if (this.guideTab === 1) {
-      return 760;
+      return 800;
     }
     if (this.svc.linkMode === CameraLinkMode.USB) {
       return 240;
@@ -1531,6 +1533,9 @@ export struct CameraPage {
         GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_standby'),
         GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
+      // 遥控 1.70.0 起只做了静态快门（半按/释放），录像与间隔/延时还没做，所以是 ◐。
+      this.GuideFeatureRow($r('app.string.camera_guide_feature_remote'),
+        GUIDE_NONE, GUIDE_PARTIAL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_online'),
         GUIDE_FULL, GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, true)
     }
@@ -1636,7 +1641,6 @@ export struct CameraPage {
               .fontColor($r('app.color.text_secondary'))
               .width('100%')
               .padding({ top: 18 })
-            this.GuideBullet($r('app.string.camera_guide_official_1'))
             this.GuideBullet($r('app.string.camera_guide_official_2'))
             this.GuideBullet($r('app.string.camera_guide_official_3'))
             this.GuideBullet($r('app.string.camera_guide_official_4'))
@@ -1651,6 +1655,7 @@ export struct CameraPage {
               .padding({ top: 16 })
             this.GuideBullet($r('app.string.camera_guide_partial_1'))
             this.GuideBullet($r('app.string.camera_guide_partial_2'))
+            this.GuideBullet($r('app.string.camera_guide_partial_3'))
           }
           .width('100%')
           .alignItems(HorizontalAlign.Start)
@@ -2096,6 +2101,16 @@ export struct CameraPage {
       // 同一件事再挂一行置灰的入口会让人以为还要再点一次。
       // 「等相机回蓝牙」期间**保留**入口：1.68.0 起这条路可以直接用缓存凭据
       // 连回相机热点，不用等相机自己回落。
+      // 蓝牙遥控：只有「链路在 + 配对落定」才给入口——遥控是写 0x2021，
+      // 没链路的 Idle 状态进去也只能报错。
+      if (!this.bleBrowsing() && !this.inProgress() && this.blePaired()) {
+        CameraActionRow({
+          label: $r('app.string.camera_remote_action'),
+          subtitle: $r('app.string.camera_remote_action_desc'),
+          last: false,
+          onTap: () => { this.onOpenBleRemote(); }
+        })
+      }
       if (!this.bleBrowsing() && !this.inProgress()
         && (this.blePaired() || (this.bleKnown() && this.phase() === CameraPhase.Idle))) {
         CameraActionRow({

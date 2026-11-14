@@ -46,6 +46,23 @@ export interface BleReadResult {
   error: string;
 }
 
+/**
+ * 蓝牙遥控状态（`0x2020` 的 16B 指示，官方 `BleLssStatusForControlData`）。
+ *
+ * 偏移与枚举值都和 APK 的解析器对拍过：0 主状态、1 子状态、2 拍摄状态、
+ * 3 限制位（bit0 释放受限、bit1 录像受限、bit2 照片错误、bit3 录像错误）、
+ * 4 对焦信息（bit0）。
+ */
+export interface BleRemoteStatus {
+  /** 0 = NOT_CONTROL，1 = PHOTO，2 = PLAY，3 = MENU。 */
+  main: number;
+  sub: number;
+  /** 0 = NONE，1 = SHOOTING，2 = BULB，3 = TIME。 */
+  capture: number;
+  restriction: number;
+  focus: boolean;
+}
+
 /** 首次连接 / 配对时等 GATT 上报状态的上限（相机休眠时唤醒要几秒）。 */
 const CONNECT_TIMEOUT_MS = 10000;
 /** 握手等 stage2 / stage4 的上限。相机醒着是毫秒级，睡着就等满。 */
@@ -103,6 +120,10 @@ export const NIKON_CHAR_ESTABLISH = '00002005-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_CHAR_TIME = '00002006-3dd4-4255-8d62-6dc7b9bd5561';
 /** 位置（41B）。 */
 export const NIKON_CHAR_GEO = '00002007-3dd4-4255-8d62-6dc7b9bd5561';
+/** 蓝牙遥控状态（indicate，16B；`LSS_STATUS_FOR_CONTROL`）。 */
+export const NIKON_CHAR_REMOTE_STATUS = '00002020-3dd4-4255-8d62-6dc7b9bd5561';
+/** 蓝牙遥控控制点（写请求、从同一条特征 indicate 回响应；`LSS_CONTROL_POINT_FOR_CONTROL`）。 */
+export const NIKON_CHAR_REMOTE_CONTROL = '00002021-3dd4-4255-8d62-6dc7b9bd5561';
 /**
  * 标准 Device Information 服务（0x180A）。
  *
@@ -349,6 +370,10 @@ export class BleCameraLink {
   /** 调试探针用：任何特征的通知/指示都原样回一份（不改变原有分发）。 */
   onAnyNotification: (uuid: string, value: Uint8Array) => void =
     (_uuid: string, _value: Uint8Array) => {};
+  /** 遥控状态变化（0x2020 指示）；页面离开时由上层置回空实现。 */
+  onRemoteStatus: (status: BleRemoteStatus) => void = (_status: BleRemoteStatus) => {};
+  /** 遥控控制点的响应等待（每笔请求只有一条指示）。 */
+  private remotePending: PendingChar | null = null;
   /**
    * 自动重连扫不到相机（连广播都没有）＝相机多半进了待机。
    *
@@ -572,6 +597,16 @@ export class BleCameraLink {
             }
             if (uuid === NIKON_CHAR_CONTROL) {
               this.handleControlPoint(value);
+            }
+            if (uuid === NIKON_CHAR_REMOTE_STATUS) {
+              const status = BleCameraLink.parseRemoteStatus(value);
+              if (status !== null) this.onRemoteStatus(status);
+            }
+            const remote = this.remotePending;
+            if (remote !== null && remote.uuid === uuid) {
+              this.remotePending = null;
+              clearTimeout(remote.timer);
+              remote.resolve(value);
             }
             const pending = this.pendingChar;
             if (pending !== null && pending.uuid === uuid) {
@@ -1024,6 +1059,87 @@ export class BleCameraLink {
   /** 相机固件版本（标准 0x180A 服务下的 0x2A26，ASCII）。 */
   readFirmware(): Promise<BleReadResult> {
     return this.readWithReason(DEVICE_CHAR_FIRMWARE, DEVICE_INFO_SERVICE);
+  }
+
+  // ---- 蓝牙遥控（0x2020 状态 / 0x2021 控制点，1.70.0）----
+
+  /** 开遥控指示：0x2020 状态与 0x2021 响应都是 indicate。重复调用无副作用。 */
+  async enableRemoteIndications(): Promise<void> {
+    await this.enableIndication(NIKON_CHAR_REMOTE_STATUS);
+    await BleCameraLink.sleep(150);
+    await this.enableIndication(NIKON_CHAR_REMOTE_CONTROL);
+  }
+
+  async enterRemote(): Promise<number> {
+    return this.remoteRequest(BleCameraLink.remoteFrame(0x11, [0x01]), 3000);
+  }
+
+  async exitRemote(): Promise<number> {
+    return this.remoteRequest(BleCameraLink.remoteFrame(0x11, [0x00]), 3000);
+  }
+
+  /** 按一次键（key 见 `KEY_HALF` / `KEY_FULL` / `KEY_MOVIE`）。返回响应码，1 = 成功。 */
+  async remoteKey(key: number, on: boolean): Promise<number> {
+    return this.remoteRequest(BleCameraLink.remoteFrame(0x12, [key, on ? 0x01 : 0x00]), 3000);
+  }
+
+  async readRemoteStatus(): Promise<BleRemoteStatus | null> {
+    const r = await this.readWithReason(NIKON_CHAR_REMOTE_STATUS);
+    return r.value === null ? null : BleCameraLink.parseRemoteStatus(r.value);
+  }
+
+  /** 组一帧控制点请求：u16 LE 总长 | u8 op | u8 0 | body。 */
+  private static remoteFrame(op: number, body: number[]): Uint8Array {
+    const size = 4 + body.length;
+    const out = new Uint8Array(size);
+    out[0] = size & 0xff;
+    out[1] = (size >> 8) & 0xff;
+    out[2] = op;
+    out[3] = 0;
+    for (let i = 0; i < body.length; i++) {
+      out[4 + i] = body[i];
+    }
+    return out;
+  }
+
+  /** 写一笔控制点请求，等 0x2021 的指示回来。返回响应码（1 = SUCCESS，-1 = 超时/失败）。 */
+  private async remoteRequest(frame: Uint8Array, timeoutMs: number): Promise<number> {
+    if (this.gatt === null) throw new Error('BLE 未连接');
+    if (!this.servicesReady) throw new Error('服务表未就绪');
+    const wait = new Promise<Uint8Array | null>((resolve: (v: Uint8Array | null) => void) => {
+      const timer = setTimeout(() => {
+        this.remotePending = null;
+        resolve(null);
+      }, timeoutMs);
+      this.remotePending = {
+        uuid: NIKON_CHAR_REMOTE_CONTROL,
+        resolve: (value: Uint8Array) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        timer
+      };
+    });
+    try {
+      await this.writeCharacteristic(NIKON_CHAR_REMOTE_CONTROL, frame);
+    } catch (_err) {
+      this.remotePending = null;
+      throw new Error('遥控请求写入失败');
+    }
+    const value = await wait;
+    if (value === null || value.length < 4) return -1;
+    return value[3];
+  }
+
+  static parseRemoteStatus(value: Uint8Array): BleRemoteStatus | null {
+    if (value.length < 5) return null;
+    return {
+      main: value[0],
+      sub: value[1],
+      capture: value[2],
+      restriction: value[3],
+      focus: (value[4] & 0x01) !== 0
+    };
   }
 
   /**
