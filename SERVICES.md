@@ -855,6 +855,41 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 1
 RFCOMM**；服务端 accept 超时。结合前面客户端方向卡在 `sdp_disconnect 0xfff2`，
 SPP 两个方向在 Z50II + 鸿蒙上都是死路。
 
+**根因在相机侧：BLE 待机时它不 page-scan 经典**（2026-11-14 23:04 栈日志）
+
+最后一次用 `0x2005=0x03`（WiFi+BTC 位）再 `sppConnect`，写到 0x2005 就被相机拒
+（`Remote device has an error`），随后栈日志：
+
+```
+bt_l2cap: l2c_link_hci_conn_comp: ... connection fail 4, cancle ddm
+bt_l2cap: L2CAP - no CCB for L2CA_disc_req
+bt_sdp:   sdp_disconnect ... reason 0xfff2
+```
+
+`connection fail 4` 是 HCI **Page Timeout**：手机去 page 相机的经典地址，相机根本
+不回应——BLE 智能设备模式下它的 BR/EDR 不 page-scan。也就是说，**就算鸿蒙给了
+按 channel 连的 API，也连不上**：SDP/ACL 第一步就断了。要让它可连，必须先把相机
+切到「BTC 协作模式」（官方有 `ChangeBtcCooperationModeAction` 这类 PTP 动作，需要
+先有一条 PTP 会话；BLE-only 模式下给不出这条会话）。
+
+**鸿蒙没有按 channel 连 RFCOMM 的公开 API（已核到源码）**
+
+- SDK：`socket.sppConnect(deviceId, SppOptions)`，`SppOptions` 只有
+  `uuid`（必填）/ `secure` / `type`（RFCOMM、L2CAP、L2CAP_BLE）/ `psm`（仅 L2CAP）；
+  旧版 `@ohos.bluetooth.sppConnect` 与 `bluetoothManager.sppConnect` 也只有同样三
+  个字段，没有 channel；
+- OpenHarmony 源码 `services/bluetooth/service/src/sock/socket.cpp`：
+  `Socket::Connect(addr, uuid, security)` → `SocketSdpClient::StartDiscovery(uuid)`
+  → SDP 查 `UUID_PROTOCOL_RFCOMM` 的 protocol descriptor → `SearchScn()` 取 SCN →
+  `ReceiveSdpResult(scn)` → RFCOMM `Connect()`。**channel 永远来自相机的 SDP 记录，
+  调用方给不进去**；
+- 官方 SnapBridge 用的是 Android 隐藏 API
+  `BluetoothDevice.createInsecureRfcommSocket(int channel)`（反射，硬编码 1），
+  鸿蒙三方应用没有对应能力；NDK 的 `oh_bluetooth.h` 也只有状态/地址接口，没有 socket。
+
+结论：通道 API 确实不存在；但更根本的是相机在 BLE 模式下根本不在经典可连接状态。
+两条路都堵死，别再往这个方向投入。
+
 注意：探针会留下 busy 状态，跑完最好重启相机。
 
 [MXWF0/SnapBridge-Enhanced]: https://github.com/MXWF0/SnapBridge-Enhanced
