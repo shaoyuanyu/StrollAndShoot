@@ -786,11 +786,14 @@ Z50II（固件 1.04）对 0x2021 的能力查询回应 `SUCCESS`：
 - 页面上的快门只在「遥控已进入 + 主状态 PHOTO + 释放没被限制」时可按；
   相机停在回放/菜单时按钮置灰并写明原因。
 
-*快门序列*
+*快门序列（1.70.1 修正）*
 
-按下 = 半按 ON（对焦）；松手 = 半按 OFF → 全按 ON（触发），600ms 后补一笔全按 OFF
-复位。官方在松手时还会先补一笔全按 OFF 做保险，我们省掉——进入遥控时按钮状态
-本来就是干净的。`bleRemoteError` 会接住写入失败/超时，页面显示红字。
+官方 `i7/x` 的 ACTION_DOWN 分支是「SHUTTER_RELEASE_HALF ON → SHUTTER_RELEASE ON」
+背靠背发，**拍摄在按下时就触发**；ACTION_UP 只发全按 OFF。1.70.0 做成了
+「松手时半按 OFF → 全按 ON」，Z50II 收下命令但快门不释放（23:46 真机 0 张）。
+现在 `bleRemotePressDown()` = 半按 ON + 全按 ON，`bleRemoteRelease()` = 全按 OFF +
+半按 OFF；B 门靠按住不放、松手结束曝光。`bleRemoteError` 接住写入失败/超时，
+页面显示红字。
 
 **2MP 自动传图走的是蓝牙经典（BTC/SPP）+ PTP，不是 BLE（2026-11-14 查证）**
 

@@ -67,6 +67,10 @@ export class BleRemoteProbe {
       task = BleRemoteProbe.remote(mode === 'on');
     } else if (mode === 'shot') {
       task = BleRemoteProbe.shot();
+    } else if (mode === 'shot2') {
+      task = BleRemoteProbe.shotOfficial();
+    } else if (mode === 'shot3') {
+      task = BleRemoteProbe.shotHold();
     } else if (mode === 'movie') {
       task = BleRemoteProbe.movie();
     } else if (mode === 'config') {
@@ -169,6 +173,43 @@ export class BleRemoteProbe {
     await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_OFF, '全按 OFF', 900);
     await BleRemoteProbe.logStatus(link, '释放后');
     BleRemoteProbe.log('快门序列结束（相机没反应说明 0x11 还没进遥控，先跑 on）');
+  }
+
+  /**
+   * 官方触摸序列：按下 = 半按 ON + 全按 ON，松开 = 全按 OFF + 半按 OFF。
+   *
+   * `i7/x.smali` 的 ACTION_DOWN 分支就是「半按 ON → 全按 ON」连着发；
+   * 之前我们在松手时才发全按、且先发了半按 OFF，相机可能因此不释放快门。
+   */
+  private static async shotOfficial(): Promise<void> {
+    const link = await BleRemoteProbe.prepare();
+    if (link === null) return;
+    await BleRemoteProbe.logStatus(link, '开始前');
+    if (!await BleRemoteProbe.press(link, BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_ON, '半按 ON', 120)) return;
+    if (!await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_ON, '全按 ON', 500)) return;
+    await BleRemoteProbe.logStatus(link, '全按后');
+    if (!await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_OFF, '全按 OFF', 200)) return;
+    await BleRemoteProbe.press(link, BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_OFF, '半按 OFF', 400);
+    await BleRemoteProbe.logStatus(link, '释放后');
+    BleRemoteProbe.log('shot2 结束（官方序列）');
+  }
+
+  /**
+   * 半按保持 1.5 秒再全按：官方帮助里「半按对焦」和「快门释放」是两个动作，
+   * 中间要给相机完成 AF 的时间；Z50II 默认是焦点优先，AF 没合焦就不释放快门。
+   */
+  private static async shotHold(): Promise<void> {
+    const link = await BleRemoteProbe.prepare();
+    if (link === null) return;
+    await BleRemoteProbe.logStatus(link, '开始前');
+    if (!await BleRemoteProbe.press(link, BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_ON, '半按 ON', 1500)) return;
+    await BleRemoteProbe.logStatus(link, '半按 1.5s 后');
+    if (!await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_ON, '全按 ON', 600)) return;
+    await BleRemoteProbe.logStatus(link, '全按后');
+    if (!await BleRemoteProbe.press(link, BleRemoteProbe.KEY_FULL, BleRemoteProbe.OP_OFF, '全按 OFF', 250)) return;
+    await BleRemoteProbe.press(link, BleRemoteProbe.KEY_HALF, BleRemoteProbe.OP_OFF, '半按 OFF', 400);
+    await BleRemoteProbe.logStatus(link, '释放后');
+    BleRemoteProbe.log('shot3 结束（半按保持 1.5s）');
   }
 
   /** 发一个按键并等 [gapMs]，失败返回 false。 */

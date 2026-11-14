@@ -2744,33 +2744,40 @@ export class CameraService {
   }
 
   /**
-   * 松手拍摄：半按 OFF → 全按 ON，600ms 后补一次全按 OFF 复位。
+   * 按下快门：半按 ON + 全按 ON，两笔背靠背发。
    *
-   * 官方的触摸序列是「全按 OFF（保险）→ 半按 OFF → 全按 ON」，触发在全按
-   * ON 上；这里用同样的顺序，只把保险那一笔省掉（进入遥控时相机已经复位）。
+   * 这是官方 `i7/x` 的 ACTION_DOWN 顺序（`SHUTTER_RELEASE_HALF ON` 紧接
+   * `SHUTTER_RELEASE ON`），**拍摄在按下时就触发**。之前我们在松手时才发
+   * 全按、而且先发了半按 OFF，Z50II 收了命令却不释放快门——真机 23:46 的
+   * 那张就是这么丢的。B 门时保持按下即可，松手才结束曝光。
    */
-  async bleRemoteShoot(): Promise<void> {
+  async bleRemotePressDown(): Promise<void> {
     const link = this.bleLink;
     if (link === null || !this.bleRemoteActive) return;
     try {
-      await link.remoteKey(BLE_KEY_HALF, false);
+      await link.remoteKey(BLE_KEY_HALF, true);
       const code = await link.remoteKey(BLE_KEY_FULL, true);
       if (code !== 1) {
         this.bleRemoteError = L10n.tr('camera_remote_release_failed');
         this.log.add(`蓝牙遥控: 快门失败 code=${code}`);
         return;
       }
-      this.log.add('蓝牙遥控: 快门已触发');
-      setTimeout(() => {
-        if (this.bleLink === link && this.bleRemoteActive) {
-          link.remoteKey(BLE_KEY_FULL, false).catch((_e: Error) => {
-            // 复位失败不影响下一张：下一次全按 ON 之前还会再清理
-          });
-        }
-      }, 600);
+      this.log.add('蓝牙遥控: 快门已按下（半按 + 全按）');
     } catch (err) {
       this.bleRemoteError = (err as Error).message;
       this.log.add(`蓝牙遥控: 快门异常 ${this.bleRemoteError}`);
+    }
+  }
+
+  /** 松开快门：全按 OFF + 半按 OFF（与按下的顺序对称）。 */
+  async bleRemoteRelease(): Promise<void> {
+    const link = this.bleLink;
+    if (link === null || !this.bleRemoteActive) return;
+    try {
+      await link.remoteKey(BLE_KEY_FULL, false);
+      await link.remoteKey(BLE_KEY_HALF, false);
+    } catch (err) {
+      this.log.add(`蓝牙遥控: 松开快门失败 ${(err as Error).message}`);
     }
   }
 

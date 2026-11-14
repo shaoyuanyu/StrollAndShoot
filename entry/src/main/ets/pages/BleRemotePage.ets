@@ -77,7 +77,7 @@ export struct BleRemotePage {
       return $r('app.string.camera_remote_locked');
     }
     if (this.svc.bleRemoteCapture === 1) return $r('app.string.camera_remote_shooting');
-    if (this.pressed) return $r('app.string.camera_remote_focusing');
+    if (this.pressed) return $r('app.string.camera_remote_shooting');
     return $r('app.string.camera_remote_ready');
   }
 
@@ -96,7 +96,9 @@ export struct BleRemotePage {
       if (!this.canShoot()) return;
       this.pressed = true;
       Haptics.tap();
-      this.svc.bleRemoteHalfPress(true).catch((_e: Error) => {
+      // 官方在按下时就发「半按 ON + 全按 ON」，拍摄在按下时触发；松手只是
+      // 把两段按键状态放掉（B 门则结束曝光）。
+      this.svc.bleRemotePressDown().catch((_e: Error) => {
         // 失败会写进 bleRemoteError
       });
       return;
@@ -104,7 +106,7 @@ export struct BleRemotePage {
     if (event.type === TouchType.Up) {
       if (!this.pressed) return;
       this.pressed = false;
-      this.svc.bleRemoteShoot().catch((_e: Error) => {
+      this.svc.bleRemoteRelease().catch((_e: Error) => {
         // 同上
       });
       return;
@@ -112,7 +114,7 @@ export struct BleRemotePage {
     if (event.type === TouchType.Cancel) {
       if (!this.pressed) return;
       this.pressed = false;
-      this.svc.bleRemoteHalfPress(false).catch((_e: Error) => {
+      this.svc.bleRemoteRelease().catch((_e: Error) => {
         // 同上
       });
     }

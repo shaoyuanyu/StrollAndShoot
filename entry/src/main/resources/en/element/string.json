@@ -266,7 +266,7 @@
     },
     {
       "name": "camera_remote_ready",
-      "value": "Hold to focus, release to shoot"
+      "value": "Tap the shutter to shoot"
     },
     {
       "name": "camera_remote_focusing",

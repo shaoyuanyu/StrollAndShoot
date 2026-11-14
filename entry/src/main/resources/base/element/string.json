@@ -266,7 +266,7 @@
     },
     {
       "name": "camera_remote_ready",
-      "value": "按住快门对焦，松手拍摄"
+      "value": "轻点快门拍摄"
     },
     {
       "name": "camera_remote_focusing",
