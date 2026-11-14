@@ -473,6 +473,18 @@ export struct CameraPage {
   }
 
   /**
+   * 蓝牙模式下的临时 Wi-Fi 浏览会话（1.67.0）。
+   *
+   * 蓝牙模式平时只待机；用户点「浏览与下载照片」后，App 会把相机推到热点，
+   * 会话就变成一条 Wi-Fi PTP 会话——`linkMode` 仍然是蓝牙，因为用户选的就是
+   * 这条链路，只是它临时借用了相机的 Wi-Fi。
+   */
+  private bleBrowsing(): boolean {
+    return this.svc.linkMode === CameraLinkMode.BLE
+      && this.svc.connected && this.svc.wireless;
+  }
+
+  /**
    * 这台相机以前配对过（身份已落盘）。
    *
    * 与 `blePaired()` 不是一回事：断开之后链路没了，但相机那边还记着这台手机，
@@ -492,13 +504,14 @@ export struct CameraPage {
    * 当前模式是否已经连上。
    *
    * 三种链路的「已连接」不是同一个字段：USB 是 PTP 会话（`connected` 且非无线），
-   * 蓝牙是配对落定（链路在 + 拿到序列号），AP / STA 是 Wi-Fi 会话。
-   * 主操作变「断开」、模式选择器上锁都以它为准。
+   * 蓝牙是配对落定（链路在 + 拿到序列号）或临时浏览会话（相机热点上的 PTP，
+   * 1.67.0），AP / STA 是 Wi-Fi 会话。主操作变「断开」、模式选择器上锁都以它为准。
    */
   private linked(): boolean {
     const m = this.svc.linkMode;
     if (m === CameraLinkMode.USB) return this.usbConnected();
-    if (m === CameraLinkMode.BLE) return this.blePaired();
+    // 蓝牙模式有两种「已连上」：待机（配对落定）与临时浏览（相机热点上的 PTP）。
+    if (m === CameraLinkMode.BLE) return this.blePaired() || this.bleBrowsing();
     return this.wifiConnected();
   }
 
@@ -506,7 +519,8 @@ export struct CameraPage {
    * 当前展示阶段。整页的状态文案、状态点、主操作都只从这一个判断里出：
    *
    * - USB：空闲 → 搜索 → 已连接（数据线一条链路）；
-   * - BLE：空闲 → 搜索 → 连接/配对 → 已配对（不传照片）；
+   * - BLE：空闲 → 搜索 → 连接/配对 → 已配对；点「浏览与下载照片」后进入
+   *   「正在切换到相机热点」→ 已连上相机热点（1.67.0，回程自动回蓝牙）；
    * - AP：空闲 → 配对 → 唤醒并加入相机热点 → 已连接；
    * - STA：空闲 → 搜索（网络 / 蓝牙）→ 连相机所在网络 → 已连接。
    *
@@ -517,7 +531,10 @@ export struct CameraPage {
   private phase(): CameraPhase {
     if (this.svc.switchingTo >= 0) return CameraPhase.Switching;
     if (this.svc.disconnecting) return CameraPhase.Disconnecting;
-    if (this.linked()) {
+    // 蓝牙模式的按需浏览（1.67.0）：交接刚开始时 BLE 还连着（`linked()` 为真），
+    // 不能让「已连接 · 蓝牙」把交接进度盖住——这一次的目标是 Wi-Fi 会话，
+    // 还没连上。交接一结束 `apJoining` 归位，才会回到 Connected。
+    if (this.linked() && !(this.svc.apJoining || this.svc.wifiAutoConnecting)) {
       if (this.svc.pairingRequired) return CameraPhase.Pairing;
       return this.svc.scanning ? CameraPhase.Loading : CameraPhase.Connected;
     }
@@ -572,6 +589,9 @@ export struct CameraPage {
     if (phase === CameraPhase.Connected) {
       if (this.scanFailed()) return this.scanErrorTitle();
       if (m === CameraLinkMode.BLE) {
+        // 临时浏览（1.67.0）：这时蓝牙已经让位给 Wi-Fi，再说「已连接 · 蓝牙」
+        // 会让人以为待机链路还在。
+        if (this.bleBrowsing()) return $r('app.string.camera_ble_browsing');
         return this.svc.bleCameraName !== ''
           ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
           : $r('app.string.camera_ble_paired', this.svc.bleSerial);
@@ -605,6 +625,13 @@ export struct CameraPage {
     }
     if (phase === CameraPhase.Connecting) {
       if (m === CameraLinkMode.BLE) {
+        // 按需浏览的交接阶段：蓝牙已经让位，说的必须是「正在切到相机热点」，
+        // 否则会显示成「正在连接相机」而看不出正在走 Wi-Fi。
+        if (this.svc.apJoining || this.svc.wifiAutoConnecting) {
+          return $r('app.string.camera_ble_browse_linking');
+        }
+        // 浏览会话掉线后的自动重连：说「正在重新连接相机」，不是「切换热点」。
+        if (this.svc.wifiReconnecting) return $r('app.string.camera_status_relinking');
         return this.svc.bleReconnecting
           ? $r('app.string.camera_ble_reconnecting_full') : $r('app.string.camera_ble_connecting');
       }
@@ -647,6 +674,9 @@ export struct CameraPage {
       return this.svc.wireless ? this.svc.wirelessStage : '';
     }
     if (phase === CameraPhase.Switching) return $r('app.string.camera_detail_switching');
+    if (phase === CameraPhase.Connected && this.bleBrowsing()) {
+      return $r('app.string.camera_ble_browsing_detail');
+    }
     if (phase === CameraPhase.Connected || phase === CameraPhase.Loading
       || phase === CameraPhase.Pairing) {
       return '';
@@ -677,6 +707,12 @@ export struct CameraPage {
     if (phase === CameraPhase.Searching) {
       if (this.svc.bleScanning) return $r('app.string.camera_detail_pick_to_pair');
       return '';
+    }
+    // 空闲：「等相机回蓝牙」要说出来（1.67.0）。蓝牙模式的浏览会话一结束，
+    // 相机要几十秒才退出 Wi-Fi，这段时间页面已经回到「已配对 · 未连接」，
+    // 不说一声会以为是断开失败了。
+    if (m === CameraLinkMode.BLE && this.svc.bleRecovering) {
+      return $r('app.string.camera_ble_returning');
     }
     // 空闲：下一步由状态头下方那行摘要和主操作承担，详情行不再重复。
     return '';
@@ -881,8 +917,33 @@ export struct CameraPage {
     this.svc.searchByMode();
   }
 
-  /** 已连接时断开：蓝牙走 BLE 断开，其余走会话断开（无线会先退出热点）。 */
+  /**
+   * 蓝牙模式：临时加入相机热点看照片（1.67.0）。
+   *
+   * 不自动切到画廊：交接的分步进度、失败原因都写在相机页的状态头里，跳走就
+   * 看不见了；连上之后状态头会显示「已连上相机热点 + 照片数」，下面还有设备
+   * 信息与快速/全量扫描，与 USB / Wi-Fi 连上之后的画面一致。
+   */
+  private onBrowsePhotos(): void {
+    if (this.inProgress()) return;
+    Haptics.tap();
+    this.svc.browsePhotosOverWifi().catch((err: Error) => {
+      this.svc.getLog().add(`浏览照片失败: ${err.message}`);
+    });
+  }
+
+  /**
+   * 已连接时断开。
+   *
+   * 蓝牙模式有两种会话：待机走 BLE 断开；临时浏览的会话是 Wi-Fi 的，必须走
+   * `onDisconnect()` 才会离开相机热点（走 `disconnectBle()` 会把手机留在一个
+   * 没有外网的热点上）。
+   */
   private requestDisconnect(): void {
+    if (this.svc.wireless) {
+      this.onDisconnect();
+      return;
+    }
     if (this.svc.linkMode === CameraLinkMode.BLE) {
       this.onDisconnectBle();
     } else {
@@ -1221,10 +1282,11 @@ export struct CameraPage {
    */
   private guideSheetHeight(): number {
     // 「连接模式」页比步骤页高：说明 + 表头 + 五行功能表 + 一句总结 + 两份清单。
-    // 1.66.20 把「部分支持」两条改写成实测结论（各两三行），690 放不下最后一条，
-    // 提到 740；再长也不怕，面板本来就能上拉到 LARGE。
+    // 1.66.20 把「部分支持」两条改写成实测结论（各两三行），690 → 740；1.67.0 表下
+    // 那句总结又长了一行（蓝牙的按需浏览），740 → 760。1280×2832 上一屏仍看得全；
+    // 再长就会被 LARGE 夹住改成滚动——加内容前先量一屏。
     if (this.guideTab === 1) {
-      return 740;
+      return 760;
     }
     if (this.svc.linkMode === CameraLinkMode.USB) {
       return 240;
@@ -1426,8 +1488,9 @@ export struct CameraPage {
       // 只有「功能」——能在这种连接下做什么事。以前的表把「相机停在连接页」
       // 「相机在同一网络」这类前置条件也塞成行，和功能混在一起，读下来既不是
       // 功能也不像限制（用户 1.66.12 反馈「一派胡言」）。前置条件归「连接步骤」页。
+      // 蓝牙 1.67.0 起也能看图，但要走一次「临时加入相机热点」，所以是 ◐ 而不是勾。
       this.GuideFeatureRow($r('app.string.camera_guide_feature_photos'),
-        GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, GUIDE_FULL, false)
+        GUIDE_FULL, GUIDE_PARTIAL, GUIDE_FULL, GUIDE_FULL, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_exif'),
         GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, GUIDE_FULL, false)
       // 对时与位置注入 1.66.17 起在蓝牙模式下真机跑通（相机菜单能看到经纬度与
@@ -1993,10 +2056,33 @@ export struct CameraPage {
     if (this.svc.linkMode === CameraLinkMode.BLE) {
       // 已配对/已连接时列表必须消失：那是「搜索出来的候选」，不是当前相机。
       // （服务端连上之后也会把 `bleCameras` 清空，这里再兜一层。）
-      if (!this.blePaired()) this.BleCameraList()
+      if (!this.blePaired() && !this.bleBrowsing()) this.BleCameraList()
+      // 待机连着、或断着但配对过：给一条去照片的入口（1.67.0）。
+      // 浏览会话已经在跑时不再显示——那时相机的操作行已经由 `connected` 那段
+      // 渲染出来了，同一条入口出现两次会让人猜点哪个。
+      // 进行中（搜索 / 连接 / 交接）时也收起：交接的分步进度已经由状态头在说，
+      // 同一件事再挂一行置灰的入口会让人以为还要再点一次。
+      if (!this.bleBrowsing() && !this.svc.bleRecovering && !this.inProgress()
+        && (this.blePaired() || (this.bleKnown() && this.phase() === CameraPhase.Idle))) {
+        CameraActionRow({
+          label: $r('app.string.camera_ble_browse_photos'),
+          subtitle: $r('app.string.camera_ble_browse_photos_desc'),
+          last: true,
+          onTap: () => { this.onBrowsePhotos(); }
+        })
+      }
       // 首配被相机拒绝时，这里给一句能直接照做的说明（1.66.1）：
       // 相机端还记着这台手机，得先去相机菜单删掉本机。
       this.BleHintLine()
+      // 按需浏览没起来（交接冷却 / 没拿到热点凭据 / 热点连不上）：结论写在这里。
+      // 蓝牙模式的状态头不认 `wirelessFailed`，不单独渲染就等于没提示。
+      if (this.svc.wirelessFailed !== '' && !this.bleBrowsing()) {
+        Text(this.svc.wirelessFailed)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
     } else if (this.svc.linkMode === CameraLinkMode.AP) {
       this.ApControls()
     } else if (this.svc.linkMode === CameraLinkMode.STA) {

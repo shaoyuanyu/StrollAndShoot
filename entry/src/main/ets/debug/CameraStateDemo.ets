@@ -106,6 +106,31 @@ export class CameraStateDemo {
         s.bleCameraName = CameraStateDemo.BLE_NAME;
         s.bleReconnecting = true;
         break;
+      // ---- 蓝牙模式按需浏览（1.67.0） ----
+      case 'ble_browse_linking':
+        // 交接进行中：BLE 还连着（配对落定），但这次的目标是 Wi-Fi 会话，
+        // 标题必须是「正在切换到相机热点」+ 分步进度。
+        s.linkMode = CameraLinkMode.BLE;
+        s.bleConnected = true;
+        s.bleSerial = CameraStateDemo.SERIAL;
+        s.bleCameraName = CameraStateDemo.BLE_NAME;
+        s.apJoining = true;
+        s.wirelessStage = '正在连接相机热点';
+        break;
+      case 'ble_browsing':
+        // 已临时加入相机热点：状态头换成「已连上相机热点」，设备信息与照片
+        // 都在，操作行是快速/全量扫描。
+        s.linkMode = CameraLinkMode.BLE;
+        s.wifiHost = CameraStateDemo.AP_HOST;
+        CameraStateDemo.connectedDevice(s, true);
+        break;
+      case 'ble_returning':
+        // 浏览结束、正等相机回落蓝牙（约 40 秒）：状态头回到「已配对」，
+        // 详情行说相机正在切回蓝牙。
+        s.linkMode = CameraLinkMode.BLE;
+        s.bleRecovering = true;
+        break;
+
       case 'ble_asleep':
         // 相机进待机、断链之后连广播都没有：状态头要说「唤醒相机」，
         // 而不是一直「正在重新连接相机…」（1.66.3）。
@@ -257,6 +282,7 @@ export class CameraStateDemo {
     s.bleSerial = '';
     s.bleCameraName = '';
     s.bleReconnecting = false;
+    s.bleRecovering = false;
     s.lastScanError = '';
     s.scanStatsText = '';
     s.scanPhaseText = '';

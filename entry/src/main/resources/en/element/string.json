@@ -201,6 +201,30 @@
       "value": "Connected · %1$s"
     },
     {
+      "name": "camera_ble_browse_photos",
+      "value": "Browse and download photos"
+    },
+    {
+      "name": "camera_ble_browse_photos_desc",
+      "value": "Joins the camera hotspot temporarily; your phone goes offline"
+    },
+    {
+      "name": "camera_ble_browse_linking",
+      "value": "Switching to the camera hotspot"
+    },
+    {
+      "name": "camera_ble_browsing",
+      "value": "Connected to the camera hotspot"
+    },
+    {
+      "name": "camera_ble_browsing_detail",
+      "value": "Bluetooth resumes after disconnecting"
+    },
+    {
+      "name": "camera_ble_returning",
+      "value": "The camera is switching back to Bluetooth, about 40 seconds"
+    },
+    {
       "name": "camera_ble_pair_failed",
       "value": "Pairing failed"
     },
@@ -1394,7 +1418,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "A check mark means available; a blank cell means not possible in that mode. Known limits are listed below."
+      "value": "A check means available; ◐ means it needs a temporary link switch; blank means it does not work this way. Known limits are listed below."
     },
     {
       "name": "camera_guide_view_steps",
@@ -1518,7 +1542,7 @@
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "Bluetooth is standby only and carries no photos; clock sync and location injection also use it. Photos go over USB or Wi-Fi only."
+      "value": "Bluetooth normally stays on standby for location injection; browsing temporarily joins the camera hotspot (phone offline) and Bluetooth resumes after disconnecting. Photos still go over Wi-Fi."
     },
     {
       "name": "camera_guide_official_title",

@@ -400,6 +400,13 @@ export class CameraService {
   @Trace bleCameraName: string = '';
   /** 断链后正在自动重连（相机会休眠，链路断了自己爬起来）。 */
   @Trace bleReconnecting: boolean = false;
+  /**
+   * 刚结束一次 Wi-Fi 浏览，正在等相机回落蓝牙（1.67.0）。
+   *
+   * 蓝牙模式按需浏览结束后，相机要几十秒才退出 Wi-Fi（实测约 40 秒）。这段
+   * 时间页面已经是「已配对 · 未连接」，不说一声的话用户会以为断开失败了。
+   */
+  @Trace bleRecovering: boolean = false;
   private bleScanner: BleScanner | null = null;
   private bleLink: BleCameraLink | null = null;
   private bleScanTimer: number = -1;
@@ -1135,8 +1142,14 @@ export class CameraService {
       if (ok || !this.appForeground) return;
       if (this.connected) return;
       // 相机自己的无线已经睡了：走完整唤醒（0x2005 + 入热点/发现）
-      this.connectWirelessNow().catch((err: Error) => {
+      this.connectWirelessNow().then((restored: boolean) => {
+        if (restored || this.connected) return;
+        // 另一次连接已经在跑（`connectWirelessNow` 会立刻返回 false）：别抢它。
+        if (this.apJoining || this.wifiAutoConnecting) return;
+        this.endBleBrowsing('回前台没能恢复浏览会话');
+      }).catch((err: Error) => {
         this.log.add(`回前台恢复无线失败: ${err.message}`);
+        this.endBleBrowsing('回前台恢复无线异常');
       });
     }).catch((err: Error) => {
       this.log.add(`回前台恢复无线异常: ${err.message}`);
@@ -2310,6 +2323,9 @@ export class CameraService {
       this.bleSerial = serial;
       this.bleHint = '';
       this.bleAsleep = false;
+      this.bleRecovering = false;
+      // 待机连上了：上一次按需浏览的失败结论（比如交接冷却）不再适用于当前状态。
+      if (this.linkMode === CameraLinkMode.BLE) this.wirelessFailed = '';
       // 已经连上了，之前「搜到的那几台」不再有意义：留着会在状态头下面
       // 一直挂一张相机列表（用户反馈 1.66.3）。
       this.bleCameras = [];
@@ -2690,6 +2706,7 @@ export class CameraService {
     // 取消连接/配对失败留下的提示不再成立
     this.bleHint = '';
     this.bleCameras = [];
+    this.wirelessFailed = '';
   }
 
   /** 只取网络快照，不做搜索；进 STA 模式时用。 */
@@ -2875,6 +2892,8 @@ export class CameraService {
     this.wifiHint = '';
     this.wirelessStage = '';
     this.wirelessFailed = '';
+    // 「等相机回蓝牙」只属于上一条无线链路，切模式后不该再自动接回来。
+    this.bleRecovering = false;
     // 配对列表属于上一模式：切过去还留着几台旧设备，看起来像当前模式也扫到了
     this.bleCameras = [];
     // Wi-Fi 发现的相机同理；STA 的「网络里发现的相机」列表不该跨模式残留。
@@ -3042,6 +3061,31 @@ export class CameraService {
   }
 
   /**
+   * 蓝牙模式按需浏览（1.67.0）：BLE 待机不变，用户要照片时才把相机推到热点。
+   *
+   * 为什么不加第五种模式：Z50II 的 BLE 与 Wi-Fi 互斥（见 SERVICES.md「BLE 与
+   * Wi-Fi 互斥」），任何传图都必然走 Wi-Fi；用户真正要的是「蓝牙连着的状态下
+   * 也能看图」，而不是再多一个连接方式。所以链路选择仍是蓝牙，只在需要时临时
+   * 借用一下相机热点，收口与 AP 模式完全同一条 `connectWirelessNow()`。
+   *
+   * 进入要显式点一下（拉起热点会让手机断网，不该悄悄发生），回程是自动的：
+   * `disconnect()` → `exitWirelessToBle()` 离开热点，相机约 40 秒回落蓝牙，
+   * 期间 `startBleRecoveryScan()` 每 6 秒找一次、最多 3 分钟，连回来就恢复
+   * 校时与位置注入。
+   */
+  async browsePhotosOverWifi(): Promise<boolean> {
+    if (this.linkMode !== CameraLinkMode.BLE) return false;
+    if (this.connected && this.wireless) return true;
+    // 身份可能只是没装回活动位（多相机 / 上次连的是别的机身）：入口是按
+    // `bleKnown()` 显示的，这里必须先把身份装回去，否则会误报「还没有配对过相机」。
+    this.adoptSavedBleIdentity();
+    this.log.add('蓝牙模式：用户要看照片，开始交接相机热点');
+    const ok = await this.connectWirelessNow();
+    if (!ok) this.log.add('蓝牙模式：交接相机热点没有完成');
+    return ok;
+  }
+
+  /**
    * 用户要照片：BLE → 相机热点 → PTP，一条龙。
    *
    * 顺序是刻意排的：
@@ -3119,7 +3163,9 @@ export class CameraService {
   /** 交接完成（相机已被推到 Wi-Fi）：按模式接着收口。 */
   private async afterHandover(epoch: number): Promise<boolean> {
     if (!this.epochCurrent(epoch)) return false;
-    if (this.linkMode === CameraLinkMode.AP) {
+    // 蓝牙模式按需看图（1.67.0）走的也是相机热点：相机被 0x2005 推到 Wi-Fi 后
+    // 只有它自己开的热点可连，凭据同样来自 0x2004。
+    if (this.linkMode === CameraLinkMode.AP || this.linkMode === CameraLinkMode.BLE) {
       return await this.joinApAndConnect(epoch);
     }
     return await this.autoLinkWifi('ble-paired');
@@ -3285,6 +3331,23 @@ export class CameraService {
   }
 
   /**
+   * 蓝牙模式的临时浏览会话收掉（1.67.0）。
+   *
+   * 与「用户点断开」走同一条 `disconnect()`：离开相机热点 → 排一轮 BLE 重扫。
+   * 用于链路自己断掉（心跳 / 重连退避用尽 / 回前台恢复失败）时——蓝牙模式要的是
+   * 「回到待机」，而不是停在一个连不上的 Wi-Fi 失败态、手机还挂在没有外网的热点上。
+   * AP / STA 仍保留各自的失败态与重试入口，不受影响。
+   */
+  private endBleBrowsing(reason: string): void {
+    if (this.linkMode !== CameraLinkMode.BLE) return;
+    if (this.disconnecting) return;
+    this.log.add(`蓝牙模式：${reason}，结束浏览回蓝牙待机`);
+    this.disconnect().catch((err: Error) => {
+      this.log.add(`退出浏览会话失败: ${err.message}`);
+    });
+  }
+
+  /**
    * 退出无线：**离开相机热点**，让相机自己回落到蓝牙。
    *
    * 这是选 AP 模式的核心理由：AP 下手机是唯一客户端，手机一撤，相机看到
@@ -3320,13 +3383,20 @@ export class CameraService {
       this.bleRecoveryTimer = -1;
     }
     const deadline = Date.now() + 180000;
+    this.bleRecovering = true;
     const tick = (): void => {
       this.bleRecoveryTimer = -1;
-      if (this.bleConnected || this.bleConnecting) return;
+      // 用户切了模式 / 手动断开：这一轮「等相机回来」作废。
+      if (!this.bleRecovering) return;
+      if (this.bleConnected || this.bleConnecting) {
+        this.bleRecovering = false;
+        return;
+      }
       if (Date.now() > deadline) {
         this.log.add(`退出无线: 3 分钟内相机没有回到 BLE（已等 ${Date.now() - startedAt}ms）`);
         this.bleHint = '相机仍停在 Wi-Fi 模式。可检查相机的「Wi-Fi 待机时间」设定，或关机再开。';
         this.wirelessStage = '';
+        this.bleRecovering = false;
         return;
       }
       this.scanForNikonDeviceId(store.identityDevice, 4000).then(async (devices: BleCameraDevice[]) => {
@@ -3335,10 +3405,14 @@ export class CameraService {
           this.bleHint = '';
           if (await this.connectBle(devices[0].deviceId, devices[0].name, false)) {
             this.wirelessStage = '';
+            this.bleRecovering = false;
             return;
           }
         }
-        if (this.bleConnected || this.bleConnecting) return;
+        if (this.bleConnected || this.bleConnecting) {
+          this.bleRecovering = false;
+          return;
+        }
         this.bleRecoveryTimer = setTimeout(tick, 6000);
       }).catch(() => {
         this.bleRecoveryTimer = setTimeout(tick, 6000);
@@ -3572,6 +3646,8 @@ export class CameraService {
       // 原因 + 重试」），再补一条 toast（1.66.0）。
       this.failWireless(L10n.tr('camera_status_wifi_connect_failed', this.wifiHost));
       this.notify(L10n.tr('camera_status_wifi_disconnected'));
+      // 蓝牙模式的按需浏览接不回来：收掉临时会话，手机离开热点、回蓝牙待机。
+      this.endBleBrowsing('浏览会话接不回来');
       return;
     }
     this.scheduleWifiReconnect();

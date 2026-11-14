@@ -201,6 +201,30 @@
       "value": "已连接 · %1$s"
     },
     {
+      "name": "camera_ble_browse_photos",
+      "value": "浏览与下载照片"
+    },
+    {
+      "name": "camera_ble_browse_photos_desc",
+      "value": "临时加入相机热点，手机会暂时没有外网"
+    },
+    {
+      "name": "camera_ble_browse_linking",
+      "value": "正在切换到相机热点"
+    },
+    {
+      "name": "camera_ble_browsing",
+      "value": "已连上相机热点"
+    },
+    {
+      "name": "camera_ble_browsing_detail",
+      "value": "断开后自动回蓝牙"
+    },
+    {
+      "name": "camera_ble_returning",
+      "value": "相机正在切回蓝牙，约需 40 秒"
+    },
+    {
       "name": "camera_ble_pair_failed",
       "value": "配对失败"
     },
@@ -1394,7 +1418,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "勾选表示可用；空白表示这种连接下做不到。已知限制见下方。"
+      "value": "勾选表示可用，◐ 表示要临时换一条链路；空白表示这种连接下做不到。已知限制见下方。"
     },
     {
       "name": "camera_guide_view_steps",
@@ -1518,7 +1542,7 @@
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "蓝牙只做待机，不传照片；对时与位置注入也走蓝牙。照片只走 USB 与 Wi-Fi。"
+      "value": "蓝牙平时只做待机与位置注入；点「浏览与下载照片」临时加入相机热点，手机暂时没有外网，断开后自动回蓝牙。照片仍走 Wi-Fi。"
     },
     {
       "name": "camera_guide_official_title",

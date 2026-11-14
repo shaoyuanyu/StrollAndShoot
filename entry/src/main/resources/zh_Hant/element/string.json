@@ -201,6 +201,30 @@
       "value": "已連線 · %1$s"
     },
     {
+      "name": "camera_ble_browse_photos",
+      "value": "瀏覽與下載照片"
+    },
+    {
+      "name": "camera_ble_browse_photos_desc",
+      "value": "暫時加入相機熱點，手機會暫時沒有外網"
+    },
+    {
+      "name": "camera_ble_browse_linking",
+      "value": "正在切換到相機熱點"
+    },
+    {
+      "name": "camera_ble_browsing",
+      "value": "已連上相機熱點"
+    },
+    {
+      "name": "camera_ble_browsing_detail",
+      "value": "中斷後自動回藍牙"
+    },
+    {
+      "name": "camera_ble_returning",
+      "value": "相機正在切回藍牙，約需 40 秒"
+    },
+    {
       "name": "camera_ble_pair_failed",
       "value": "配對失敗"
     },
@@ -1394,7 +1418,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "勾選表示可用；空白表示這種連線下做不到。已知限制見下方。"
+      "value": "勾選表示可用，◐ 表示要暫時換一條連線；空白表示這種連線下做不到。已知限制見下方。"
     },
     {
       "name": "camera_guide_view_steps",
@@ -1518,7 +1542,7 @@
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "藍牙只做待機，不傳照片；對時與位置注入也走藍牙。照片只走 USB 與 Wi-Fi。"
+      "value": "藍牙平時只做待機與位置注入；點「瀏覽與下載照片」暫時加入相機熱點，手機暫時沒有外網，中斷後自動回藍牙。照片仍走 Wi-Fi。"
     },
     {
       "name": "camera_guide_official_title",
