@@ -8,6 +8,7 @@ import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { CameraStateDemo } from '../debug/CameraStateDemo';
 import { BtSppProbe } from '../debug/BtSppProbe';
 import { BleCharProbe } from '../debug/BleCharProbe';
+import { BleRemoteProbe } from '../debug/BleRemoteProbe';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { GpsGeocoder } from '../services/GpsGeocoder';
@@ -45,6 +46,15 @@ export default class EntryAbility extends UIAbility {
       if (MockPtpDevice.isDebugBuild()) {
         BleCharProbe.run(String(blechar));
         hilog.info(DOMAIN, TAG, 'ble char probe');
+      }
+      return;
+    }
+    const blectl = want.parameters ? want.parameters['blectl'] : undefined;
+    if (blectl !== undefined) {
+      // 蓝牙遥控探针（0x2020/0x2021 控制点），仅调试包。
+      if (MockPtpDevice.isDebugBuild()) {
+        BleRemoteProbe.run(String(blectl));
+        hilog.info(DOMAIN, TAG, 'ble remote probe: %{public}s', String(blectl));
       }
       return;
     }

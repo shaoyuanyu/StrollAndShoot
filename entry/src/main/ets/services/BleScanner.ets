@@ -346,6 +346,9 @@ export class BleCameraLink {
   onReconnected: (serial: string) => void = (_s: string) => {};
   /** 重连状态变化（true = 正在重连），上层用它驱动 UI 文案。 */
   onReconnecting: (reconnecting: boolean) => void = (_v: boolean) => {};
+  /** 调试探针用：任何特征的通知/指示都原样回一份（不改变原有分发）。 */
+  onAnyNotification: (uuid: string, value: Uint8Array) => void =
+    (_uuid: string, _value: Uint8Array) => {};
   /**
    * 自动重连扫不到相机（连广播都没有）＝相机多半进了待机。
    *
@@ -562,6 +565,11 @@ export class BleCameraLink {
             const uuid = (data.characteristicUuid ?? '').toLowerCase();
             const value = new Uint8Array(data.characteristicValue);
             this.onLog(`BLE 通知 ${uuid} (${value.length}B)`);
+            try {
+              this.onAnyNotification(uuid, value);
+            } catch (_e) {
+              // 探针回调出错不能影响正常的特征分发
+            }
             if (uuid === NIKON_CHAR_CONTROL) {
               this.handleControlPoint(value);
             }

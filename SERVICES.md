@@ -719,6 +719,28 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
   电源枚举，**不是**我们主动唤醒它的手段——0x2001 在 APK 里只被 `read()` 检查
   （`CameraConnectByBtcUseCase` 用它判断相机醒没醒），没有写入路径。
 
+*蓝牙遥控探针（1.69.1，仅调试包）*
+
+`debug/BleRemoteProbe.ets` 把官方 `0x2020/0x2021` 的协议先跑通，再接 UI。
+触发（前提：相机醒着、App 的 BLE 已配对连着）：
+
+```bash
+hdc shell aa start -a EntryAbility -b <bundle> --ps blectl feature
+hdc shell aa start -a EntryAbility -b <bundle> --ps blectl on
+hdc shell aa start -a EntryAbility -b <bundle> --ps blectl shot
+hdc shell aa start -a EntryAbility -b <bundle> --ps blectl off
+```
+
+- 帧格式（APK `bleclient/H$a` 的编码器）：`u16 LE 总长 | u8 opcode | u8 0 | body`；
+  `0x01` 能力查询（4B）、`0x10` 配置（4B）、`0x11` 进/出遥控（5B，body=mode）、
+  `0x12` 按键（6B，body=keyCode, keyOperation）。keyCode 2 半按 / 3 全按 / 4 录像，
+  keyOperation 0 OFF / 1 ON。
+- **先开 indication 再写**：响应从 `0x2021` 的 indication 回来，状态从 `0x2020`
+  的 indication 推。1.68.5 那次「写成功、没通知、随后 busy」就是少做了这一步。
+- 探针把每条通知原样写进 AppLog（`[BLECTL] ← 2021 [06 00 12 00 ...]`），
+  `link.onAnyNotification` 是只给调试探针用的旁路，不影响原有 0x2008/配对分发。
+- 每轮只发一笔请求，失败即停（控制点 busy 要相机断电重启才恢复），不做循环重试。
+
 **2MP 自动传图走的是蓝牙经典（BTC/SPP）+ PTP，不是 BLE（2026-11-14 查证）**
 
 社区对官方 SnapBridge v2.13.3 的静态逆向（[MXWF0/SnapBridge-Enhanced] 的
