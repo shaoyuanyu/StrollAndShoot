@@ -19,6 +19,33 @@ export interface BleCameraDevice {
 /** 尼康在 BLE 厂商数据里用的公司 ID。 */
 const NIKON_COMPANY_ID = 0x0399;
 
+/**
+ * 一拍保活/注入的配置（1.66.17）。
+ *
+ * 对时和位置是两个独立开关：对时不需要任何权限，位置要先拿到定位。
+ * `fixProvider` 每次都重新取，走到哪写到哪。
+ */
+export interface BleKeepaliveConfig {
+  /** 两拍之间的间隔。 */
+  intervalMs: number;
+  /** 时区偏移分钟数（东八区 480），写进 0x2006 的后两个字节。 */
+  offsetMinutes: number;
+  /** 是否写 0x2006。 */
+  writeTime: boolean;
+  /** 当前位置；null 表示这次没有定位。 */
+  fixProvider: () => BleGeoFix | null;
+  /** 每一拍的结论写进 AppLog，真机上排查「相机没反应」全靠它。 */
+  onLog: (message: string) => void;
+  /** 写完一帧位置后回调一次，用来读回 0x2007 校验相机存没存。 */
+  onGeoWritten?: () => void;
+}
+
+/** 一次读的结果（诊断用）：值 + 失败原因。 */
+export interface BleReadResult {
+  value: Uint8Array | null;
+  error: string;
+}
+
 /** 首次连接 / 配对时等 GATT 上报状态的上限（相机休眠时唤醒要几秒）。 */
 const CONNECT_TIMEOUT_MS = 10000;
 /** 握手等 stage2 / stage4 的上限。相机醒着是毫秒级，睡着就等满。 */
@@ -253,6 +280,11 @@ export class BleCameraLink {
   private keepaliveTimer: number = -1;
   /** 保活连续失败次数：用来兜底「系统没给断链事件、写入却一直失败」的情况。 */
   private keepaliveFailures: number = 0;
+  /** 上一次写出去的位置是否有效：丢星时只补一条 valid=0。 */
+  private geoValidSent: boolean = false;
+  /** 首帧只打一次 hex，别每 45 秒刷屏。 */
+  private loggedTimeFrame: boolean = false;
+  private loggedGeoFrame: boolean = false;
   /** 配对握手是否已完成（只有完成后才应答 0x2008）。 */
   private paired: boolean = false;
   connected: boolean = false;
@@ -758,35 +790,24 @@ export class BleCameraLink {
   }
 
   /**
-   * 0x2008 位域：`(Connection<<8)|(Location<<4)|Time`。
+   * 0x2008 LSS 控制点：**只看不写**（1.66.18）。
    *
-   * 相机在 notify 里「要时间/位置/连接」，app 供给后写回清位值确认。
-   * 只在配对完成后应答——配对事务内写 0x2008 会搅坏注册（ZPill 实测）。
+   * 两处社区实现（nsg 的 Android 版与 kotlin-poc）都只把 0x2008 当「配对完成 /
+   * 相机有事要说」的通知通道：握手第 4 段之后相机会发 `01 00`，光拍照之后会变成
+   * `00 01`（要传照片）。**它们都不往这条特征写东西**。
+   *
+   * 我们之前把它当请求位域，收到什么就写回一个「清位」的应答——在没有任何
+   * 证据表明相机需要这个应答的情况下，多写一笔只可能搅坏相机侧的状态机。
+   * 现在只把收到的内容记进日志，等真机日志里出现相机明确的请求语义再加应答。
    */
   private handleControlPoint(data: Uint8Array): void {
-    if (data.length !== 2) return;
-    const raw = data[0] | (data[1] << 8);
-    const time = data[0] & 0x0F;
-    const loc = (data[0] >> 4) & 0x0F;
-    const conn = data[1] & 0x0F;
-    this.onLog(`0x2008 ← 0x${raw.toString(16)} (Time=${time} Loc=${loc} Conn=${conn})`);
-    if (!this.paired) {
-      this.onLog('0x2008 配对未完成，暂不应答');
+    const hex = BleCameraLink.describeBytes(data);
+    if (data.length !== 2) {
+      this.onLog(`0x2008 ← ${data.length}B ${hex}`);
       return;
     }
-    let answer = raw;
-    if (time >= 1) answer &= ~0x000F;
-    if (loc >= 1) answer &= ~0x00F0;
-    if (conn >= 1) answer &= ~0x0100;
-    if (answer === raw) return;
-    const payload = new Uint8Array(2);
-    payload[0] = answer & 0xFF;
-    payload[1] = (answer >> 8) & 0xFF;
-    this.writeCharacteristic(NIKON_CHAR_CONTROL, payload).then(() => {
-      this.onLog(`0x2008 清位应答 0x${answer.toString(16)}`);
-    }).catch((err: Error) => {
-      this.onLog(`0x2008 应答失败: ${err.message}`);
-    });
+    const raw = data[0] | (data[1] << 8);
+    this.onLog(`0x2008 ← 0x${raw.toString(16)} (${hex}) paired=${this.paired}`);
   }
 
   /**
@@ -843,7 +864,7 @@ export class BleCameraLink {
   }
 
   /** 前几个字节的十六进制摘要，日志排障用。 */
-  private static describeBytes(value: Uint8Array): string {
+  static describeBytes(value: Uint8Array): string {
     const n = Math.min(value.length, 8);
     let hex = '';
     for (let i = 0; i < n; i++) {
@@ -910,9 +931,13 @@ export class BleCameraLink {
     }
   }
 
-  /** 写一次相机时钟（0x2006）。 */
+  /** 写一次相机时钟（0x2006）。首帧把字节打进日志，方便和参考实现对拍。 */
   async writeTime(offsetMinutes: number): Promise<void> {
     const payload = BleTimePayload.build(new Date(), offsetMinutes);
+    if (!this.loggedTimeFrame) {
+      this.loggedTimeFrame = true;
+      this.onLog(`0x2006 首帧 (${payload.length}B) ${BleCameraLink.describeBytes(payload)}`);
+    }
     await this.writeCharacteristic(NIKON_CHAR_TIME, payload);
   }
 
@@ -922,29 +947,102 @@ export class BleCameraLink {
     await this.writeCharacteristic(NIKON_CHAR_GEO, payload);
   }
 
+  /** 告诉相机「位置已经无效」，让它丢掉保存的位置（只发一次的规矩在调用方）。 */
+  async writeLocationInvalid(): Promise<void> {
+    await this.writeCharacteristic(NIKON_CHAR_GEO, BleGeoPayload.buildInvalid());
+  }
+
   /**
-   * 保活：每 [intervalMs] 写一次 0x2006（内容就是当前时刻，顺带持续校时）。
+   * 带失败原因的读（诊断用）。
    *
-   * 相机 2 分钟没有 BLE 流量会断链，45 秒一拍留足余量。位置由
-   * [fixProvider] 提供，拿到就一起写；拿不到只写时间。
+   * 返回 `value === null` 时 `error` 里是真实的错误码：这样日志能分清「相机不给读」
+   * 和「服务表没就绪」——1.66.17 只打了一句「读不到」，没法判断原因。
    */
-  startKeepalive(intervalMs: number, offsetMinutes: number,
-                 fixProvider: () => BleGeoFix | null): void {
+  async readWithReason(charUuid: string): Promise<BleReadResult> {
+    if (this.gatt === null) return { value: null, error: 'BLE 未连接' };
+    if (!this.servicesReady) return { value: null, error: '服务表未就绪' };
+    try {
+      const value = await this.readCharacteristic(charUuid);
+      return { value: value, error: value === null ? '空值' : '' };
+    } catch (err) {
+      return { value: null, error: (err as Error).message };
+    }
+  }
+
+  /** 读回相机当前的时钟（0x2006）。 */
+  readTime(): Promise<BleReadResult> {
+    return this.readWithReason(NIKON_CHAR_TIME);
+  }
+
+  /** 读回相机保存的位置（0x2007）：全 0 说明相机没把我们的数据记下来。 */
+  readGeo(): Promise<BleReadResult> {
+    return this.readWithReason(NIKON_CHAR_GEO);
+  }
+
+  /** 读回序列号（0x200b）：已知可读，用来证明「读这条通道本身是通的」。 */
+  readSerial(): Promise<BleReadResult> {
+    return this.readWithReason('0000200b-3dd4-4255-8d62-6dc7b9bd5561');
+  }
+
+  /**
+   * 保活 + 注入：每一拍写一次 0x2006（对时）和 0x2007（位置）。
+   *
+   * 相机 2 分钟没有 BLE 流量会断链，45 秒一拍留足余量。位置拿不到时按
+   * 「只发一次 valid=0」的规矩通知相机，避免照片带着一个小时的旧坐标。
+   */
+  startKeepalive(cfg: BleKeepaliveConfig): void {
     this.stopKeepalive();
     this.keepaliveFailures = 0;
+    this.geoValidSent = false;
+    this.keepaliveTick(cfg).catch((_e: Error) => {
+      // keepaliveTick 内部已经处理过失败
+    });
     this.keepaliveTimer = setInterval(() => {
-      this.writeTime(offsetMinutes).then(() => {
-        this.keepaliveFailures = 0;
-        const fix = fixProvider();
-        if (fix !== null) {
-          return this.writeLocation(fix);
-        }
-        return Promise.resolve();
-      }).catch((err: Error) => {
-        this.onLog(`BLE 保活失败: ${err.message}`);
-        this.handleKeepaliveFailure();
+      this.keepaliveTick(cfg).catch((_e: Error) => {
+        // 同上
       });
-    }, intervalMs);
+    }, cfg.intervalMs);
+  }
+
+  private async keepaliveTick(cfg: BleKeepaliveConfig): Promise<void> {
+    if (this.gatt === null) {
+      this.onLog('BLE 保活失败: BLE 未连接');
+      this.handleKeepaliveFailure();
+      return;
+    }
+    try {
+      if (cfg.writeTime) {
+        await this.writeTime(cfg.offsetMinutes);
+      }
+      await this.injectLocation(cfg);
+      this.keepaliveFailures = 0;
+    } catch (err) {
+      this.onLog(`BLE 保活失败: ${(err as Error).message}`);
+      this.handleKeepaliveFailure();
+    }
+  }
+
+  private async injectLocation(cfg: BleKeepaliveConfig): Promise<void> {
+    const fix = cfg.fixProvider();
+    if (fix !== null) {
+      const payload = BleGeoPayload.build(fix);
+      if (!this.loggedGeoFrame) {
+        this.loggedGeoFrame = true;
+        cfg.onLog(`0x2007 首帧 (${payload.length}B) ${BleCameraLink.describeBytes(payload)}`);
+      }
+      await this.writeCharacteristic(NIKON_CHAR_GEO, payload);
+      this.geoValidSent = true;
+      cfg.onLog(`0x2007 ← ${fix.latitude.toFixed(5)}, ${fix.longitude.toFixed(5)}`
+        + ` alt=${Math.round(fix.altitude)}m sat=${fix.satellites}`);
+      if (cfg.onGeoWritten !== undefined) cfg.onGeoWritten();
+      return;
+    }
+    if (this.geoValidSent) {
+      // 连续多条 valid=0 会被相机拒收，所以只在「有效 → 无效」这一刻发一条。
+      await this.writeLocationInvalid();
+      this.geoValidSent = false;
+      cfg.onLog('0x2007 ← 位置失效（valid=0，只发这一条）');
+    }
   }
 
   /**
@@ -1334,9 +1432,13 @@ export class BleCameraLink {
       return null;
     }
     // 先开 0x2008 通知，相机半睡时也要靠 GATT 流量叫醒。
+    // **0x2008 是 notify，不是 indicate**（1.66.18）：nsg 的 Android 实现与
+    // kotlin-poc 都用 setNotify(NOT1)，只有 0x2000 用 indicate。之前这里写的是
+    // enableIndication，CCCD 置成 indicate 位，相机从来不发通知——9 千行日志里
+    // 一次 `BLE 通知 00002008` 都没有，LSS 控制点这条通道等于不存在。
     try {
-      await this.enableIndication(NIKON_CHAR_CONTROL);
-      this.onLog('配对: 0x2008 indicate 已开启');
+      await this.enableNotification(NIKON_CHAR_CONTROL);
+      this.onLog('配对: 0x2008 notify 已开启');
     } catch (err) {
       this.onLog(`配对: 0x2008 订阅失败: ${(err as Error).message}`);
     }

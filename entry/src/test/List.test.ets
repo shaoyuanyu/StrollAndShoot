@@ -9,6 +9,7 @@ import ptpSchedulerTest from './PtpScheduler.test';
 import usbAttachUtilTest from './UsbAttachUtil.test';
 import nikonWifiCredentialsTest from './NikonWifiCredentials.test';
 import cameraStandeeTest from './CameraStandee.test';
+import blePayloadsTest from './BlePayloads.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -22,4 +23,5 @@ export default function testsuite() {
   usbAttachUtilTest();
   nikonWifiCredentialsTest();
   cameraStandeeTest();
+  blePayloadsTest();
 }

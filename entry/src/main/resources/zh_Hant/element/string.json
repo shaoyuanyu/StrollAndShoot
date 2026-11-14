@@ -1619,6 +1619,26 @@
     {
       "name": "camera_info_mock_value",
       "value": "模擬相機（除錯包）"
+    },
+    {
+      "name": "settings_section_ble_camera",
+      "value": "藍牙相機"
+    },
+    {
+      "name": "settings_ble_clock_sync",
+      "value": "連線後對時"
+    },
+    {
+      "name": "settings_ble_clock_sync_desc",
+      "value": "用手機時間校準相機時鐘，每 45 秒一次"
+    },
+    {
+      "name": "settings_ble_location",
+      "value": "位置注入"
+    },
+    {
+      "name": "settings_ble_location_desc",
+      "value": "把手機最近的位置寫給相機，拍到的照片自帶 GPS；不需要開啟「定位記錄」"
     }
   ]
 }

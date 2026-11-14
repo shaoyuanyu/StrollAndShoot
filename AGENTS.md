@@ -491,6 +491,15 @@ HarmonyOS 里有一批同步 napi（`gatt.disconnect()`、`setCharacteristicChan
 **采样栈**为准：EventHandler 的任务名（`getAllNets`、`uv_timer_task`）只是投递这段
 续体的 napi 回调名，会把方向带偏。
 
+### 长时任务类型是固定枚举，别借壳
+
+`BackgroundMode` 只有传数据、音视频、录音、定位、蓝牙、多设备互联（分布式）、通话、
+计算、星闪这几种，**没有「Wi-Fi 连接」**。借蓝牙类型去保一条 Wi-Fi PTP 会话，会被系统的
+一致性校验判成「未执行相应业务」而挂起（API 20 起还有 `SYSTEM_SUSPEND_BLUETOOTH_NOT_USED`
+这种原因码）。2026-11-14 用户追问「两个 Wi-Fi 模式退后台还能保持连接吗」，查证后的结论
+与现在的行为见 [SERVICES.md](SERVICES.md)「长时任务类型是固定枚举」。要同时要蓝牙和后台
+定位的两条任务，得用 API 21+ 的 `startBackgroundRunning(context, ContinuousTaskRequest)`。
+
 ### 留意写定的上限
 
 旧的 `loadPhotoList` 里有 `const limit = Math.min(handles.length, 50)`，照片数量被悄悄限制在 50 张。遇到“功能大体正常但数字对不上”时，检索 `limit`、`min(`、`max(`、`slice` 以及写定的小数字。

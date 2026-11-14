@@ -1619,6 +1619,26 @@
     {
       "name": "camera_info_mock_value",
       "value": "Simulated camera (debug build)"
+    },
+    {
+      "name": "settings_section_ble_camera",
+      "value": "Bluetooth camera"
+    },
+    {
+      "name": "settings_ble_clock_sync",
+      "value": "Sync clock on connect"
+    },
+    {
+      "name": "settings_ble_clock_sync_desc",
+      "value": "Set the camera clock from the phone, every 45 seconds"
+    },
+    {
+      "name": "settings_ble_location",
+      "value": "Inject location"
+    },
+    {
+      "name": "settings_ble_location_desc",
+      "value": "Send the phone's latest location to the camera so photos carry GPS; no need to enable Location log"
     }
   ]
 }

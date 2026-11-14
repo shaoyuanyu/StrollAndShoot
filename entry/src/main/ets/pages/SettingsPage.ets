@@ -7,6 +7,7 @@ import { StandeePreferenceStore } from '../model/StandeePreferenceStore';
 import { CameraService } from '../services/CameraService';
 import { SavedCameraStore } from '../services/SavedCameraStore';
 import { GpsRecorder } from '../services/GpsRecorder';
+import { BleInjectStore } from '../model/BleInjectStore';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { cameraStandeeKeys, cameraStandeeLabel } from '../utils/CameraStandee';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -124,6 +125,8 @@ export struct SettingsPage {
   @Local languageStore: LanguageStore = LanguageStore.getInstance();
   /** 默认相机立牌；标题为「相机」时使用。 */
   @Local standeePref: StandeePreferenceStore = StandeePreferenceStore.getInstance();
+  /** 蓝牙相机的对时 / 位置注入开关（单独 PersistenceV2 key）。 */
+  @Local injectPrefs: BleInjectStore = BleInjectStore.getInstance();
   /** GPS 服务的真实状态。直接读单例的 @Trace 字段，不再要页面之间传副本。 */
   @Local gps: GpsRecorder = GpsRecorder.getInstance();
   /** 开关的显示值。用 !! 双向绑定，启动失败时才能把滑块弹回去。 */
@@ -450,6 +453,56 @@ export struct SettingsPage {
           }
           .width('100%').height(RowHeight.Double)
           .onClick(() => { this.onOpenPairedCameras(); })
+        }
+        .width('100%').padding({ left: 16, right: 16 })
+        .backgroundColor($r('app.color.bg_surface'))
+        .borderRadius(Radius.Card)
+        .shadow(CardShadow)
+
+        // ---- 蓝牙相机 ----
+        // 只在蓝牙连着相机时起作用：对时不需要任何权限，位置注入要定位权限。
+        // 1.66.17 之前这两件事是写死在保活里的（位置还依赖「定位记录」开着），
+        // 相机侧其实一次都没收到过；现在拆成看得见、关得掉的开关。
+        this.GroupTitle($r('app.string.settings_section_ble_camera'))
+        Column() {
+          Row() {
+            Column({ space: 2 }) {
+              Text($r('app.string.settings_ble_clock_sync'))
+                .fontSize(FontSize.CardTitle)
+                .fontColor($r('app.color.text_primary'))
+                .alignSelf(ItemAlign.Start)
+              Text($r('app.string.settings_ble_clock_sync_desc'))
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+                .alignSelf(ItemAlign.Start)
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.injectPrefs.clockSync })
+              .onChange((on: boolean) => { this.injectPrefs.clockSync = on; })
+          }
+          .width('100%').constraintSize({ minHeight: RowHeight.Double })
+          .border({ width: { bottom: 0.5 }, color: $r('app.color.divider') })
+
+          Row() {
+            Column({ space: 2 }) {
+              Text($r('app.string.settings_ble_location'))
+                .fontSize(FontSize.CardTitle)
+                .fontColor($r('app.color.text_primary'))
+                .alignSelf(ItemAlign.Start)
+              Text($r('app.string.settings_ble_location_desc'))
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+                .alignSelf(ItemAlign.Start)
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.injectPrefs.locationInject })
+              .onChange((on: boolean) => { this.injectPrefs.locationInject = on; })
+          }
+          .width('100%').constraintSize({ minHeight: RowHeight.Double })
         }
         .width('100%').padding({ left: 16, right: 16 })
         .backgroundColor($r('app.color.bg_surface'))

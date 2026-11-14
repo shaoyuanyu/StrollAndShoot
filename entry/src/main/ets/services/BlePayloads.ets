@@ -37,13 +37,52 @@ export class BleTimePayload {
     view.setInt8(9, minutes);
     return out;
   }
+
+  /**
+   * 把相机读回来的 0x2006 解成可读文本（诊断用）。
+   *
+   * 相机自己只回 7 字节（年 2 + 月日时分秒），不带时区，所以这里也按 7 字节读，
+   * 多出来的字节忽略。时间字段是 UTC。
+   */
+  static describe(value: Uint8Array): string {
+    if (value.length < 7) return `${value.length}B（格式不符）`;
+    const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
+    const year = view.getUint16(0, true);
+    const pad = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
+    let text = `${year}-${pad(value[2])}-${pad(value[3])}`
+      + ` ${pad(value[4])}:${pad(value[5])}:${pad(value[6])} UTC`;
+    // 和本机现在差多少：一眼看出「相机到底收没收到我写的时间」。
+    const camMs = Date.UTC(year, value[2] - 1, value[3], value[4], value[5], value[6]);
+    const diff = Math.round((camMs - Date.now()) / 1000);
+    if (Math.abs(diff) > 5) {
+      text += `（与本机差 ${diff > 0 ? '+' : ''}${diff} 秒）`;
+    } else {
+      text += '（与本机一致）';
+    }
+    return text;
+  }
 }
 
 /** 0x2007 LOCATION_INFORMATION：41 字节小端。 */
 export class BleGeoPayload {
   static readonly LENGTH: number = 41;
   private static readonly HEADER: number = 0x007F;
+  private static readonly VALID_OFFSET: number = 24;
   private static readonly VALID: number = 0x01;
+
+  /**
+   * 「位置已失效」：只有头 + valid=0，其余全 0。
+   *
+   * 相机收到 valid=0 会丢掉保存的位置，之后拍的照片不再带 GPS。**只能发一次**——
+   * 连发多条 valid=0 相机会拒收（实测结论，见 1.66.17 的 SERVICES.md）。
+   */
+  static buildInvalid(): Uint8Array {
+    const out = new Uint8Array(BleGeoPayload.LENGTH);
+    const view = new DataView(out.buffer);
+    view.setUint16(0, BleGeoPayload.HEADER, true);
+    out[BleGeoPayload.VALID_OFFSET] = 0;
+    return out;
+  }
 
   static build(fix: BleGeoFix): Uint8Array {
     const out = new Uint8Array(BleGeoPayload.LENGTH);

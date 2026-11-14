@@ -90,7 +90,7 @@ export class GpsRecorder {
   }
 
   /** 申请位置权限。返回空串表示已授权，否则返回给用户看的原因。 */
-  private async ensurePermissions(): Promise<string> {
+  async ensureLocationPermission(): Promise<string> {
     if (this.permissionsChecked) return '';
     if (!this.context) return L10n.tr('error_no_context');
 
@@ -178,7 +178,7 @@ export class GpsRecorder {
       return this.fail(L10n.tr('error_location_unsupported'));
     }
 
-    const permError = await this.ensurePermissions();
+    const permError = await this.ensureLocationPermission();
     if (permError !== '') return this.fail(permError);
 
     let locationEnabled = false;
@@ -553,7 +553,7 @@ export class GpsRecorder {
       return false;
     }
 
-    const permError = await this.ensurePermissions();
+    const permError = await this.ensureLocationPermission();
     if (permError !== '') {
       this.lastError = permError;
       return false;

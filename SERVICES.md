@@ -565,6 +565,35 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
 - 后台扫描**不要**提档到 `LOW_LATENCY`：官方《蓝牙重连最佳实践》明确「长时间后台
   扫描用 LOW_LATENCY 会导致功耗和发热严重」。
 
+**长时任务类型是固定枚举：没有「Wi-Fi 连接」这一种（1.66.17）**
+
+用户问「两个 Wi-Fi 模式退后台还能不能保持连接」，查文档 + 枚举后的结论：
+
+- `BackgroundMode` 只有 `DATA_TRANSFER` / `AUDIO_PLAYBACK` / `AUDIO_RECORDING` /
+  `LOCATION` / `BLUETOOTH_INTERACTION` / `MULTI_DEVICE_CONNECTION` / `VOIP` /
+  `TASK_KEEPING`（加 22/26 新增的 `AV_PLAYBACK_AND_RECORD`、`SPECIAL_SCENARIO_PROCESSING`、
+  `NEARLINK`）。**没有 Wi-Fi 连接**。`MULTI_DEVICE_CONNECTION` 的官方场景是「分布式业务
+  连接、投播」，相机不是分布式设备；`NEARLINK` 是星闪。能用语义装下相机会话的只有
+  `DATA_TRANSFER`，而它要求「真的有数据传输 + 进度更新（首次超过 10 分钟未更新会被取消）」，
+  空闲长连不满足。
+- 官方的运行限制写得很直白：**申请长时任务后应用未执行相应业务，退至后台会被挂起**；
+  API 20 起还有 `SYSTEM_SUSPEND_BLUETOOTH_NOT_USED`、API 26 有
+  `SYSTEM_CANCEL_NOT_USE_BLUETOOTH` 这种原因码。所以「借蓝牙类型保 Wi-Fi 会话」不是
+  能不能跑通的问题，是会被一致性校验判掉的。
+- 官方《应用网络重连》另有一条：应用切到后台 2 秒后网络资源冻结、**12 秒后释放**，
+  冻结时会清空 TCP 连接对象的本地 IP 与端口，回前台重新分配 → 对端看到的连接不可信。
+  它给的对策就是「前后台切换时关掉再重连」。
+
+因此 1.66.17 起的行为（方案 A，用户选定）：
+
+- `syncBackgroundTask()` **不再把「只有 Wi-Fi PTP 会话」当作保活理由**（`wifiSessionOnly`），
+  USB 会话与蓝牙待机不变；传照片仍走 `DATA_TRANSFER` 引用计数。
+- `onAppBackground()` 记下 `backgroundedAt`；`onAppForeground()` 若离开超过
+  `WIRELESS_BG_GRACE_MS`（12 秒）就调 `resumeWirelessAfterBackground()`：先
+  `autoLinkWifi('foreground', false)` 只用记住的地址快连（1–2 秒），失败再
+  `connectWirelessNow()` 走完整唤醒（0x2005 + 入热点/发现）。传输或扫描进行中不动会话。
+- 12 秒以内回前台（切出去看一眼微信）会话还是活的，不重建。
+
 **两条路不能同时建链路（1.66.8）**：`autoConnectBle()` 的主动连接和「等相机回来」的
 自动重连会同一秒各建一条 GATT 链路（日志：17:47 两条 `BLE 直连`、两次 `连接状态: 2`、
 两次 `已连接`），第二个 `setCharacteristicChangeIndication` 被拒
@@ -654,6 +683,12 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
 | `0x2008` | LSS 控制点（2B 位域，相机 notify 请求，ready 后才应答） |
 | `0x2a19` | 电池（`de00` 服务下的 SIG 采纳特征） |
 
+- **`0x2008` 是 notify，不是 indicate（1.66.18）**：两处社区实现（nsg Android、
+  kotlin-poc）都对 NOT1 调 `setNotify`，只有 `0x2000` 用 indicate。我们之前订阅成
+  indicate，CCCD 位写错，相机从来不发通知——9 千行 AppLog 里 `BLE 通知 00002008`
+  出现次数为 0，LSS 控制点这条通道等于不存在。另外按参考实现的用法，相机发来的
+  `01 00`（握手完成）与 `00 01`（拍完照要传图）都是**通知**，没有任何实现往 0x2008
+  写东西，所以我们的处理改成「只记日志、不回写」——多写一笔只可能搅坏相机状态机。
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
 - **冷启动那一次连接不算用户操作**（1.66.13）：`autoConnectBle(silent, quiet)` 的第二个
   参数只给 `MainScreen.aboutToAppear` 用。`quiet` 时失败走 `resetColdStartTraces()`：
@@ -670,6 +705,84 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
 - 相机 2 分钟没有 BLE 流量会断链，45 秒一拍留足余量。
 - 配对完成后**先等 2.5 秒**再写 `0x2006`（ZPill 的 writeGate）：相机刚收口时注入
   会话还没醒，立刻写会被拒甚至被踢链。
+
+**校时与位置注入：真正的毛病是没人供位置（1.66.17）**
+
+用户反馈「蓝牙模式下 GPS 注入和校时都没跑通、相机侧没效果」。查下来不是协议写错，
+而是**位置一次都没发出去过**：
+
+- `startBleKeepalive()` 的 `fixProvider` 直接读 `GpsRecorder.lastFix`，而「持续定位记录」
+  默认是关的 → `lastFix` 恒为 null → `0x2007` 从未写入。真机 AppLog（2026-11-14，9 千行）
+  里**没有任何一条定位启动记录**，只有一串「BLE 校时已写入」。
+- `satellites` 还写死成 0：相机那边的卫星颗数（也算定位质量）永远是 0。
+
+现在的结构：
+
+| 件 | 职责 |
+|---|---|
+| `services/BleGeoFeed.ets` | 注入专用的轻量定位源。定位记录开着就借它的 `lastFix`（同一个点，照片匹配轨迹和相机注入口径一致）；没开就自己订阅 `locationChange`（31 秒一拍，`TRANSPORT`），只留最后一个点，**不落轨迹**；顺带订阅 `satelliteStatusChange` 拿真实卫星数 |
+| `BleScanner.startKeepalive(BleKeepaliveConfig)` | 一拍里先写 `0x2006`（`writeTime` 开关控制），再写 `0x2007`；丢星时按「只发一条 valid=0」的规矩通知相机 |
+| `CameraService.startBleKeepalive()` | 读设置（`SettingsStore.bleClockSync` / `bleLocationInject`，默认都开）→ 起 `BleGeoFeed` → 起保活；4 秒后**读回 `0x2006`** 校验相机到底收没收到（日志 `对时校验：相机时钟 …（与本机一致）`） |
+
+协议细节（社区逆向 + nsg/ZPill 双源对拍，1.66.17 复核）：
+
+- `0x2006` 写 10 字节：年（u16 LE）、月、日、时、分、秒、**均为 UTC**、夏令时标志、
+  时区小时、时区分钟。相机自己只回 **7 字节**（不带时区），所以读回值按 7 字节解。
+- 诊断三读（`probeCameraLss()`）：0x200b 序列号证明「读通道本身通」，0x2006 是相机
+  时钟，写完一帧位置后 1.5 秒回读 0x2007。全 0 = 相机没存下来；与写出去的一致 =
+  相机存住了但页面/EXIF 没体现，问题就不在我们的写入。首帧 TIME/GEO 的十六进制也
+  会进日志（`0x2006 首帧` / `0x2007 首帧`），方便和参考实现对拍。
+- `0x2007` 写 41 字节，`0x007F` 头 + 纬度（方向/度/分/百分位/余数）+ 经度 + 卫星数 +
+  海拔（`P`/`M` + u16）+ UTC 时间（年..秒/厘秒）+ **valid 字节** + `WGS-84` + 10 字节 0。
+- **丢星只能发一条 valid=0**：连发会被相机拒收；收到 valid=0 后相机会丢掉保存的位置，
+  之后拍的照片不再带 GPS。`BleScanner` 用 `geoValidSent` 只做「有效 → 无效」那一次。
+- **写位置之前必须先有对时**：相机时间差太大时会拒收 GEO（表现为写入失败）。
+
+**真机验证通过（2026-11-14 21:00，Z50II）**：相机菜单「连接至智能设备 → 位置数据
+（智能设备）」显示出纬度、经度与 UTC 时间，用户确认「GPS 和时间数据都推到相机上了」。
+一路上修掉的三个真原因，按发现顺序：
+
+1. **位置根本没发**：`fixProvider` 读 `GpsRecorder.lastFix`，而定位记录默认关 → `0x2007`
+   从未写入（1.66.17）；
+2. **0x2008 用错 CCCD 位**：订阅成 indicate，相机从不发通知（1.66.18 改 notify）；
+3. **注入被链路抖动拖死**：它挂在「BLE 断开」上一起退订，而相机半睡时链路十几秒断一次，
+   连续定位永远等不到第一拍（1.66.18 起只在用户主动断开/交接 Wi-Fi 时停，并补一次
+   `getCurrentLocation()` 让首帧立刻有数据）。
+
+已知限制（不是 bug，别再花时间）：
+
+- **海拔多半是 0**：`Location.altitude` 是必填 `number`，但**系统只在拿到高程时才填**，
+  否则就是 0——官方 API 参考只写「表示位置的海拔高度，单位为米」，《获取设备的位置信息
+  开发指导》全文没提海拔，也没有 Android `hasAltitude()` 那种判断位，所以「0 = 没有」
+  只能靠经验判断。证据取自本机 `gps_records.jsonl`（同一份 `Location` 回调落盘）：53 条
+  里 50 条是 0，只有 2026-11-07 02:47–02:48 的 3 条有真实值（89.2 / 86.3 / 86.4 m），
+  而它们与其余记录**是同一个坐标**——同一个地点、有时给有时不给，说明是「这次定位结果
+  没有高程」，不是我们取错字段。注入走的是快速单次定位，命中网络定位时海拔就是 0。
+  **2026-11-14 用户决定：按现状写 0（方案 A），不做「复用旧海拔」或
+  `PRIORITY_ACCURACY` 改造**——相机菜单里海拔显示 0 是可接受的，别再当 bug 修。
+- **注入启动后的第一帧卫星数可能是 0**（单次定位抢在卫星状态回报之前），下一拍起是真实值。
+- **`0x2006` / `0x2007` 相机只写不读**：读会返回 `2901000 Gatt read forbiden`，所以 App
+  侧没法自校验「相机收没收到」，只能看相机菜单；`0x200b` 可以读，用来证明读通道本身是通的。
+- 相机半睡时 BLE 链路十几秒断一次是相机自己的待机行为（见上文），注入会跟着重连接续上。
+
+后台定位：把长时任务从「蓝牙」换成「定位」（1.66.17）
+
+`on('locationChange')` 想在后台继续上报，系统要求持有 **LOCATION 类型长时任务**；
+而同一个 UIAbility 一次只能有一个长时任务（API 20 及以前）。BLE 写入本身不看任务
+类型，**任何一条长时任务都能把进程留住**，所以只要位置注入在跑，就优先申请 LOCATION：
+
+| 场景 | 任务类型（`applyBackgroundTask()` 的决策） |
+|---|---|
+| 正在传照片 | `DATA_TRANSFER`（最高优先，通知「数据传输任务」） |
+| 蓝牙待机 + `BleGeoFeed.isRunning()` | **`LOCATION`**（通知「定位任务」，后台定位可用） |
+| 只做蓝牙待机（位置注入关 / 没权限） | `BLUETOOTH_INTERACTION`（通知「蓝牙相关任务」） |
+
+- 定位源起来是异步的，`refreshBackgroundTaskMode()` 专门负责「模式变了」时重算一次
+  （`syncBackgroundTask()` 在「要不要保活」没变时会直接返回，走不到这里）。
+- 定位记录自己也在申请 LOCATION 任务：两条请求撞在同一个槽上时后到的那条会报错，
+  但先到的任务已经把进程留住了，两边的定位订阅也都还在，所以功能不受影响。
+- 要彻底摆脱「一个任务」的限制（比如同时要蓝牙、定位、传输三条通知分开）需要
+  API 21+ 的 `startBackgroundRunning(context, ContinuousTaskRequest)`，这一轮没动。
 
 **主线程禁区：会同步等系统服务的接口（1.66.16 汇总）**
 

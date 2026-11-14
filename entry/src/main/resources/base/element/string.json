@@ -1619,6 +1619,26 @@
     {
       "name": "camera_info_mock_value",
       "value": "模拟相机（调试包）"
+    },
+    {
+      "name": "settings_section_ble_camera",
+      "value": "蓝牙相机"
+    },
+    {
+      "name": "settings_ble_clock_sync",
+      "value": "连接后对时"
+    },
+    {
+      "name": "settings_ble_clock_sync_desc",
+      "value": "用手机时间校准相机时钟，每 45 秒一次"
+    },
+    {
+      "name": "settings_ble_location",
+      "value": "位置注入"
+    },
+    {
+      "name": "settings_ble_location_desc",
+      "value": "把手机最近的位置写给相机，拍到的照片自带 GPS；不需要开启「定位记录」"
     }
   ]
 }

@@ -19,6 +19,7 @@ import { WifiPtpSession } from './WifiPtpSession';
 import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
 import { BleScanner, BleCameraLink, type BleCameraDevice } from './BleScanner';
+import { BleTimePayload, type BleGeoFix } from './BlePayloads';
 import { BleIdentityStore } from './BleIdentityStore';
 import { SavedCameraStore, type SavedCamera } from './SavedCameraStore';
 import { WifiLinkStore } from './WifiLinkStore';
@@ -31,6 +32,8 @@ import { collectLocalNetworks, networkHint } from './LocalNetworks';
 import { AtomicFile } from '../utils/AtomicFile';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
+import { BleGeoFeed } from './BleGeoFeed';
+import { BleInjectStore } from '../model/BleInjectStore';
 import { ExifGeotagger } from './ExifGeotagger';
 import { TransferNotice } from './TransferNotice';
 import { CameraCachePrefs } from './CameraCachePrefs';
@@ -107,6 +110,19 @@ const WIRELESS_HEARTBEAT_MS = 15000;
  * 兜底，真正的超时要短。
  */
 const WIRELESS_HEARTBEAT_TIMEOUT_MS = 6000;
+/**
+ * 退到后台多久之后，无线会话必须按「已被系统释放」处理（1.66.17）。
+ *
+ * 官方《应用网络重连》：应用切到后台 2 秒后网络资源被冻结，**12 秒后释放**。
+ * 所以 Wi-Fi 会话没有合法的长时任务可挂（系统类型里没有 Wi-Fi 连接），回来后
+ * 直接重建比等 15 秒心跳超时快得多。
+ */
+const WIRELESS_BG_GRACE_MS = 12000;
+/**
+ * BLE 保活/注入的间隔。相机 2 分钟没有 BLE 流量会断链，45 秒留足余量；
+ * 位置注入跟着这一拍走（官方 SnapBridge 同类实现 15~30 秒，45 秒够用）。
+ */
+const BLE_KEEPALIVE_MS = 45000;
 
 // ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
 
@@ -228,6 +244,12 @@ export class CameraService {
   private wifiConnectSeq: number = 0;
   /** 无线会话掉线后正在自动重连。 */
   @Trace wifiReconnecting: boolean = false;
+  /** 带着无线会话退到后台的时刻（0 表示没有待恢复的会话）。 */
+  private backgroundedAt: number = 0;
+  /** 退到后台时无线会话还活着：回前台可能要先重建。 */
+  private wirelessSessionMayBeStale: boolean = false;
+  /** 0x2007 回读只做一次（每轮连接），避免持续打扰相机。 */
+  private geoReadbackDone: boolean = false;
   /** 扫不到相机时的原因（空串 = 网络没问题，是相机那边的事）。 */
   @Trace wifiHint: string = '';
   /**
@@ -818,6 +840,9 @@ export class CameraService {
 
   initLogPath(dir: string): void {
     this.log.setFilePath(dir + '/app_log.txt');
+    // 位置注入是独立服务，日志要并到同一份 AppLog，否则真机上根本看不到它
+    // 有没有订上定位（1.66.18 之前就是这样悄悄丢了日志）。
+    BleGeoFeed.getInstance().initLog(this.log);
   }
 
   initDownloadDir(dir: string, ctx?: common.UIAbilityContext): void {
@@ -836,6 +861,19 @@ export class CameraService {
     }
     this.cachePrefs.init(dir);
     this.loadRegistry();
+  }
+
+  /**
+   * 重新算一次长时任务的模式（1.66.17）。
+   *
+   * `syncBackgroundTask()` 在「要不要保活」没变时会直接返回；但模式本身还可能变
+   * （位置注入起来了 → 蓝牙任务换成定位任务），那条路走不到，所以单独补一个入口。
+   */
+  private refreshBackgroundTaskMode(): void {
+    if (!this.sessionKeepAlive && this.transferTaskRefs === 0) return;
+    this.applyBackgroundTask().catch((_e: Error) => {
+      // 换模式失败只影响通知文案与后台定位，不影响前台
+    });
   }
 
   /** 应用进入后台时强制把待写缓存落盘。 */
@@ -978,9 +1016,14 @@ export class CameraService {
           if (this.transferTaskOn) await this.stopTransferTask();
           continue;
         }
+        // 位置注入在跑的时候用 LOCATION：后台定位必须有这个类型的长时任务，
+        // 而它同样能把进程留住（BLE 写入不看任务类型）。只有做蓝牙待机、
+        // 不供位置时才用 BLUETOOTH_INTERACTION（1.66.17）。
         const mode = transfer
           ? backgroundTaskManager.BackgroundMode.DATA_TRANSFER
-          : backgroundTaskManager.BackgroundMode.BLUETOOTH_INTERACTION;
+          : (BleGeoFeed.getInstance().isRunning()
+              ? backgroundTaskManager.BackgroundMode.LOCATION
+              : backgroundTaskManager.BackgroundMode.BLUETOOTH_INTERACTION);
         if (this.transferTaskOn && this.transferTaskMode === mode) continue;
         if (this.transferTaskOn) await this.stopTransferTask();
         await this.startBackgroundTask(mode);
@@ -1012,7 +1055,10 @@ export class CameraService {
       this.transferTaskOn = true;
       this.transferTaskMode = mode;
       this.log.add(mode === backgroundTaskManager.BackgroundMode.DATA_TRANSFER
-        ? '后台传输长时任务已申请' : '后台蓝牙长时任务已申请（保持长连）');
+        ? '后台传输长时任务已申请'
+        : (mode === backgroundTaskManager.BackgroundMode.LOCATION
+            ? '后台定位长时任务已申请（保持长连并继续注入位置）'
+            : '后台蓝牙长时任务已申请（保持长连）'));
     } catch (err) {
       // 与定位长时任务冲突（同一 UIAbility 同时只允许一个）或系统拒绝时不要打断流程。
       this.log.add(`长时任务申请失败: ${(err as BusinessError).message}`);
@@ -1047,13 +1093,54 @@ export class CameraService {
   onAppBackground(): void {
     // 后台不做无线心跳：没有界面要更新，也没必要陪相机跑流量。
     this.setAppForeground(false);
+    // 记一笔「带着无线会话退到后台」。Wi-Fi 会话没有合法的长时任务（见
+    // SERVICES.md「长时任务类型」），进程冻结后网络资源会在 12 秒左右被系统
+    // 释放，所以回前台不能直接信 `connected`——超过宽限期就重建会话。
+    if (this.connected && this.wireless) {
+      this.backgroundedAt = Date.now();
+      this.wirelessSessionMayBeStale = true;
+    }
     this.syncBackgroundTask();
   }
 
   /** 应用回到前台：释放后台保活引用，并恢复无线心跳。 */
   onAppForeground(): void {
+    const away = this.backgroundedAt > 0 ? Date.now() - this.backgroundedAt : 0;
+    const stale = this.wirelessSessionMayBeStale && away > WIRELESS_BG_GRACE_MS;
+    this.backgroundedAt = 0;
     this.setAppForeground(true);
     this.syncBackgroundTask();
+    if (stale) {
+      this.wirelessSessionMayBeStale = false;
+      this.resumeWirelessAfterBackground();
+    }
+  }
+
+  /**
+   * 后台待久了回来：先把死掉的无线会话收掉，再用记得的地址接回来。
+   *
+   * 不走 15 秒心跳那条路——那条要等心跳超时（6 秒）才判定断开，回前台先卡
+   * 六秒再说；这里直接重建，通常一两秒。重建失败再按模式做完整唤醒。
+   */
+  private resumeWirelessAfterBackground(): void {
+    if (!this.wireless) return;
+    // 后台还在传照片 / 扫描：会话是活的，别动。
+    if (this.transferTaskRefs > 0 || this.scanning) return;
+    this.log.add('回前台：无线会话可能已被系统释放，重建');
+    this.connected = false;
+    this.usable = false;
+    this.statusText = L10n.tr('camera_status_wifi_connecting', this.wifiHost);
+    this.dropBrokenWifiSession();
+    this.autoLinkWifi('foreground', false).then((ok: boolean) => {
+      if (ok || !this.appForeground) return;
+      if (this.connected) return;
+      // 相机自己的无线已经睡了：走完整唤醒（0x2005 + 入热点/发现）
+      this.connectWirelessNow().catch((err: Error) => {
+        this.log.add(`回前台恢复无线失败: ${err.message}`);
+      });
+    }).catch((err: Error) => {
+      this.log.add(`回前台恢复无线异常: ${err.message}`);
+    });
   }
 
   /**
@@ -1071,8 +1158,13 @@ export class CameraService {
     // 「等待循环还开着」也算需要保活：断链那一刻 `bleReconnecting` 还没置上，
     // 只看它会让任务先被释放、随即又申请一次（真机日志里 18:04:56 就是这么抖的）。
     const watching = this.bleLink !== null && this.bleLink.watchArmed();
+    // Wi-Fi 会话（`connected && wireless`）**不算**保活理由：系统的长时任务类型
+    // 里没有「Wi-Fi 连接」，借蓝牙类型去挂会被一致性校验判成「未执行相应业务」
+    // 而挂起（1.66.17，见 SERVICES.md）。后台就让它按系统规则冻结，回前台重连。
+    const wifiSessionOnly = this.connected && this.wireless;
     const need = !this.appForeground
-      && (this.connected || this.bleConnected || this.bleReconnecting || watching);
+      && (this.bleConnected || this.bleReconnecting || watching
+          || (this.connected && !wifiSessionOnly));
     if (need === this.sessionKeepAlive) return;
     this.sessionKeepAlive = need;
     this.log.add(need
@@ -2140,6 +2232,10 @@ export class CameraService {
             if (!connected) {
               this.bleServices = [];
               this.bleSerial = '';
+              // **不要在这里停位置注入**：相机半睡时链路十几秒就断一次，一断就
+              // 退订的话，连续定位永远等不到第一拍（1.66.18 真机日志：整段会话
+              // 只有一次 0x2007，之后每次重连都从零开始）。注入的生命周期跟着
+              // 「用户还连着这台相机」，由 disconnectBle / 交接 Wi-Fi 去收。
             }
             // 后台时蓝牙链路的断/连会影响「要不要保活」。
             this.syncBackgroundTask();
@@ -2281,32 +2377,52 @@ export class CameraService {
   }
 
   /**
-   * 原地起保活（首次连接延迟首写门，自动重连时立刻恢复）。
+   * 原地起保活 + 注入（首次连接延迟首写门，自动重连时立刻恢复）。
+   *
+   * 1.66.17 起位置不再直接读 `GpsRecorder.lastFix`：定位记录默认是关的，
+   * `lastFix` 恒为 null，0x2007 一次都没发出去过（真机日志实证）。现在改由
+   * [BleGeoFeed] 供位置——定位记录开着就借它的点，没开就自己订阅一个。
    */
   private startBleKeepalive(delayMs: number): void {
-    const offsetMinutes = -new Date().getTimezoneOffset();
     const apply = (): void => {
       if (this.bleLink === null) return;
-      try {
-        this.bleLink.writeTime(offsetMinutes).then(() => {
-          if (this.bleLink === null) return;
-          this.bleLink.startKeepalive(45000, offsetMinutes, () => {
-            const fix = GpsRecorder.getInstance().lastFix;
-            if (fix === null) return null;
-            return {
-              latitude: fix.latitude,
-              longitude: fix.longitude,
-              altitude: fix.altitude,
-              satellites: 0,
-              utc: new Date()
-            };
-          });
-          this.log.add(`BLE 校时已写入（offset ${offsetMinutes}min），保活 45s 已启动`);
-        }).catch((err: Error) => {
-          this.log.add(`BLE 校时失败: ${err.message}`);
+      this.geoReadbackDone = false;
+      const injectPrefs = BleInjectStore.getInstance();
+      const offsetMinutes = -new Date().getTimezoneOffset();
+      const writeTime = injectPrefs.clockSync;
+      const inject = injectPrefs.locationInject;
+      if (inject) {
+        BleGeoFeed.getInstance().start().then((ok: boolean) => {
+          this.log.add(ok ? '蓝牙位置注入：定位源就绪'
+            : '蓝牙位置注入：拿不到定位，只对时（先检查定位权限与系统定位开关）');
+          // 定位源起来了：后台长时任务要从「蓝牙」换成「定位」，后台才能继续定位。
+          if (ok) this.refreshBackgroundTaskMode();
+        }).catch((_e: Error) => {
+          // start() 内部已经把原因写进日志
         });
+      }
+      try {
+        this.bleLink.startKeepalive({
+          intervalMs: BLE_KEEPALIVE_MS,
+          offsetMinutes: offsetMinutes,
+          writeTime: writeTime,
+          fixProvider: (): BleGeoFix | null =>
+            inject ? BleGeoFeed.getInstance().lastFix() : null,
+          onLog: (message: string) => { this.log.add(message); },
+          onGeoWritten: () => {
+            if (this.geoReadbackDone) return;
+            this.geoReadbackDone = true;
+            setTimeout(() => { this.verifyCameraGeo(); }, 1500);
+          }
+        });
+        this.log.add(`BLE 保活已启动（${BLE_KEEPALIVE_MS / 1000}s 一拍，`
+          + `对时${writeTime ? '开' : '关'}，位置注入${inject ? '开' : '关'}）`);
       } catch (err) {
         this.log.add(`BLE 保活启动失败: ${(err as Error).message}`);
+      }
+      // 对时到底成没成：写完之后读回相机自己的 0x2006，结论写进日志。
+      if (writeTime) {
+        setTimeout(() => { this.probeCameraLss(); }, 4000);
       }
     };
     if (delayMs <= 0) {
@@ -2314,6 +2430,54 @@ export class CameraService {
       return;
     }
     setTimeout(apply, delayMs);
+  }
+
+  /**
+   * 读回相机侧的 LSS 数据（诊断用，失败不影响对时/注入）。
+   *
+   * 三读一组：0x200b 序列号证明「读这条通道是通的」，0x2006 是相机时钟，
+   * 0x2007 是相机保存的位置。三个结果一起看就能分清「相机不给读」还是
+   * 「我们没写进去」——1.66.17 只打了一句「读不到」，判断不了。
+   */
+  private async probeCameraLss(): Promise<void> {
+    const link = this.bleLink;
+    if (link === null) return;
+    const serial = await link.readSerial();
+    this.log.add(serial.value === null
+      ? `LSS 诊断：0x200b 读失败（${serial.error}）`
+      : `LSS 诊断：0x200b = ${BleCameraLink.describeBytes(serial.value)}`);
+    if (serial.value === null) return;
+    const time = await link.readTime();
+    this.log.add(time.value === null
+      ? `LSS 诊断：0x2006 读失败（${time.error}）`
+      : `LSS 诊断：相机时钟 ${BleTimePayload.describe(time.value)}`);
+  }
+
+  /** 写完一帧位置后读回 0x2007：全 0 = 相机没记下来，跟我们一致 = 存住了。 */
+  private async verifyCameraGeo(): Promise<void> {
+    const link = this.bleLink;
+    if (link === null) return;
+    const geo = await link.readGeo();
+    if (geo.value === null) {
+      this.log.add(`LSS 诊断：0x2007 读失败（${geo.error}）`);
+      return;
+    }
+    const v = geo.value;
+    let nonZero = false;
+    for (let i = 0; i < v.length; i++) {
+      if (v[i] !== 0) {
+        nonZero = true;
+        break;
+      }
+    }
+    this.log.add(`LSS 诊断：0x2007 回读 ${v.length}B`
+      + (nonZero ? ` ${BleCameraLink.describeBytes(v.slice(0, 16))}` : ' 全 0（相机没存）'));
+  }
+
+  /** BLE 让位 / 断开时收掉位置注入，别陪着一条已经不存在的链路耗电。 */
+  private stopBleGeoFeed(): void {
+    const feed = BleGeoFeed.getInstance();
+    if (feed.isRunning()) feed.stop();
   }
 
   /**
@@ -2520,6 +2684,7 @@ export class CameraService {
     this.bleAsleep = false;
     this.bleServices = [];
     this.bleSerial = '';
+    this.stopBleGeoFeed();
     // 用户主动断开：后台不必再为蓝牙保活。
     this.syncBackgroundTask();
     // 取消连接/配对失败留下的提示不再成立
@@ -3069,6 +3234,7 @@ export class CameraService {
   private suspendBleForWifi(): void {
     if (this.bleLink === null) return;
     this.bleLink.stopKeepalive();
+    this.stopBleGeoFeed();
     this.bleLink.disableAutoReconnect();
     this.bleReconnecting = false;
     this.log.add('BLE 已让位给 Wi-Fi（相机两个无线模式互斥，期间不再重连/保活）');
