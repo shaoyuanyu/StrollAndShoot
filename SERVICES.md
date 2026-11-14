@@ -722,10 +722,13 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 1
 ```
 
 `frame` = `usb`（默认，先 `buildOpenSession(1)` 再 `buildGetDeviceInfo()`）/
-`ip` / `usb-noopen`；`uuidKey` = `1101`（标准 SPP，默认）/ `de00` / `de01`。
+`ip` / `usb-noopen`；`uuidKey` = `1101`（标准 SPP，默认）/ `de00` / `de01`；
+附加标记（用 `-` 连起来）：`insecure`（`secure:false`）、`btc`（先写
+`0x2005=0x02`）、`3`（先写 `0x2005=0x03`）。例：`--ps spp usb-insecure-btc`。
 流程：从系统已配对列表按名字/序列号找相机的**经典地址**（经典地址没有落盘）→
-`sppConnect`（RFCOMM、secure）→ 按 **492 字节**（`0x2004` 尾部的
-`sppMaxDataLength`）切片写 PTP → 读 5–6 秒，原始 hex 落 AppLog（前缀 `[SPP]`）。
+`sppConnect` → 按 **492 字节**（`0x2004` 尾部的 `sppMaxDataLength`）切片写 PTP →
+读 5–6 秒，原始 hex 落 AppLog（前缀 `[SPP]`）。`listen` / `listen-btc` /
+`listen-3` 反过来起 `sppListen` 等相机连进来。
 
 判读：
 
@@ -752,8 +755,33 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 1
 经典绑定完成后相机会主动发起 RFCOMM，主机没有 SPP 服务端时相机会一直等
 （甚至冻结）——所以相机可能是 RFCOMM 客户端，SnapBridge 在手机侧跑服务端。
 
-Z50II 上目前既连不进去、也等不到它连出来；下一步要么找 SnapBridge 里实际用的
-UUID / 触发时序，要么抓一次官方 App 与相机之间的 HCI 日志。
+**官方 smali 里的关键证据（2026-11-14，MXWF0/SnapBridge-Enhanced）**
+
+`snapbridge/ptpclient/v.smali` 创建客户端 socket 的顺序是：
+
+1. 反射调 `BluetoothDevice.createInsecureRfcommSocket(int)`，**参数硬编码 1**
+   （RFCOMM channel 1；与 COOLPIX A1000 的 SDP「SPP / channel 1 / 0x1101」对得上）；
+2. 反射失败才回退 `createInsecureRfcommSocketToServiceRecord(UUID 0x1101)`；
+3. 服务端另有 `listenUsingRfcommWithServiceRecord(name, 0x1101)`。
+
+也就是说 **SnapBridge 先按 channel 1 直连，绕开 SDP**；UUID 只是兜底。
+
+**为什么鸿蒙这边走不通**
+
+- 鸿蒙 `socket.sppConnect()` 只接受 UUID（内部就是 SDP 查询），**没有按
+  RFCOMM channel 连接**的公开 API；`SppOptions` 只有 uuid / secure / type / psm；
+- Z50II 上 `sppConnect` 对 `1101` 与 `de00` 都是 8 秒后 `2900099`（SDP 无应答或
+  服务不存在）；BLE 连着 / 断开、`secure` true / false、先写 `0x2005=0x02`
+  或 `0x03` 再连，结果全部一样；
+- 反向 `sppListen`（`1101`）能起来（server=0/1）但没有客户端连进来，先写
+  `0x2005=0x02` 也一样 —— 相机在 Z50II 上既不接受按 UUID 的连接，也没有主动来连；
+- 即使连上，A1000 的对照记录里「经 RFCOMM 发 PTP 相机不响应」，这条未必能跑通。
+
+**结论**：2MP 自动传图在鸿蒙上被平台 API 挡住了——官方 App 靠反射按 channel 1
+直连，而我们只能按 UUID 走 SDP，相机又不应答。要再往前走，必须有：
+(a) 鸿蒙暴露按 channel 连接 RFCOMM 的 API（系统能力，不是三方 App 能拿到的），或
+(b) 相机在 SDP 里发布一个可用的 SPP 服务（Z50II 目前没有），或
+(c) 换一个能按 channel 连的平台（Android）来验证「channel 1 + PTP 封装」本身是否通。
 
 [MXWF0/SnapBridge-Enhanced]: https://github.com/MXWF0/SnapBridge-Enhanced
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。

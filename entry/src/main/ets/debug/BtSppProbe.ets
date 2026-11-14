@@ -57,10 +57,18 @@ export class BtSppProbe {
 
   private static async runInner(arg: string): Promise<void> {
     const parsed = BtSppProbe.parseArg(arg);
-    BtSppProbe.log(`开始（frame=${parsed.frame} uuid=${parsed.uuidKey} chunk=${BtSppProbe.SPP_CHUNK}）`);
+    BtSppProbe.log(`开始（frame=${parsed.frame} uuid=${parsed.uuidKey}`
+      + ` secure=${parsed.secure} chunk=${BtSppProbe.SPP_CHUNK}）`);
     const svc = CameraService.getInstance();
     BtSppProbe.log(`当前 BLE: connected=${svc.bleConnected} paired=${svc.bleSerial !== ''}`
       + ` mode=${svc.linkMode}`);
+    if (parsed.establish !== 0) {
+      // 先写 0x2005 的 BTC 位（0x02 只经典、0x03 经典+WiFi），再连 SPP：
+      // 官方 SnapBridge 是「BLE 认证 → 经典绑定 → 建立 BTC」这条顺序。
+      const ok = await svc.writeBleEstablishmentForProbe(parsed.establish);
+      BtSppProbe.log(`触发 0x2005=0x${parsed.establish.toString(16)} ${ok ? '已写' : '没写成功'}`);
+      await BtSppProbe.sleep(1200);
+    }
     if (arg.trim().startsWith('listen')) {
       await BtSppProbe.runListen(arg.trim());
       return;
@@ -72,7 +80,7 @@ export class BtSppProbe {
     }
     const uuid = BtSppProbe.uuidOf(parsed.uuidKey);
     BtSppProbe.log(`目标 ${addr}，UUID ${uuid}`);
-    const socketId = await BtSppProbe.connect(addr, uuid);
+    const socketId = await BtSppProbe.connect(addr, uuid, parsed.secure);
     if (socketId < 0) {
       BtSppProbe.log('SPP 没连上，探针结束');
       return;
@@ -219,12 +227,19 @@ export class BtSppProbe {
 
   private static parseArg(arg: string): ProbeArg {
     const raw = arg.trim();
-    const out: ProbeArg = { frame: 'usb', uuidKey: '1101' };
+    const out: ProbeArg = { frame: 'usb', uuidKey: '1101', secure: true, establish: 0 };
     if (raw === '') return out;
     const parts = raw.split('-');
     const frame = parts[0];
     if (frame === 'ip' || frame === 'usb-noopen' || frame === 'usb') out.frame = frame;
-    if (parts.length > 1) out.uuidKey = parts[1];
+    for (const p of parts) {
+      if (p === '1101' || p === 'de00' || p === 'de01') out.uuidKey = p;
+      // 官方 SnapBridge 建立 RFCOMM 用的是 createInsecureRfcommSocket*（见
+      // SERVICES.md 的 smali 证据），所以 insecure 是一个要单独试的分支。
+      if (p === 'insecure') out.secure = false;
+      if (p === 'btc') out.establish = 0x02;
+      if (p === '3') out.establish = 0x03;
+    }
     return out;
   }
 
@@ -275,7 +290,7 @@ export class BtSppProbe {
     return s.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   }
 
-  private static connect(addr: string, uuid: string): Promise<number> {
+  private static connect(addr: string, uuid: string, secure: boolean): Promise<number> {
     return new Promise<number>((resolve: (v: number) => void) => {
       let settled = false;
       const timer = setTimeout(() => {
@@ -287,7 +302,7 @@ export class BtSppProbe {
       try {
         const options: btSocket.SppOptions = {
           uuid: uuid,
-          secure: true,
+          secure: secure,
           type: btSocket.SppType.SPP_RFCOMM
         };
         btSocket.sppConnect(addr, options, (err: BusinessError, socketId: number) => {
@@ -403,4 +418,7 @@ export class BtSppProbe {
 interface ProbeArg {
   frame: string;
   uuidKey: string;
+  secure: boolean;
+  /** 连接前先写的 0x2005 值：0 不写，0x02 经典，0x03 经典+WiFi。 */
+  establish: number;
 }
