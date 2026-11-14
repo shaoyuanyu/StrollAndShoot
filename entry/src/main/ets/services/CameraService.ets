@@ -1,7 +1,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { image } from '@kit.ImageKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
-import { taskpool } from '@kit.ArkTS';
+import { taskpool, util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
@@ -125,6 +125,14 @@ const WIRELESS_BG_GRACE_MS = 12000;
  * 位置注入跟着这一拍走（官方 SnapBridge 同类实现 15~30 秒，45 秒够用）。
  */
 const BLE_KEEPALIVE_MS = 45000;
+/**
+ * 相机电量 / 唤醒状态的刷新间隔（1.69.0）。
+ *
+ * 这两个值变化很慢，没必要跟着 45 秒的保活走：每 5 分钟顺手读两笔，既能让
+ * 页面上的电量不至于停在连接那一刻，也不会给相机加出可观的 GATT 流量。
+ * 固件版本更没必要重读，每次连接只读一次。
+ */
+const BLE_INFO_REFRESH_MS = 300000;
 /**
  * 直连「缓存热点」的等上链时限（1.68.0）。
  *
@@ -417,6 +425,16 @@ export class CameraService {
   @Trace bleSerial: string = '';
   /** 已配对相机的广播名（UI 展示用，比序列号好认）。 */
   @Trace bleCameraName: string = '';
+  /**
+   * 相机侧只读状态（1.69.0）。
+   *
+   * 都是蓝牙待机时从 GATT 直接读的，不依赖 PTP：电量 `0x2A19`、唤醒
+   * `0x2001`、固件 `0x180A/0x2A26`。`-1` / 空串 = 还没读到或读失败，
+   * 页面显示「未知」，不要用上一台相机的旧值顶替。
+   */
+  @Trace bleBatteryPercent: number = -1;
+  @Trace blePowerState: number = -1;
+  @Trace bleFirmware: string = '';
   /** 断链后正在自动重连（相机会休眠，链路断了自己爬起来）。 */
   @Trace bleReconnecting: boolean = false;
   /**
@@ -429,6 +447,15 @@ export class CameraService {
   private bleScanner: BleScanner | null = null;
   private bleLink: BleCameraLink | null = null;
   private bleScanTimer: number = -1;
+  /** 相机只读状态的刷新定时器（-1 = 没在跑）。 */
+  private bleInfoTimer: number = -1;
+  private bleInfoBusy: boolean = false;
+  /** 固件版本每次连接只读一次（读空也算读过，免得每 5 分钟重试）。 */
+  private bleInfoFirmwareTried: boolean = false;
+  /** 每种读失败只记一次日志，别每 5 分钟刷一遍同样的错误。 */
+  private bleInfoLoggedBattery: boolean = false;
+  private bleInfoLoggedPower: boolean = false;
+  private bleInfoLoggedFirmware: boolean = false;
   /**
    * 当前这轮 BLE 扫描属于哪个链路代次；-1 表示没有扫描。
    *
@@ -2255,6 +2282,8 @@ export class CameraService {
     this.bleConnected = false;
     this.bleAsleep = false;
     this.bleServices = [];
+    // 新一轮连接 = 可能是另一台相机：上一台的电量/固件不能留着。
+    this.resetBleInfo();
     try {
       if (this.bleLink === null) {
         this.bleLink = new BleCameraLink(
@@ -2264,6 +2293,7 @@ export class CameraService {
             if (!connected) {
               this.bleServices = [];
               this.bleSerial = '';
+              this.stopBleInfoWatch();
               // **不要在这里停位置注入**：相机半睡时链路十几秒就断一次，一断就
               // 退订的话，连续定位永远等不到第一拍（1.66.18 真机日志：整段会话
               // 只有一次 0x2007，之后每次重连都从零开始）。注入的生命周期跟着
@@ -2367,6 +2397,7 @@ export class CameraService {
         SavedCameraStore.getInstance().rememberActive();
         this.log.add(`BLE 已自动重连（序列号 ${serial}）`);
         this.startBleKeepalive(0);
+        this.startBleInfoWatch(1500);
         // 重连只恢复待机（校时/GPS）。**不要**在这里补写 0x2005：
         // 相机刚从 Wi-Fi 回落才连得上，再推一次就又把它踢走（乒乓）。
       };
@@ -2385,6 +2416,9 @@ export class CameraService {
       // 首笔要等 2.5 秒（ZPill 的 writeGate）：相机刚收口时注入会话还没醒，
       // 立刻写会被拒收甚至被踢链。
       this.startBleKeepalive(2500);
+      // 相机侧只读状态（电量/唤醒/固件）：等握手收口、保活首写之后再读，
+      // 否则第一笔就撞在相机还没醒的 GATT 上。
+      this.startBleInfoWatch(3000);
       if (canHandover) {
         // 已经把相机推到 Wi-Fi 模式：按当前模式接着收口。
         this.afterHandover(epoch).catch((err: Error) => {
@@ -2492,6 +2526,111 @@ export class CameraService {
     this.log.add(time.value === null
       ? `LSS 诊断：0x2006 读失败（${time.error}）`
       : `LSS 诊断：相机时钟 ${BleTimePayload.describe(time.value)}`);
+  }
+
+  /**
+   * 开始读相机只读状态（电量 / 唤醒 / 固件，1.69.0）。
+   *
+   * 只在「蓝牙待机已配对」时调用：连接成功后延迟一点（相机刚收口时 GATT
+   * 通道还没完全醒），自动重连回来时也可以更快读。读失败不影响对时/注入。
+   */
+  private startBleInfoWatch(delayMs: number): void {
+    this.stopBleInfoWatch();
+    this.bleInfoTimer = setTimeout(() => {
+      this.bleInfoTimer = -1;
+      this.refreshBleInfo().catch((err: Error) => {
+        this.log.add(`BLE 状态读取异常: ${err.message}`);
+      });
+    }, delayMs);
+  }
+
+  private stopBleInfoWatch(): void {
+    if (this.bleInfoTimer >= 0) {
+      clearTimeout(this.bleInfoTimer);
+      this.bleInfoTimer = -1;
+    }
+  }
+
+  /** 换相机 / 断开时把上一台相机的状态清掉，别拿旧值顶替。 */
+  private resetBleInfo(): void {
+    this.stopBleInfoWatch();
+    this.bleBatteryPercent = -1;
+    this.blePowerState = -1;
+    this.bleFirmware = '';
+    this.bleInfoFirmwareTried = false;
+    this.bleInfoLoggedBattery = false;
+    this.bleInfoLoggedPower = false;
+    this.bleInfoLoggedFirmware = false;
+  }
+
+  /**
+   * 读一组相机只读状态。
+   *
+   * 三笔读之间必须留间隔：官方错误码 2900099 的已知成因就是「上一笔非监听类
+   * BLE 接口还没回调完就发下一笔」。失败只记一次日志（同样的错误每 5 分钟
+   * 刷一行没有意义），下次刷新还会再试。
+   */
+  private async refreshBleInfo(): Promise<void> {
+    const link = this.bleLink;
+    if (link === null || !this.bleConnected) return;
+    if (this.bleInfoBusy) return;
+    this.bleInfoBusy = true;
+    try {
+      const battery = await link.readBattery();
+      if (battery.value !== null && battery.value.length > 0) {
+        const pct = battery.value[0];
+        if (pct <= 100) {
+          this.bleBatteryPercent = pct;
+        } else if (!this.bleInfoLoggedBattery) {
+          this.bleInfoLoggedBattery = true;
+          this.log.add(`BLE 电量超出范围（${pct}），按未知处理`);
+        }
+      } else if (!this.bleInfoLoggedBattery) {
+        this.bleInfoLoggedBattery = true;
+        this.log.add(`BLE 电量读取失败: ${battery.error}`);
+      }
+
+      await this.bleInfoSleep(150);
+      const power = await link.readPower();
+      if (power.value !== null && power.value.length > 0) {
+        this.blePowerState = power.value[0];
+      } else if (!this.bleInfoLoggedPower) {
+        this.bleInfoLoggedPower = true;
+        this.log.add(`BLE 唤醒状态读取失败: ${power.error}`);
+      }
+
+      // 固件版本不会变：每次连接只读一次；读空也算读过，免得每 5 分钟重试。
+      if (this.bleFirmware === '' && !this.bleInfoFirmwareTried) {
+        this.bleInfoFirmwareTried = true;
+        await this.bleInfoSleep(150);
+        const fw = await link.readFirmware();
+        if (fw.value !== null) {
+          const text = util.TextDecoder.create('utf-8')
+            .decodeToString(fw.value).replace(/\0/g, '').trim();
+          if (text !== '') {
+            this.bleFirmware = text;
+            this.log.add(`BLE 固件版本: ${text}`);
+          } else if (!this.bleInfoLoggedFirmware) {
+            this.bleInfoLoggedFirmware = true;
+            this.log.add('BLE 固件版本为空');
+          }
+        } else if (!this.bleInfoLoggedFirmware) {
+          this.bleInfoLoggedFirmware = true;
+          this.log.add(`BLE 固件版本读取失败: ${fw.error}`);
+        }
+      }
+    } finally {
+      this.bleInfoBusy = false;
+      if (this.bleConnected) {
+        this.startBleInfoWatch(BLE_INFO_REFRESH_MS);
+      }
+    }
+  }
+
+  private bleInfoSleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void) => {
+      setTimeout(resolve, ms);
+    });
   }
 
   /** 写完一帧位置后读回 0x2007：全 0 = 相机没记下来，跟我们一致 = 存住了。 */
@@ -2630,6 +2769,7 @@ export class CameraService {
     this.bleServices = [];
     this.bleHint = '';
     this.bleSerial = '';
+    this.resetBleInfo();
     this.lastScanError = '';
     this.wirelessFailed = '';
     this.wifiHint = '';
@@ -2697,6 +2837,7 @@ export class CameraService {
     this.bleHint = '';
     this.bleServices = [];
     this.bleSerial = '';
+    this.resetBleInfo();
     this.syncBackgroundTask();
     if (this.bleLink === null) return;
     try {
@@ -2725,6 +2866,7 @@ export class CameraService {
     this.bleAsleep = false;
     this.bleServices = [];
     this.bleSerial = '';
+    this.resetBleInfo();
     this.stopBleGeoFeed();
     // 用户主动断开：后台不必再为蓝牙保活。
     this.syncBackgroundTask();
@@ -2861,6 +3003,7 @@ export class CameraService {
     this.wirelessFailed = '';
     this.lastScanError = '';
     this.bleSerial = '';
+    this.resetBleInfo();
     this.bleCameraName = record.cameraName;
     this.cameraModel = record.modelKey;
     this.wifiHost = '';
@@ -2882,6 +3025,7 @@ export class CameraService {
     this.wirelessFailed = '';
     this.lastScanError = '';
     this.bleSerial = '';
+    this.resetBleInfo();
     this.bleCameraName = '';
     this.cameraModel = '';
     this.wifiHost = '';

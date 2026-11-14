@@ -91,6 +91,8 @@ const CCCD_UUID = '00002902-0000-1000-8000-00805f9b34fb';
 export const NIKON_CHAR_CONTROL = '00002008-3dd4-4255-8d62-6dc7b9bd5561';
 /** 电池：连接后读一次做「唤醒 poke」，相机半睡时不回 stage2。 */
 export const NIKON_CHAR_BATTERY = '00002a19-3dd4-4255-8d62-6dc7b9bd5561';
+/** 电源/唤醒状态（1B 枚举，官方 `IBlePowerControl`）。 */
+export const NIKON_CHAR_POWER = '00002001-3dd4-4255-8d62-6dc7b9bd5561';
 /** 控制器名（32B ASCII 零填充，配对收口用）。 */
 export const NIKON_CHAR_NAME = '00002002-3dd4-4255-8d62-6dc7b9bd5561';
 /** 相机 Wi-Fi 凭据（只读 97B，配对完成后才非空）。 */
@@ -101,6 +103,15 @@ export const NIKON_CHAR_ESTABLISH = '00002005-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_CHAR_TIME = '00002006-3dd4-4255-8d62-6dc7b9bd5561';
 /** 位置（41B）。 */
 export const NIKON_CHAR_GEO = '00002007-3dd4-4255-8d62-6dc7b9bd5561';
+/**
+ * 标准 Device Information 服务（0x180A）。
+ *
+ * 相机的固件版本在 `0x2A26` 上，**不属于 DE00 族**：读它必须把服务 UUID
+ * 一起换掉，否则 `readCharacteristicValue` 会拿 de00 去找这个特征而报错。
+ */
+export const DEVICE_INFO_SERVICE = '0000180a-0000-1000-8000-00805f9b34fb';
+/** 固件版本（ASCII 字符串，0x180A 服务下）。 */
+export const DEVICE_CHAR_FIRMWARE = '00002a26-0000-1000-8000-00805f9b34fb';
 
 function cccdDescriptor(charUuid: string, indicate: boolean): ble.BLEDescriptor {
   const value = new Uint8Array(2);
@@ -752,8 +763,14 @@ export class BleCameraLink {
     });
   }
 
-  /** 读一个特征值。 */
-  async readCharacteristic(charUuid: string): Promise<Uint8Array | null> {
+  /**
+   * 读一个特征值。
+   *
+   * @param serviceUuid 特征所属服务。默认尼康 DE00 族；标准服务（如 0x180A
+   *   固件版本）必须显式传，否则系统会拿 de00 去找这个特征并直接报错。
+   */
+  async readCharacteristic(charUuid: string,
+                           serviceUuid: string = NIKON_BLE_SERVICE): Promise<Uint8Array | null> {
     const gatt = this.gatt;
     if (gatt === null) return null;
     if (!this.servicesReady) {
@@ -761,7 +778,7 @@ export class BleCameraLink {
       return null;
     }
     const char: ble.BLECharacteristic = {
-      serviceUuid: NIKON_BLE_SERVICE,
+      serviceUuid: serviceUuid,
       characteristicUuid: charUuid,
       characteristicValue: new Uint8Array(0).buffer as ArrayBuffer,
       descriptors: []
@@ -959,11 +976,12 @@ export class BleCameraLink {
    * 返回 `value === null` 时 `error` 里是真实的错误码：这样日志能分清「相机不给读」
    * 和「服务表没就绪」——1.66.17 只打了一句「读不到」，没法判断原因。
    */
-  async readWithReason(charUuid: string): Promise<BleReadResult> {
+  async readWithReason(charUuid: string,
+                       serviceUuid: string = NIKON_BLE_SERVICE): Promise<BleReadResult> {
     if (this.gatt === null) return { value: null, error: 'BLE 未连接' };
     if (!this.servicesReady) return { value: null, error: '服务表未就绪' };
     try {
-      const value = await this.readCharacteristic(charUuid);
+      const value = await this.readCharacteristic(charUuid, serviceUuid);
       return { value: value, error: value === null ? '空值' : '' };
     } catch (err) {
       return { value: null, error: (err as Error).message };
@@ -983,6 +1001,21 @@ export class BleCameraLink {
   /** 读回序列号（0x200b）：已知可读，用来证明「读这条通道本身是通的」。 */
   readSerial(): Promise<BleReadResult> {
     return this.readWithReason('0000200b-3dd4-4255-8d62-6dc7b9bd5561');
+  }
+
+  /** 相机电量（0x2A19，1B 百分比）。 */
+  readBattery(): Promise<BleReadResult> {
+    return this.readWithReason(NIKON_CHAR_BATTERY);
+  }
+
+  /** 相机电源/唤醒状态（0x2001，1B 枚举；`BlePowerControlData$Types`）。 */
+  readPower(): Promise<BleReadResult> {
+    return this.readWithReason(NIKON_CHAR_POWER);
+  }
+
+  /** 相机固件版本（标准 0x180A 服务下的 0x2A26，ASCII）。 */
+  readFirmware(): Promise<BleReadResult> {
+    return this.readWithReason(DEVICE_CHAR_FIRMWARE, DEVICE_INFO_SERVICE);
   }
 
   /**

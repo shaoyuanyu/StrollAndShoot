@@ -393,6 +393,30 @@
       "value": "Firmware"
     },
     {
+      "name": "camera_info_battery",
+      "value": "Battery"
+    },
+    {
+      "name": "camera_info_power",
+      "value": "Wake State"
+    },
+    {
+      "name": "camera_power_valid_wake",
+      "value": "Awake"
+    },
+    {
+      "name": "camera_power_wake_wait",
+      "value": "Waking Up"
+    },
+    {
+      "name": "camera_power_invalid_wake",
+      "value": "Asleep"
+    },
+    {
+      "name": "camera_power_stop",
+      "value": "Stopped"
+    },
+    {
       "name": "camera_info_usb_id",
       "value": "USB ID"
     },
@@ -1491,6 +1515,10 @@
     {
       "name": "camera_group_actions",
       "value": "Actions"
+    },
+    {
+      "name": "camera_group_ble_status",
+      "value": "Camera Status"
     },
     {
       "name": "settings_mock_model",

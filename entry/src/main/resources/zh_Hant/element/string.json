@@ -393,6 +393,30 @@
       "value": "韌體版本"
     },
     {
+      "name": "camera_info_battery",
+      "value": "電量"
+    },
+    {
+      "name": "camera_info_power",
+      "value": "喚醒狀態"
+    },
+    {
+      "name": "camera_power_valid_wake",
+      "value": "已喚醒"
+    },
+    {
+      "name": "camera_power_wake_wait",
+      "value": "喚醒中"
+    },
+    {
+      "name": "camera_power_invalid_wake",
+      "value": "未喚醒"
+    },
+    {
+      "name": "camera_power_stop",
+      "value": "已停止"
+    },
+    {
       "name": "camera_info_usb_id",
       "value": "USB 識別碼"
     },
@@ -1491,6 +1515,10 @@
     {
       "name": "camera_group_actions",
       "value": "操作"
+    },
+    {
+      "name": "camera_group_ble_status",
+      "value": "相機狀態"
     },
     {
       "name": "settings_mock_model",

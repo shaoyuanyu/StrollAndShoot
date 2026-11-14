@@ -501,6 +501,38 @@ export struct CameraPage {
   }
 
   /**
+   * 蓝牙待机时是否显示「相机状态」这组只读信息（1.69.0）。
+   *
+   * 只在这一刻显示：待机链路在、配对落定、没有正在进行的事。临时浏览
+   * （`bleBrowsing()`）时相机的设备信息由 PTP 那一组行负责，不重复。
+   */
+  private bleInfoVisible(): boolean {
+    return this.svc.linkMode === CameraLinkMode.BLE
+      && this.blePaired() && !this.bleBrowsing() && !this.inProgress();
+  }
+
+  private bleBatteryText(): ResourceStr {
+    return this.svc.bleBatteryPercent >= 0
+      ? `${this.svc.bleBatteryPercent}%`
+      : $r('app.string.common_unknown');
+  }
+
+  private blePowerText(): ResourceStr {
+    const state = this.svc.blePowerState;
+    if (state === 3) return $r('app.string.camera_power_valid_wake');
+    if (state === 1) return $r('app.string.camera_power_wake_wait');
+    if (state === 2) return $r('app.string.camera_power_invalid_wake');
+    if (state === 0) return $r('app.string.camera_power_stop');
+    return $r('app.string.common_unknown');
+  }
+
+  private bleFirmwareText(): ResourceStr {
+    return this.svc.bleFirmware !== ''
+      ? this.svc.bleFirmware
+      : $r('app.string.common_unknown');
+  }
+
+  /**
    * 当前模式是否已经连上。
    *
    * 三种链路的「已连接」不是同一个字段：USB 是 PTP 会话（`connected` 且非无线），
@@ -2069,9 +2101,13 @@ export struct CameraPage {
         CameraActionRow({
           label: $r('app.string.camera_ble_browse_photos'),
           subtitle: $r('app.string.camera_ble_browse_photos_desc'),
-          last: true,
+          last: !this.bleInfoVisible(),
           onTap: () => { this.onBrowsePhotos(); }
         })
+      }
+      // 相机只读状态：电量 / 唤醒 / 固件，全部来自 GATT，不占 Wi-Fi（1.69.0）。
+      if (this.bleInfoVisible()) {
+        this.BleStatusBlock()
       }
       // 首配被相机拒绝时，这里给一句能直接照做的说明（1.66.1）：
       // 相机端还记着这台手机，得先去相机菜单删掉本机。
@@ -2090,6 +2126,34 @@ export struct CameraPage {
     } else if (this.svc.linkMode === CameraLinkMode.STA) {
       this.StaControls()
     }
+  }
+
+  /**
+   * 蓝牙待机的相机只读状态（1.69.0）。
+   *
+   * 这三行只在 GATT 待机链路上有，不依赖 PTP、不占手机 Wi-Fi：电量读
+   * `0x2A19`、唤醒状态读 `0x2001`、固件版本读标准 `0x180A/0x2A26`。
+   * 读不到就写「未知」，不拿上一台相机的值顶替。
+   */
+  @Builder
+  BleStatusBlock() {
+    Column() {
+      this.GroupTitle($r('app.string.camera_group_ble_status'))
+      CameraInfoRow({
+        label: $r('app.string.camera_info_battery'),
+        value: this.bleBatteryText()
+      })
+      CameraInfoRow({
+        label: $r('app.string.camera_info_power'),
+        value: this.blePowerText()
+      })
+      CameraInfoRow({
+        label: $r('app.string.camera_info_firmware'),
+        value: this.bleFirmwareText(),
+        last: true
+      })
+    }
+    .width('100%')
   }
 
   /**
