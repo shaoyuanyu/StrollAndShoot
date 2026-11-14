@@ -737,6 +737,24 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 1
 
 探针不写持久化、不改连接状态，跑完关 socket；release 包没有入口。
 
+**2026-11-14 真机结果（Z50II）**
+
+- 经典地址找到了：`E4:D0:64:4C:28:33`（名字 `Z50_2_8079350`），说明手机与相机
+  的经典绑定还在；
+- `sppConnect`（标准 SPP `1101`、尼康 `de00`）都失败：`2900099 Operation failed`。
+  BLE 连着与断开各试一次，结果一样；
+- 反向 `sppListen`（`1101`）能起来（server=0/1），但 30 秒内没有客户端连进来；
+  先写 `0x2005=0x02`（BTC 位）再 listen 也没有客户端进来。
+
+对照 COOLPIX A1000 的实测记录（lilting.ch，2026-04）：A1000 的 SDP 里确实有
+`SPP Service / channel 1 / 0x1101`，macOS 上会出现 `/dev/tty.A1000_...`；
+**但经 RFCOMM 发 PTP 相机不响应**，那篇的结论也是「卡在这里」。同一篇还记录：
+经典绑定完成后相机会主动发起 RFCOMM，主机没有 SPP 服务端时相机会一直等
+（甚至冻结）——所以相机可能是 RFCOMM 客户端，SnapBridge 在手机侧跑服务端。
+
+Z50II 上目前既连不进去、也等不到它连出来；下一步要么找 SnapBridge 里实际用的
+UUID / 触发时序，要么抓一次官方 App 与相机之间的 HCI 日志。
+
 [MXWF0/SnapBridge-Enhanced]: https://github.com/MXWF0/SnapBridge-Enhanced
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
 - **冷启动那一次连接不算用户操作**（1.66.13）：`autoConnectBle(silent, quiet)` 的第二个

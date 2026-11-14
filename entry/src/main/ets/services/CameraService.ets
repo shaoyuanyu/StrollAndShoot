@@ -3080,20 +3080,44 @@ export class CameraService {
   }
 
   /**
+   * 调试探针专用：直接写 `0x2005`（连接建立）。
+   *
+   * `0x01` = 唤起相机无线（App 正常路径用），`0x02` = 经典蓝牙、`0x03` = 两者；
+   * 官方 SnapBridge 建立 BTC 通道时会写 0x02/0x03（COOLPIX A1000 实测口径）。
+   * 只有 `debug/BtSppProbe` 会调它，release 里没有调用点。
+   */
+  async writeBleEstablishmentForProbe(value: number): Promise<boolean> {
+    if (this.bleLink === null) return false;
+    try {
+      await this.bleLink.writeEstablishment(value);
+      this.log.add(`[SPP] 0x2005=0x${value.toString(16)} 已写`);
+      return true;
+    } catch (err) {
+      this.log.add(`[SPP] 0x2005=0x${value.toString(16)} 写入失败: ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
    * 当前这台相机的序列号（热点凭据按它对齐）。
    *
    * PTP 读到的最准；其次 BLE 身份；最后从已配对记录里取。都取不到就返回空串，
    * 宁可不存凭据，也不写一条认不出的记录。
    */
   private activeCameraSerial(): string {
+    // PTP 读到的最准（浏览会话建立后才有）。
     if (this.deviceSerialNumber !== '') return this.deviceSerialNumber;
-    if (this.bleSerial !== '') return this.bleSerial;
-    const id = BleIdentityStore.getInstance();
-    if (id.serial !== '') return id.serial;
+    // **待机时靠广播名**：`Z50_2_8079350` 的尾段就是展示序列号，同步保存热点
+    // 凭据时正好用它。不能用 `bleSerial`——那是 stage4 的**身份序列号**
+    // （本项目实测 1246090），和展示序列号 8079350 不是同一个数，拿它当 key
+    // 会「存进去却查不到」。
+    const fromName = cameraSerialFromBleName(this.bleCameraName);
+    if (fromName !== '') return fromName;
     const rec = SavedCameraStore.getInstance().current();
-    if (rec === null) return '';
-    if (rec.serial !== '') return rec.serial;
-    return cameraSerialFromBleName(rec.cameraName);
+    if (rec !== null && rec.serial !== '') return rec.serial;
+    // 最后才退到身份序列号（仓库还没有记录时）。
+    if (this.bleSerial !== '') return this.bleSerial;
+    return BleIdentityStore.getInstance().serial;
   }
 
   /**
@@ -3112,7 +3136,7 @@ export class CameraService {
     try {
       WifiApCredStore.getInstance().save(serial, creds.ssid, creds.password,
         creds.security, host);
-      this.log.add(`热点凭据已保存（${creds.ssid} → ${host}）`);
+      this.log.add(`热点凭据已保存（${creds.ssid} → ${host}，相机 ${serial}）`);
     } catch (err) {
       this.log.add(`保存热点凭据失败: ${(err as Error).message}`);
     }

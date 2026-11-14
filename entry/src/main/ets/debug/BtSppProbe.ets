@@ -61,6 +61,10 @@ export class BtSppProbe {
     const svc = CameraService.getInstance();
     BtSppProbe.log(`当前 BLE: connected=${svc.bleConnected} paired=${svc.bleSerial !== ''}`
       + ` mode=${svc.linkMode}`);
+    if (arg.trim().startsWith('listen')) {
+      await BtSppProbe.runListen(arg.trim());
+      return;
+    }
     const addr = BtSppProbe.findCamera();
     if (addr === '') {
       BtSppProbe.log('没找到相机的经典地址：先配对，且相机要醒着');
@@ -96,6 +100,121 @@ export class BtSppProbe {
       }
       BtSppProbe.log('结束');
     }
+  }
+
+  /**
+   * 反过来等相机连进来（SnapBridge 在手机侧跑 SPP 服务端）。
+   *
+   * 依据：COOLPIX A1000 的实测记录里，经典绑定完成后相机会主动发起 RFCOMM，
+   * 主机没有 SPP 服务端时相机会一直等（甚至冻结）——说明相机是 RFCOMM 客户端，
+   * 手机（SnapBridge）应该 `sppListen` 等它连。参数 `listen-btc` / `listen-3`
+   * 会先写 `0x2005 = 0x02 / 0x03`（官方建 BTC 通道时用的位）再开服务端。
+   */
+  private static async runListen(arg: string): Promise<void> {
+    let establish = 0;
+    if (arg.includes('btc')) establish = 0x02;
+    if (arg.includes('3')) establish = 0x03;
+    if (establish !== 0) {
+      const ok = await CameraService.getInstance().writeBleEstablishmentForProbe(establish);
+      BtSppProbe.log(`触发 0x2005=0x${establish.toString(16)} ${ok ? '已写' : '没写成功'}`);
+      await BtSppProbe.sleep(1000);
+    }
+    const serverId = await BtSppProbe.startServer(BtSppProbe.UUID_STANDARD);
+    if (serverId < 0) return;
+    try {
+      const clientId = await BtSppProbe.accept(serverId, 30000);
+      if (clientId < 0) return;
+      try {
+        await BtSppProbe.writeAll(clientId, rawPtp.buildOpenSession(1));
+        await BtSppProbe.sleep(400);
+        await BtSppProbe.writeAll(clientId, rawPtp.buildGetDeviceInfo());
+        await BtSppProbe.readFor(clientId, 6000);
+      } finally {
+        try {
+          btSocket.sppCloseClientSocket(clientId);
+          BtSppProbe.log('客户端 socket 已关闭');
+        } catch (err) {
+          BtSppProbe.log(`关客户端 socket 失败: ${(err as BusinessError).message}`);
+        }
+      }
+    } finally {
+      try {
+        btSocket.sppCloseServerSocket(serverId);
+        BtSppProbe.log('server 已关闭');
+      } catch (err) {
+        BtSppProbe.log(`关 server 失败: ${(err as BusinessError).message}`);
+      }
+      BtSppProbe.log('结束');
+    }
+  }
+
+  private static startServer(uuid: string): Promise<number> {
+    return new Promise<number>((resolve: (v: number) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        BtSppProbe.log('sppListen 超时（8s）');
+        resolve(-1);
+      }, 8000);
+      try {
+        const options: btSocket.SppOptions = {
+          uuid: uuid,
+          secure: true,
+          type: btSocket.SppType.SPP_RFCOMM
+        };
+        btSocket.sppListen('StrollAndShoot', options, (err: BusinessError, serverId: number) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (err) {
+            BtSppProbe.log(`sppListen 失败 code=${err.code} msg=${err.message}`);
+            resolve(-1);
+            return;
+          }
+          BtSppProbe.log(`sppListen 成功 server=${serverId}（UUID ${uuid}），等相机连进来`);
+          resolve(serverId);
+        });
+      } catch (err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        BtSppProbe.log(`sppListen 异常: ${(err as BusinessError).message}`);
+        resolve(-1);
+      }
+    });
+  }
+
+  private static accept(serverId: number, ms: number): Promise<number> {
+    return new Promise<number>((resolve: (v: number) => void) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        BtSppProbe.log(`sppAccept 超时（${ms / 1000}s）：没有客户端连进来`);
+        resolve(-1);
+      }, ms);
+      try {
+        btSocket.sppAccept(serverId, (err: BusinessError, clientId: number) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (err) {
+            BtSppProbe.log(`sppAccept 失败 code=${err.code} msg=${err.message}`);
+            resolve(-1);
+            return;
+          }
+          BtSppProbe.log(`相机连进来了 client=${clientId}`);
+          resolve(clientId);
+        });
+      } catch (err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        BtSppProbe.log(`sppAccept 异常: ${(err as BusinessError).message}`);
+        resolve(-1);
+      }
+    });
   }
 
   private static parseArg(arg: string): ProbeArg {
