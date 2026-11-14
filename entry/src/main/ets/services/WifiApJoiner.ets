@@ -28,6 +28,20 @@ export interface ApJoinOutcome {
   reason: string;
 }
 
+/**
+ * 加入热点的可选参数（1.68.0）。
+ *
+ * 「直连缓存热点」是一个**可能失败**的尝试（相机也许已经退出 Wi-Fi），
+ * 所以那条路要缩短时限、并且不要弹系统确认框——用户只是点了一下浏览，
+ * 不该被一个系统弹窗打断，失败就安静地改走 BLE 唤醒。
+ */
+export interface ApJoinOptions {
+  /** 等上链的总时限（毫秒）。默认 30 秒（相机热点从零起）。 */
+  timeoutMs?: number;
+  /** 静默连接没上链时是否升级成系统确认弹窗。默认 true。 */
+  escalate?: boolean;
+}
+
 const POLL_MS = 1000;
 /** 上链总限：相机热点要起来、关联、DHCP，给足 30 秒。 */
 const JOIN_TIMEOUT_MS = 30000;
@@ -83,7 +97,8 @@ export class WifiApJoiner {
   }
 
   /** 加入相机热点。 */
-  async join(ssid: string, password: string, security: number): Promise<ApJoinOutcome> {
+  async join(ssid: string, password: string, security: number,
+             options?: ApJoinOptions): Promise<ApJoinOutcome> {
     this.cancelled = false;
     if (ssid === '') {
       return { ok: false, host: '', reason: '相机凭据里没有 SSID（0x2004 没解出来）' };
@@ -124,12 +139,15 @@ export class WifiApJoiner {
     } catch (err) {
       this.onLog(`connectToCandidateConfig 失败: ${(err as BusinessError).message}`);
     }
-    return await this.pollJoin(ssid, networkId);
+    const timeoutMs = options?.timeoutMs ?? JOIN_TIMEOUT_MS;
+    const escalate = options?.escalate ?? true;
+    return await this.pollJoin(ssid, networkId, timeoutMs, escalate);
   }
 
-  /** 轮询等上链；6 秒没上链升级成系统确认弹窗。 */
-  private async pollJoin(ssid: string, networkId: number): Promise<ApJoinOutcome> {
-    const deadline = Date.now() + JOIN_TIMEOUT_MS;
+  /** 轮询等上链；默认 6 秒没上链升级成系统确认弹窗（直连缓存时可以关掉）。 */
+  private async pollJoin(ssid: string, networkId: number, timeoutMs: number,
+                         escalate: boolean): Promise<ApJoinOutcome> {
+    const deadline = Date.now() + timeoutMs;
     const escalateAt = Date.now() + ESCALATE_AFTER_MS;
     let escalated = false;
     while (Date.now() < deadline) {
@@ -141,7 +159,7 @@ export class WifiApJoiner {
         this.onLog(`已连上相机热点「${ssid}」，候选地址 ${hosts.join(' / ')}`);
         return { ok: true, host: hosts.length > 0 ? hosts[0] : '', reason: '' };
       }
-      if (!escalated && Date.now() >= escalateAt) {
+      if (escalate && !escalated && Date.now() >= escalateAt) {
         escalated = true;
         this.onLog('6 秒未上链，升级为系统确认');
         wifiManager.connectToCandidateConfigWithUserAction(networkId).then(() => {

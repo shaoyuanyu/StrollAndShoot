@@ -2060,9 +2060,11 @@ export struct CameraPage {
       // 待机连着、或断着但配对过：给一条去照片的入口（1.67.0）。
       // 浏览会话已经在跑时不再显示——那时相机的操作行已经由 `connected` 那段
       // 渲染出来了，同一条入口出现两次会让人猜点哪个。
-      // 进行中（搜索 / 连接 / 交接）时也收起：交接的分步进度已经由状态头在说，
+      // 进行中（搜索 / 连接 / 交接）时收起：交接的分步进度已经由状态头在说，
       // 同一件事再挂一行置灰的入口会让人以为还要再点一次。
-      if (!this.bleBrowsing() && !this.svc.bleRecovering && !this.inProgress()
+      // 「等相机回蓝牙」期间**保留**入口：1.68.0 起这条路可以直接用缓存凭据
+      // 连回相机热点，不用等相机自己回落。
+      if (!this.bleBrowsing() && !this.inProgress()
         && (this.blePaired() || (this.bleKnown() && this.phase() === CameraPhase.Idle))) {
         CameraActionRow({
           label: $r('app.string.camera_ble_browse_photos'),

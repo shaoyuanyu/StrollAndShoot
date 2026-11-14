@@ -997,9 +997,10 @@ Row 用 `VerticalAlign.Center`：只有 `headline()` 时，点、文字、按钮
 「唤醒相机无线 → 加入相机热点 → 连接照相机 → 读目录」，然后照常浏览与下载。
 
 - **入口什么时候在**：`blePaired()`（待机连着）或 `bleKnown() && 空闲`（配对过、当前
-  没连上）；`bleRecovering`（正在等相机回落蓝牙）与浏览会话进行中都不渲染——后者的
-  设备信息 / 扫描操作行已经由 `svc.connected` 那段接管，同一条入口出现两次会让人猜点
-  哪个。交接进行中由 `inProgress()` 置灰。
+  没连上）；`bleRecovering` 期间**也保留**（1.68.0 起可以用缓存凭据直连，不必等
+  回落）。只有浏览会话进行中不渲染——那时的设备信息 / 扫描操作行已经由
+  `svc.connected` 那段接管，同一条入口出现两次会让人猜点哪个。交接进行中由
+  `inProgress()` 收起（分步进度由状态头在说）。
 - **状态头**：交接阶段走 `CameraPhase.Connecting`，标题「正在切换到相机热点」、第二行
   是分步进度（`wirelessStage`）。这一步 `linked()` 在交接刚开始还是真的（BLE 配对落定），
   所以 `phase()` 里要先把 `apJoining / wifiAutoConnecting` 排到 `linked()` 前面判，
@@ -1010,9 +1011,11 @@ Row 用 `VerticalAlign.Center`：只有 `headline()` 时，点、文字、按钮
 - **断开**：`requestDisconnect()` 先看 `svc.wireless`——蓝牙模式的浏览会话是 Wi-Fi 的，
   必须走 `onDisconnect()`（`disconnect()` → `exitWirelessToBle()` 离开热点）才会把手机
   从没有外网的热点上撤下来；走 `disconnectBle()` 会留在热点上。
-- **回来**：断开后状态头回到「已配对 · 未连接」，第二行「相机正在切回蓝牙，约需 40 秒」
-  （`bleRecovering`，由 `startBleRecoveryScan()` 置位，连回来自动清）。相机实测约 40 秒
-  回落，每 6 秒扫一次、最多 3 分钟；这段时间入口不出现，避免用户点了又连不上。
+- **回来**：断开后状态头回到「已配对 · 未连接」，第二行写「相机还在 Wi-Fi 模式，
+  蓝牙会自动接回；也可以直接再次浏览」（`bleRecovering`，由 `startBleRecoveryScan()`
+  置位，连回来自动清）。1.68.0 把等 BLE 的窗口从 3 分钟缩到 90 秒（前 30 秒
+  2.5 秒一扫），而且**等待期间浏览入口保留**——点一下走缓存凭据直连热点，
+  不用等相机回落。
 - **失败**：交接失败仍写 `wirelessFailed`，但蓝牙模式的状态头不认它，所以在
   `ModeControls` 里单独渲染一行 12fp 红字（与 `BleHintLine` 同一档字号）。
 - **不自动切画廊**：分步进度和失败原因都在相机页，跳走就看不见；连上后状态头有照片数，

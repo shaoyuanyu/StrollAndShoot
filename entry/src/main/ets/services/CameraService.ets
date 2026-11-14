@@ -24,6 +24,8 @@ import { BleIdentityStore } from './BleIdentityStore';
 import { SavedCameraStore, type SavedCamera } from './SavedCameraStore';
 import { WifiLinkStore } from './WifiLinkStore';
 import { WifiApJoiner, type ApJoinOutcome } from './WifiApJoiner';
+import { WifiApCredStore } from './WifiApCredStore';
+import { type WifiCredentials } from './NikonWifiCredentials';
 import { CameraLinkMode, DEFAULT_LINK_MODE, isWifiMode } from '../model/CameraLinkMode';
 import { CameraLinkModeStore } from '../model/CameraLinkModeStore';
 import { CameraModelStore } from '../model/CameraModelStore';
@@ -123,6 +125,23 @@ const WIRELESS_BG_GRACE_MS = 12000;
  * 位置注入跟着这一拍走（官方 SnapBridge 同类实现 15~30 秒，45 秒够用）。
  */
 const BLE_KEEPALIVE_MS = 45000;
+/**
+ * 直连「缓存热点」的等上链时限（1.68.0）。
+ *
+ * 这条路的相机热点通常已经在（刚浏览完 / 相机一直停在 Wi-Fi 模式），几秒就
+ * 上链；等满 30 秒没有意义——失败就安静地改走 BLE 唤醒。所以时限压到 12 秒，
+ * 并且不弹系统确认框（见 [ApJoinOptions]）。
+ */
+const DIRECT_AP_JOIN_MS = 12000;
+/**
+ * 浏览结束、等相机回落蓝牙的总窗口（1.68.0）。
+ *
+ * 实测通常 40 秒内回来，原来给 3 分钟只是白等；90 秒还没回来，基本可以判定
+ * 相机停在 Wi-Fi 模式（或开了「始终开启 Wi-Fi」），再等下去也不会变。
+ */
+const BLE_RECOVERY_WINDOW_MS = 90000;
+/** 前 30 秒用更密的节奏扫 BLE（2.5 秒一扫），别让用户干等 6 秒一拍。 */
+const BLE_RECOVERY_FAST_MS = 30000;
 
 // ---- EXIF orientation types (classes required for ArkTS object literal compliance) ----
 
@@ -3061,17 +3080,136 @@ export class CameraService {
   }
 
   /**
-   * 蓝牙模式按需浏览（1.67.0）：BLE 待机不变，用户要照片时才把相机推到热点。
+   * 当前这台相机的序列号（热点凭据按它对齐）。
+   *
+   * PTP 读到的最准；其次 BLE 身份；最后从已配对记录里取。都取不到就返回空串，
+   * 宁可不存凭据，也不写一条认不出的记录。
+   */
+  private activeCameraSerial(): string {
+    if (this.deviceSerialNumber !== '') return this.deviceSerialNumber;
+    if (this.bleSerial !== '') return this.bleSerial;
+    const id = BleIdentityStore.getInstance();
+    if (id.serial !== '') return id.serial;
+    const rec = SavedCameraStore.getInstance().current();
+    if (rec === null) return '';
+    if (rec.serial !== '') return rec.serial;
+    return cameraSerialFromBleName(rec.cameraName);
+  }
+
+  /**
+   * 把相机热点凭据落盘（1.68.0）。
+   *
+   * 只为「下次可以不经 BLE、直接加入热点」服务，不是连接状态：写失败不影响
+   * 当前会话。凭据和 BLE 配对材料同级，只落在应用沙箱的持久化里。
+   */
+  private saveApCreds(creds: WifiCredentials, host: string): void {
+    if (creds.ssid === '' || host === '') return;
+    const serial = this.activeCameraSerial();
+    if (serial === '') {
+      this.log.add('热点凭据没保存：这台相机的序列号还没读到');
+      return;
+    }
+    try {
+      WifiApCredStore.getInstance().save(serial, creds.ssid, creds.password,
+        creds.security, host);
+      this.log.add(`热点凭据已保存（${creds.ssid} → ${host}）`);
+    } catch (err) {
+      this.log.add(`保存热点凭据失败: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 不经 BLE、用缓存凭据直接加入相机热点（1.68.0）。
+   *
+   * 用途：相机停在 Wi-Fi 模式（不回落蓝牙 / 开了「始终开启 Wi-Fi」）时，
+   * 用户仍然能看照片；也用于「刚浏览完又想再看一次」——不用等相机的待机计时。
+   *
+   * 失败是常态之一（相机可能已经退出 Wi-Fi、或者根本不在这张网上），所以：
+   * - join 只等 12 秒、不弹系统确认框；
+   * - 失败不写 `wirelessFailed`（调用方还会走 BLE 唤醒，别先报一句失败）；
+   * - 失败一定把热点撤掉，不能把手机留在没有外网的网络上。
+   */
+  private async browseViaCachedAp(): Promise<boolean> {
+    if (this.connected && this.wireless) return true;
+    if (this.apJoining || this.wifiAutoConnecting) return false;
+    // 相机正握着 BLE：热点根本起不来（两个无线互斥，ZPill 真机同样口径），
+    // 直连只会白等一轮，直接交给 BLE 唤醒那条路。
+    if (this.bleConnected) return false;
+    const serial = this.activeCameraSerial();
+    const saved = serial === '' ? null : WifiApCredStore.getInstance().find(serial);
+    if (saved === null || saved.ssid === '') return false;
+    const epoch = this.linkEpoch;
+    this.apJoining = true;
+    this.wirelessStage = '正在加入相机热点';
+    this.log.add(`蓝牙模式：用缓存凭据直连热点「${saved.ssid}」`);
+    try {
+      const joiner = this.getApJoiner();
+      const outcome = await joiner.join(saved.ssid, saved.password, saved.security,
+        { timeoutMs: DIRECT_AP_JOIN_MS, escalate: false });
+      if (!this.epochCurrent(epoch)) {
+        this.leaveCameraHotspot('直连热点期间切了模式');
+        return false;
+      }
+      if (!outcome.ok) {
+        this.log.add(`直连相机热点没成：${outcome.reason}`);
+        return false;
+      }
+      this.wirelessStage = '正在连接照相机';
+      const hosts: string[] = [];
+      if (saved.host !== '') hosts.push(saved.host);
+      for (const h of joiner.candidateHosts()) {
+        if (!hosts.includes(h)) hosts.push(h);
+      }
+      for (const host of hosts) {
+        if (!this.epochCurrent(epoch)) {
+          this.leaveCameraHotspot('直连热点期间切了模式');
+          return false;
+        }
+        this.log.add(`直连: 试 ${host}:15740`);
+        if (await this.connectWifi(host, 15740, true)) {
+          if (!this.epochCurrent(epoch)) {
+            this.leaveCameraHotspot('连接照相机期间切了模式');
+            return false;
+          }
+          // 地址可能变了（相机换了网关），把这次连上的写回去。
+          WifiApCredStore.getInstance().save(saved.serial, saved.ssid, saved.password,
+            saved.security, this.wifiHost);
+          await this.finishAutoLink();
+          return this.connected;
+        }
+      }
+      this.log.add('直连: 候选地址都不通');
+      return false;
+    } catch (err) {
+      this.log.add(`直连相机热点异常: ${(err as Error).message}`);
+      return false;
+    } finally {
+      if (!this.connected) {
+        // 没连上就撤热点：否则手机会停在相机那份没有外网的网络上。
+        this.leaveCameraHotspot('直连相机热点没有完成');
+      }
+      if (this.epochCurrent(epoch)) {
+        this.apJoining = false;
+        if (this.connected) this.wirelessStage = '';
+      }
+    }
+  }
+
+  /**
+   * 蓝牙模式按需浏览（1.67.0，1.68.0 起不再依赖相机回落蓝牙）。
    *
    * 为什么不加第五种模式：Z50II 的 BLE 与 Wi-Fi 互斥（见 SERVICES.md「BLE 与
    * Wi-Fi 互斥」），任何传图都必然走 Wi-Fi；用户真正要的是「蓝牙连着的状态下
-   * 也能看图」，而不是再多一个连接方式。所以链路选择仍是蓝牙，只在需要时临时
-   * 借用一下相机热点，收口与 AP 模式完全同一条 `connectWirelessNow()`。
+   * 也能看图」，而不是再多一个连接方式。
    *
-   * 进入要显式点一下（拉起热点会让手机断网，不该悄悄发生），回程是自动的：
-   * `disconnect()` → `exitWirelessToBle()` 离开热点，相机约 40 秒回落蓝牙，
-   * 期间 `startBleRecoveryScan()` 每 6 秒找一次、最多 3 分钟，连回来就恢复
-   * 校时与位置注入。
+   * 进入有两条路，顺序按「哪条更可能立刻成功」排：
+   * 1. 刚结束一次浏览、正在等相机回落（`bleRecovering`）→ **直连缓存热点**：
+   *    相机还在 Wi-Fi 模式，几秒就上链，不用等它的待机计时；
+   * 2. 其余情况 → BLE 唤醒（`connectWirelessNow`，第一次浏览 / 相机已回待机）；
+   * 3. BLE 没走通（相机不在 BLE、交接冷却中）→ 再用缓存凭据直连一次。
+   *
+   * 回程仍由 `disconnect()` → `exitWirelessToBle()` 负责；1.68.0 把等 BLE 的
+   * 窗口缩到 90 秒（前 30 秒 2.5 秒一扫），并且等待期间入口仍可用。
    */
   async browsePhotosOverWifi(): Promise<boolean> {
     if (this.linkMode !== CameraLinkMode.BLE) return false;
@@ -3079,10 +3217,23 @@ export class CameraService {
     // 身份可能只是没装回活动位（多相机 / 上次连的是别的机身）：入口是按
     // `bleKnown()` 显示的，这里必须先把身份装回去，否则会误报「还没有配对过相机」。
     this.adoptSavedBleIdentity();
-    this.log.add('蓝牙模式：用户要看照片，开始交接相机热点');
-    const ok = await this.connectWirelessNow();
-    if (!ok) this.log.add('蓝牙模式：交接相机热点没有完成');
-    return ok;
+    this.log.add('蓝牙模式：用户要看照片');
+    let directTried = false;
+    if (this.bleRecovering) {
+      directTried = true;
+      if (await this.browseViaCachedAp()) {
+        this.wirelessFailed = '';
+        return true;
+      }
+    }
+    this.log.add('蓝牙模式：开始 BLE 唤醒交接');
+    if (await this.connectWirelessNow()) return true;
+    // 刚试过直连、或者相机仍握着 BLE：不必再试一次，如实失败。
+    if (directTried || this.bleConnected) return false;
+    this.log.add('蓝牙模式：BLE 这条没成，改用缓存凭据直连');
+    const direct = await this.browseViaCachedAp();
+    if (direct) this.wirelessFailed = '';
+    return direct;
   }
 
   /**
@@ -3211,6 +3362,7 @@ export class CameraService {
           this.leaveCameraHotspot('连接照相机期间切了模式');
           return false;
         }
+        this.saveApCreds(creds, this.wifiHost);
         await this.finishAutoLink();
         return this.connected;
       }
@@ -3237,6 +3389,7 @@ export class CameraService {
         this.leaveCameraHotspot('连接照相机期间切了模式');
         return false;
       }
+      this.saveApCreds(creds, this.wifiHost);
       await this.finishAutoLink();
       return this.connected;
     }
@@ -3278,6 +3431,13 @@ export class CameraService {
    * 关自动重连，把这个窗口完整让给 Wi-Fi。
    */
   private suspendBleForWifi(): void {
+    // 新一轮 Wi-Fi 会话起来了：上一轮留下的「等相机回落蓝牙」作废，
+    // 否则那个 2.5 秒/6 秒的扫描会在浏览期间一直空转。
+    this.bleRecovering = false;
+    if (this.bleRecoveryTimer >= 0) {
+      clearTimeout(this.bleRecoveryTimer);
+      this.bleRecoveryTimer = -1;
+    }
     if (this.bleLink === null) return;
     this.bleLink.stopKeepalive();
     this.stopBleGeoFeed();
@@ -3376,30 +3536,44 @@ export class CameraService {
     this.startBleRecoveryScan(store, Date.now());
   }
 
-  /** 退出无线后的兜底：每 6 秒重扫一次 BLE，最多 3 分钟。 */
+  /**
+   * 退出无线后的兜底：扫 BLE 直到相机回落（1.68.0 调过节奏）。
+   *
+   * 前 30 秒用 2.5 秒扫 + 1.5 秒间隔（相机多半 40 秒内就回来，别让用户
+   * 盯着 6 秒一拍干等）；之后降到 4 秒扫 + 6 秒间隔。总窗口 90 秒——再久
+   * 基本就是相机停在 Wi-Fi 模式（或开了「始终开启 Wi-Fi」），等也没用；
+   * 这段时间浏览入口仍然可用，可以直接走缓存凭据直连热点。
+   */
   private startBleRecoveryScan(store: BleIdentityStore, startedAt: number = Date.now()): void {
     if (this.bleRecoveryTimer >= 0) {
       clearTimeout(this.bleRecoveryTimer);
       this.bleRecoveryTimer = -1;
     }
-    const deadline = Date.now() + 180000;
+    const deadline = Date.now() + BLE_RECOVERY_WINDOW_MS;
     this.bleRecovering = true;
+    const nextGap = (): number => {
+      return Date.now() - startedAt < BLE_RECOVERY_FAST_MS ? 1500 : 6000;
+    };
     const tick = (): void => {
       this.bleRecoveryTimer = -1;
-      // 用户切了模式 / 手动断开：这一轮「等相机回来」作废。
+      // 用户切了模式 / 手动断开 / 又开始了一次浏览：这一轮「等相机回来」作废。
       if (!this.bleRecovering) return;
       if (this.bleConnected || this.bleConnecting) {
         this.bleRecovering = false;
         return;
       }
       if (Date.now() > deadline) {
-        this.log.add(`退出无线: 3 分钟内相机没有回到 BLE（已等 ${Date.now() - startedAt}ms）`);
-        this.bleHint = '相机仍停在 Wi-Fi 模式。可检查相机的「Wi-Fi 待机时间」设定，或关机再开。';
+        this.log.add(`退出无线: ${BLE_RECOVERY_WINDOW_MS / 1000} 秒内相机没有回到 BLE`
+          + `（已等 ${Date.now() - startedAt}ms）`);
+        this.bleHint = '相机仍停在 Wi-Fi 模式：可再次点「浏览与下载照片」直连，'
+          + '或到相机菜单关掉 Wi-Fi。';
         this.wirelessStage = '';
         this.bleRecovering = false;
         return;
       }
-      this.scanForNikonDeviceId(store.identityDevice, 4000).then(async (devices: BleCameraDevice[]) => {
+      const fast = Date.now() - startedAt < BLE_RECOVERY_FAST_MS;
+      const scanMs = fast ? 2500 : 4000;
+      this.scanForNikonDeviceId(store.identityDevice, scanMs).then(async (devices: BleCameraDevice[]) => {
         if (devices.length > 0) {
           this.log.add(`退出无线: 相机回到 BLE（${devices[0].deviceId}，共等 ${Date.now() - startedAt}ms）`);
           this.bleHint = '';
@@ -3413,9 +3587,9 @@ export class CameraService {
           this.bleRecovering = false;
           return;
         }
-        this.bleRecoveryTimer = setTimeout(tick, 6000);
+        this.bleRecoveryTimer = setTimeout(tick, nextGap());
       }).catch(() => {
-        this.bleRecoveryTimer = setTimeout(tick, 6000);
+        this.bleRecoveryTimer = setTimeout(tick, nextGap());
       });
     };
     this.bleRecoveryTimer = setTimeout(tick, 2000);

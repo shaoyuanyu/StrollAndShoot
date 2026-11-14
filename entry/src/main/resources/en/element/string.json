@@ -222,7 +222,7 @@
     },
     {
       "name": "camera_ble_returning",
-      "value": "The camera is switching back to Bluetooth, about 40 seconds"
+      "value": "The camera is still in Wi-Fi mode; Bluetooth reconnects automatically, or browse again now"
     },
     {
       "name": "camera_ble_pair_failed",

@@ -683,12 +683,34 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
 | `0x2008` | LSS 控制点（2B 位域，相机 notify 请求，ready 后才应答） |
 | `0x2a19` | 电池（`de00` 服务下的 SIG 采纳特征） |
 
-- **`0x2008` 是 notify，不是 indicate（1.66.18）**：两处社区实现（nsg Android、
-  kotlin-poc）都对 NOT1 调 `setNotify`，只有 `0x2000` 用 indicate。我们之前订阅成
-  indicate，CCCD 位写错，相机从来不发通知——9 千行 AppLog 里 `BLE 通知 00002008`
-  出现次数为 0，LSS 控制点这条通道等于不存在。另外按参考实现的用法，相机发来的
-  `01 00`（握手完成）与 `00 01`（拍完照要传图）都是**通知**，没有任何实现往 0x2008
-  写东西，所以我们的处理改成「只记日志、不回写」——多写一笔只可能搅坏相机状态机。
+- **`0x2008` 是 notify，不是 indicate（1.66.18，2026-11-14 复核语义）**：两处社区
+  实现（nsg Android、kotlin-poc）都对 NOT1 调 `setNotify`，只有 `0x2000` 用 indicate。
+  我们之前订阅成 indicate，CCCD 位写错，相机从来不发通知——9 千行 AppLog 里
+  `BLE 通知 00002008` 出现次数为 0，LSS 控制点这条通道等于不存在。语义按 ZPill 从
+  SnapBridge smali 推出来的口径：2B 小端位域 `(Connection<<8)|(Location<<4)|Time`，
+  `01 00` 是「要时间」而不是配对成功；ZPill 会写回清位值，nsg / kotlin-poc 不写。
+  我们的相机一次都没发过这条通知，没有可应答的内容，所以保持「只记日志、不回写」。
+  **自动传图与这条特征无关**（见下一节）。
+
+**2MP 自动传图走的是蓝牙经典（BTC/SPP）+ PTP，不是 BLE（2026-11-14 查证）**
+
+社区对官方 SnapBridge v2.13.3 的静态逆向（[MXWF0/SnapBridge-Enhanced] 的
+`analysis.md`；仓库本体是同版本 apktool 工程 + 修改版 APK，不是协议库）给出的链路：
+
+- 相机广播（AdvertiseCameraInfo）到达后，**蓝牙可用且满足条件就走 Bluetooth
+  Classic + SPP → Nikon PTP**；否则才退回 BLE 控制通道。
+- 自动传图：`GetAutoTransferListAction` 取对象句柄 → 按原图 / 8MP / 2MP 选
+  `GetObject` / `GetPartialObject` / `GetLss` → 流式写入本地。
+- BLE 只负责 LSS 认证、连接配置、控制点（`0x2008`）与状态。
+
+三个推论：①「BLE 传 2MP」是误称，真正承载是经典蓝牙 SPP；②这解释了为什么
+furble / nsg / kotlin-poc / ZPill / N-Link 都没做传图——它们根本没碰这条链路，
+只逆到 BLE 的配对、校时、凭据与 GPS；③社区目前**没有**可用的独立实现或字节级
+协议文档，只有官方 APK 的静态分析与打补丁工程。要做这条路，得自己在真机上探
+SPP 服务 UUID 与 PTP 封装（鸿蒙有 `@ohos.bluetooth.socket`，首配也已经做过经典
+蓝牙绑定），属于新的研究项，不能和「读图」混在一起估工期。
+
+[MXWF0/SnapBridge-Enhanced]: https://github.com/MXWF0/SnapBridge-Enhanced
 - 权限：`ohos.permission.ACCESS_BLUETOOTH`（user_grant），`CameraService.ensureBlePermission()` 在首次搜索时申请。
 - **冷启动那一次连接不算用户操作**（1.66.13）：`autoConnectBle(silent, quiet)` 的第二个
   参数只给 `MainScreen.aboutToAppear` 用。`quiet` 时失败走 `resetColdStartTraces()`：
@@ -914,6 +936,40 @@ AP 模式能成立的关键是**触发权在手**：手机是相机热点的唯�
   退出 Wi-Fi 后至少等 3 分钟再切 STA），不是我们能缩短的。
 - **不自动切到画廊**：分步进度、失败原因都写在相机页的状态头里，跳走就看不见；
   连上之后状态头会显示「已连上相机热点 + 照片数」，用户自己切「画廊」页签。
+
+*1.68.0：浏览不再依赖相机回落蓝牙*
+
+相机侧没有「立即关 Wi-Fi」的通道（Wi-Fi 期间 BLE 不广播，PTP 侧也没有对应
+opcode；0x9435 是应用模式，不是无线），所以「回蓝牙」只能等相机的 Wi-Fi
+待机计时（实测约 40 秒，最长 90 秒；新固件还有「始终开启 Wi-Fi」，开了就永远
+不回落）。1.68.0 的思路不是催相机，而是**让浏览不依赖这次回落**：
+
+- **热点凭据落盘**（`services/WifiApCredStore.ets`，PersistenceV2 key
+  `wifi_ap_creds`）：BLE 握手解出的 `0x2004`（SSID / 密码 / 安全类型）在 AP
+  连上后按**相机序列号**存一条，外加这次真的连通的 `host`。最多留 8 台，
+  同序列号覆盖、更新时挪到末尾。凭据属于本机设备资料，和 `ble_identity` /
+  `saved_cameras` 同级，不上传。不往 `SavedCamera` 里加字段（旧记录恢复时不会
+  补新字段，1.66.1 的教训）。
+- **直连路径**（`browseViaCachedAp()`）：`join()` 增加 `ApJoinOptions`
+  （`timeoutMs` / `escalate`），直连只等 12 秒、**不弹系统确认框**（用户只是
+  点了一下浏览，不该被系统弹窗打断），失败就安静地改走 BLE。直连前有两个
+  前置判断：`bleConnected` 为真直接放弃（相机握着 BLE 时热点起不来）；
+  没有缓存凭据也放弃。
+- **进入顺序**（`browsePhotosOverWifi()`）：
+  1. `bleRecovering`（刚结束一次浏览）→ **先直连**：相机还在 Wi-Fi 模式，
+     几秒就上链，完全不用等它回落；
+  2. 其余 → BLE 唤醒（`connectWirelessNow`）；
+  3. BLE 没走通、且这一轮还没试过直连、且 BLE 不在线 → 再直连一次。
+     这样连「相机一直停在 Wi-Fi 模式」「交接冷却中」也有路可走。
+- **回程窗口缩短**（`startBleRecoveryScan()`）：总窗口 3 分钟 → 90 秒；前 30 秒
+  2.5 秒一扫 + 1.5 秒间隔，之后 4 秒扫 + 6 秒间隔。90 秒还没回来就把
+  `bleHint` 写成可操作的下一步（再次浏览 / 到相机菜单关 Wi-Fi），并且**浏览
+  入口在等待期间仍然可用**——用户不必干等。
+- **进入新会话时取消回落扫描**（`suspendBleForWifi()`）：否则上一轮留下的
+  2.5 秒/6 秒扫描会在浏览期间空转、偶尔去连一次正在开热点的相机。
+- **失败语义**：直连失败**不写** `wirelessFailed`（后面还可能走 BLE 唤醒，
+  不能先报一句失败）；直连成功才清掉旧失败。直连失败一定 `leaveCameraHotspot()`，
+  不能把手机留在没有外网的相机网络上。
 
 **无线链路的自动接续（1.41.0）**
 

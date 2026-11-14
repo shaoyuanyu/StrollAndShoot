@@ -222,7 +222,7 @@
     },
     {
       "name": "camera_ble_returning",
-      "value": "相機正在切回藍牙，約需 40 秒"
+      "value": "相機還在 Wi-Fi 模式，藍牙會自動接回；也可以直接再次瀏覽"
     },
     {
       "name": "camera_ble_pair_failed",

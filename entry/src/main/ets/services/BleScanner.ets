@@ -790,15 +790,16 @@ export class BleCameraLink {
   }
 
   /**
-   * 0x2008 LSS 控制点：**只看不写**（1.66.18）。
+   * 0x2008 LSS 控制点：**只看不写**（1.66.18，2026-11-14 复核）。
    *
-   * 两处社区实现（nsg 的 Android 版与 kotlin-poc）都只把 0x2008 当「配对完成 /
-   * 相机有事要说」的通知通道：握手第 4 段之后相机会发 `01 00`，光拍照之后会变成
-   * `00 01`（要传照片）。**它们都不往这条特征写东西**。
+   * ZPill 从 SnapBridge smali 推出的语义是 2B 小端位域
+   * `(Connection<<8)|(Location<<4)|Time`：相机 notify 自己的请求位，`01 00`
+   * 是「要时间」，不是配对成功标志。它从 2026-10-21 起会写回一个清位值，
+   * nsg 的 Android 版与 kotlin-poc 则完全不写。我们的相机在 9 千行日志里
+   * 一次都没发过这条通知，没有可应答的内容，所以保持「只记日志、不回写」。
    *
-   * 我们之前把它当请求位域，收到什么就写回一个「清位」的应答——在没有任何
-   * 证据表明相机需要这个应答的情况下，多写一笔只可能搅坏相机侧的状态机。
-   * 现在只把收到的内容记进日志，等真机日志里出现相机明确的请求语义再加应答。
+   * 自动传图**不经过这里**：官方 SnapBridge 的 2MP 传输是在蓝牙经典
+   * （BTC/SPP）上跑 PTP，见 SERVICES.md「2MP 自动传图走的是蓝牙经典」。
    */
   private handleControlPoint(data: Uint8Array): void {
     const hex = BleCameraLink.describeBytes(data);
