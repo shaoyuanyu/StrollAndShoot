@@ -1221,10 +1221,10 @@ export struct CameraPage {
    */
   private guideSheetHeight(): number {
     // 「连接模式」页比步骤页高：说明 + 表头 + 五行功能表 + 一句总结 + 两份清单。
-    // 清单比表格长，给到 620 才能一屏看完；切页时面板跟着长高，回「连接步骤」
-    // 再按当前模式收回去。
+    // 1.66.20 把「部分支持」两条改写成实测结论（各两三行），690 放不下最后一条，
+    // 提到 740；再长也不怕，面板本来就能上拉到 LARGE。
     if (this.guideTab === 1) {
-      return 690;
+      return 740;
     }
     if (this.svc.linkMode === CameraLinkMode.USB) {
       return 240;
@@ -1430,8 +1430,10 @@ export struct CameraPage {
         GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, GUIDE_FULL, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_exif'),
         GUIDE_FULL, GUIDE_NONE, GUIDE_FULL, GUIDE_FULL, false)
+      // 对时与位置注入 1.66.17 起在蓝牙模式下真机跑通（相机菜单能看到经纬度与
+      // UTC），不再是「部分支持」。
       this.GuideFeatureRow($r('app.string.camera_guide_feature_clock'),
-        GUIDE_NONE, GUIDE_PARTIAL, GUIDE_NONE, GUIDE_NONE, false)
+        GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_standby'),
         GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_online'),

@@ -1394,7 +1394,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "勾选表示可用；◐ 表示部分支持，缺什么见下方。"
+      "value": "勾选表示可用；空白表示这种连接下做不到。已知限制见下方。"
     },
     {
       "name": "camera_guide_view_steps",
@@ -1518,7 +1518,7 @@
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "蓝牙只做待机，不传照片；照片只走 USB 与 Wi-Fi。"
+      "value": "蓝牙只做待机，不传照片；对时与位置注入也走蓝牙。照片只走 USB 与 Wi-Fi。"
     },
     {
       "name": "camera_guide_official_title",
@@ -1550,15 +1550,15 @@
     },
     {
       "name": "camera_guide_partial_title",
-      "value": "部分支持"
+      "value": "部分支持与已知限制"
     },
     {
       "name": "camera_guide_partial_1",
-      "value": "对时与位置注入：位置写进了相机，但卫星数固定为 0，照片端效果还没真机验收。"
+      "value": "位置注入：蓝牙模式可用，相机菜单「位置数据（智能设备）」能看到经纬度与 UTC；海拔恒为 0，需定位权限，开关在「设置 → 蓝牙相机」。"
     },
     {
       "name": "camera_guide_partial_2",
-      "value": "后台保持连接：只有蓝牙有长时任务，Wi-Fi AP / STA 退回后台不保证。"
+      "value": "后台保活：只有蓝牙有长时任务；Wi-Fi AP / STA 退后台会断开，回前台一两秒自动重连。"
     },
     {
       "name": "camera_title_with_serial",

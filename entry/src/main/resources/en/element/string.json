@@ -1394,7 +1394,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "A check mark means supported; ◐ means partly supported — see below."
+      "value": "A check mark means available; a blank cell means not possible in that mode. Known limits are listed below."
     },
     {
       "name": "camera_guide_view_steps",
@@ -1518,7 +1518,7 @@
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "Bluetooth is standby only and never transfers photos; photos use USB and Wi-Fi."
+      "value": "Bluetooth is standby only and carries no photos; clock sync and location injection also use it. Photos go over USB or Wi-Fi only."
     },
     {
       "name": "camera_guide_official_title",
@@ -1550,15 +1550,15 @@
     },
     {
       "name": "camera_guide_partial_title",
-      "value": "Partly supported"
+      "value": "Partial support and known limits"
     },
     {
       "name": "camera_guide_partial_1",
-      "value": "Clock and location sync: location reaches the camera, but the satellite count is fixed at 0 and the result on photos is not verified on a real camera yet."
+      "value": "Location injection works over Bluetooth: camera menu \"Location data (smart device)\" shows latitude, longitude and UTC. Altitude is always 0; location permission is required; switches are in Settings → Bluetooth camera."
     },
     {
       "name": "camera_guide_partial_2",
-      "value": "Background keep-alive: only Bluetooth holds a long task; Wi-Fi AP / STA is not guaranteed in the background."
+      "value": "Background keep-alive: only Bluetooth holds a continuous task. Wi-Fi AP/STA sessions drop in the background and reconnect in 1–2 s when you return."
     },
     {
       "name": "camera_title_with_serial",

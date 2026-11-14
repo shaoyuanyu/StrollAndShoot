@@ -1394,7 +1394,7 @@
     },
     {
       "name": "camera_guide_modes_intro",
-      "value": "勾選表示可用；◐ 表示部分支援，缺什麼見下方。"
+      "value": "勾選表示可用；空白表示這種連線下做不到。已知限制見下方。"
     },
     {
       "name": "camera_guide_view_steps",
@@ -1518,7 +1518,7 @@
     },
     {
       "name": "camera_guide_modes_note",
-      "value": "藍牙只做待機，不傳照片；照片只走 USB 與 Wi-Fi。"
+      "value": "藍牙只做待機，不傳照片；對時與位置注入也走藍牙。照片只走 USB 與 Wi-Fi。"
     },
     {
       "name": "camera_guide_official_title",
@@ -1550,15 +1550,15 @@
     },
     {
       "name": "camera_guide_partial_title",
-      "value": "部分支援"
+      "value": "部分支援與已知限制"
     },
     {
       "name": "camera_guide_partial_1",
-      "value": "對時與位置注入：位置寫進了相機，但衛星數固定為 0，照片端效果還沒真機驗收。"
+      "value": "位置注入：藍牙模式可用，相機選單「位置資料（智慧型裝置）」能看到經緯度與 UTC；海拔恆為 0，需定位權限，開關在「設定 → 藍牙相機」。"
     },
     {
       "name": "camera_guide_partial_2",
-      "value": "背景保持連線：只有藍牙有長時任務，Wi-Fi AP / STA 退回背景不保證。"
+      "value": "背景保活：只有藍牙有長時任務；Wi-Fi AP / STA 退背景會斷開，回前景一兩秒自動重連。"
     },
     {
       "name": "camera_title_with_serial",
