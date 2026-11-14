@@ -775,6 +775,10 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps spp usb-de00   # 换尼康 1
   或 `0x03` 再连，结果全部一样；
 - 反向 `sppListen`（`1101`）能起来（server=0/1）但没有客户端连进来，先写
   `0x2005=0x02` 也一样 —— 相机在 Z50II 上既不接受按 UUID 的连接，也没有主动来连；
+- **写 `0x2005=0x02` 不会让 BLE 断开**（保活继续），所以不存在「让出 BLE 后经典才起来」
+  这个中间态；再补 `-drop`（不写 0x80 地断开 GATT）后重试，仍然失败；
+- 系统栈日志给出了失败位置：`bt_sdp: sdp_disconnect ... reason 0xfff2` +
+  `unable to find RFCOMM slot id`，即 **SDP 查询本身没完成**，不是 RFCOMM 建链被拒；
 - 即使连上，A1000 的对照记录里「经 RFCOMM 发 PTP 相机不响应」，这条未必能跑通。
 
 **结论**：2MP 自动传图在鸿蒙上被平台 API 挡住了——官方 App 靠反射按 channel 1

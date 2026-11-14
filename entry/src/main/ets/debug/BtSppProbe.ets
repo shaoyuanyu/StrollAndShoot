@@ -69,6 +69,12 @@ export class BtSppProbe {
       BtSppProbe.log(`触发 0x2005=0x${parsed.establish.toString(16)} ${ok ? '已写' : '没写成功'}`);
       await BtSppProbe.sleep(1200);
     }
+    if (parsed.drop) {
+      // 让出 BLE 但**不写 0x80**：官方在经典绑定后可能是「BLE 让位、经典起来」
+      // 这个顺序；正常 disconnectBle() 会写 0x80 把 BTC 位抹掉，所以单独走这里。
+      await svc.dropBleForProbe();
+      await BtSppProbe.sleep(5000);
+    }
     if (arg.trim().startsWith('listen')) {
       await BtSppProbe.runListen(arg.trim());
       return;
@@ -227,7 +233,7 @@ export class BtSppProbe {
 
   private static parseArg(arg: string): ProbeArg {
     const raw = arg.trim();
-    const out: ProbeArg = { frame: 'usb', uuidKey: '1101', secure: true, establish: 0 };
+    const out: ProbeArg = { frame: 'usb', uuidKey: '1101', secure: true, establish: 0, drop: false };
     if (raw === '') return out;
     const parts = raw.split('-');
     const frame = parts[0];
@@ -239,6 +245,7 @@ export class BtSppProbe {
       if (p === 'insecure') out.secure = false;
       if (p === 'btc') out.establish = 0x02;
       if (p === '3') out.establish = 0x03;
+      if (p === 'drop') out.drop = true;
     }
     return out;
   }
@@ -421,4 +428,6 @@ interface ProbeArg {
   secure: boolean;
   /** 连接前先写的 0x2005 值：0 不写，0x02 经典，0x03 经典+WiFi。 */
   establish: number;
+  /** 连接前先断开 BLE（不写 0x2005=0x80）。 */
+  drop: boolean;
 }

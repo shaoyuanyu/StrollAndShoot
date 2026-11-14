@@ -3099,6 +3099,25 @@ export class CameraService {
   }
 
   /**
+   * 调试探针专用：断开 GATT 但**不写 `0x2005=0x80`**。
+   *
+   * 正常 `disconnectBle()` 会先关相机无线，那会把探针刚写入的 BTC 位（0x02）
+   * 又抹掉；探针需要「让出 BLE、保留 BTC 请求」这个中间态。
+   */
+  async dropBleForProbe(): Promise<void> {
+    if (this.bleLink === null) return;
+    try {
+      // 别让自动重连在我们试 SPP 的时候把相机重新拉回 BLE。
+      this.bleLink.disableAutoReconnect();
+      this.bleLink.stopKeepalive();
+      await this.bleLink.disconnect();
+      this.log.add('[SPP] BLE 链路已断开（不写 0x80）');
+    } catch (err) {
+      this.log.add(`[SPP] 断 BLE 失败: ${(err as Error).message}`);
+    }
+  }
+
+  /**
    * 当前这台相机的序列号（热点凭据按它对齐）。
    *
    * PTP 读到的最准；其次 BLE 身份；最后从已配对记录里取。都取不到就返回空串，
