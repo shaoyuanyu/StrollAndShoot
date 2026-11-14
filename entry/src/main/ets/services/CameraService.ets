@@ -3099,6 +3099,14 @@ export class CameraService {
   }
 
   /**
+   * 调试探针专用：把 BLE 链路交出去，供 `debug/BleCharProbe` 枚举/读/写特征。
+   * release 没有调用点。
+   */
+  getBleLinkForProbe(): BleCameraLink | null {
+    return this.bleLink;
+  }
+
+  /**
    * 调试探针专用：断开 GATT 但**不写 `0x2005=0x80`**。
    *
    * 正常 `disconnectBle()` 会先关相机无线，那会把探针刚写入的 BTC 位（0x02）

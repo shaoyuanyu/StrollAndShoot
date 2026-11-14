@@ -7,6 +7,7 @@ import { saveWindowSnapshot, saveWindowSnapshotBurst } from '../utils/WindowShot
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { CameraStateDemo } from '../debug/CameraStateDemo';
 import { BtSppProbe } from '../debug/BtSppProbe';
+import { BleCharProbe } from '../debug/BleCharProbe';
 import { CameraService } from '../services/CameraService';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { GpsGeocoder } from '../services/GpsGeocoder';
@@ -35,6 +36,15 @@ export default class EntryAbility extends UIAbility {
       if (MockPtpDevice.isDebugBuild()) {
         CameraStateDemo.apply(String(demo));
         hilog.info(DOMAIN, TAG, 'camera state demo: %{public}s', String(demo));
+      }
+      return;
+    }
+    const blechar = want.parameters ? want.parameters['blechar'] : undefined;
+    if (blechar !== undefined) {
+      // BLE 未知特征探测（0x2020/0x2021 是不是 PTP 通道），仅调试包。
+      if (MockPtpDevice.isDebugBuild()) {
+        BleCharProbe.run(String(blechar));
+        hilog.info(DOMAIN, TAG, 'ble char probe');
       }
       return;
     }
