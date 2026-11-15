@@ -1793,7 +1793,7 @@ export struct CameraPage {
   }
 
   /**
-   * 状态头：进度点 + 一句状态 + 一行说明 +（蓝牙待机时）相机状态图标 +
+   * 状态头：进度点 + 一句状态 +（蓝牙待机时）电量与唤醒两颗胶囊 + 一行说明 +
    *（已连接时）照片数 + 主操作胶囊。
    *
    * 主操作永远是「当前这一步」：未连接是「搜索 / 配对 / 连接」，进行中禁用，
@@ -1812,27 +1812,36 @@ export struct CameraPage {
    *
    * **电量与唤醒状态收进状态头**（1.72.0）：它们以前是状态块里的三行
    * 「标签 → 值」（电量 / 唤醒状态 / 固件版本），排在两个操作入口下面，看上去
-   * 和功能入口是同一种东西。现在只剩两个「图标 + 值」的小胶囊，紧贴在状态文案
-   * 下面（与文案同一条竖线），固件版本降到抽屉最底那一行灰字。状态头因此同时
-   * 回答两件事：链路到哪一步了、相机本体什么状态——不用再往滚一屏找。
+   * 和功能入口是同一种东西。现在只剩两个「图标 + 值」的小胶囊；固件版本降到
+   * 抽屉最底那一行灰字。状态头因此同时回答两件事：链路到哪一步了、相机本体
+   * 什么状态——不用再往下滚一屏找。
+   *
+   * **胶囊和「已连接」同一行**（1.72.2）：1.72.0/1.72.1 把它们放在标题下面、
+   * 左缩进 18 另起一行，实际效果像挂在状态头底下的一条注释，还把状态头撑高了一档
+   * （用户 2026-11-15 反馈「效果很差」）。现在它们是标题的**后缀**，贴着文案排
+   * 在同一行，状态头回到一颗主操作胶囊的高度；只有「已连接」这种一句话的标题
+   * 会出现胶囊（`bleInfoVisible()` 只在蓝牙待机配对落定时为真），不会和两行标题
+   * 抢宽度。
    */
   @Builder
   StatusHeader() {
-    Column({ space: 8 }) {
-      Row({ space: 10 }) {
-        if (this.inProgress()) {
-          LoadingProgress()
-            .width(16).height(16)
-            .color($r('app.color.primary'))
-            .flexShrink(0)
-        } else {
-          Row()
-            .width(8).height(8)
-            .borderRadius(pillRadius(8))
-            .backgroundColor(this.dotColor())
-            .flexShrink(0)
-        }
-        Column({ space: this.scanFailed() ? 2 : 3 }) {
+    Row({ space: 10 }) {
+      if (this.inProgress()) {
+        LoadingProgress()
+          .width(16).height(16)
+          .color($r('app.color.primary'))
+          .flexShrink(0)
+      } else {
+        Row()
+          .width(8).height(8)
+          .borderRadius(pillRadius(8))
+          .backgroundColor(this.dotColor())
+          .flexShrink(0)
+      }
+      Column({ space: this.scanFailed() ? 2 : 3 }) {
+        // 标题 + 相机状态胶囊：胶囊是标题的后缀，`flexShrink(1)` 让标题在
+        // 极窄屏上先让位（正常只有「已连接」两个字，永远排得下）。
+        Row({ space: 8 }) {
           Text(this.headline())
             .fontSize(this.scanFailed() || this.compactHeadline()
               ? FontSize.Section : FontSize.CardTitle)
@@ -1842,81 +1851,75 @@ export struct CameraPage {
             // 会被当成两种不同严重级别（1.65.2 统一）。
             .fontColor(this.compactHeadline()
               ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
-            .width('100%')
+            .flexShrink(1)
             .maxLines(this.scanFailed() ? 1 : 2)
             // 结论必须一行放得下（13fp 下最长的一条是「相机没有可用存储（请插入存储卡）」），
             // 万一某个语言更长，宁可截断也不要让状态头长高、把两行节奏破掉。
             .textOverflow({ overflow: this.scanFailed() ? TextOverflow.Ellipsis : TextOverflow.Clip })
-          if (this.scanFailed() && this.scanErrorHint() !== '') {
-            Text(this.scanErrorHint())
-              .fontSize(FontSize.Micro)
-              .lineHeight(14)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-              .maxLines(2)
+          if (this.bleInfoVisible()) {
+            CameraStatusChip({
+              symbol: this.batterySymbol(),
+              text: this.bleBatteryText(),
+              warn: this.batteryLow()
+            })
+            CameraStatusChip({
+              symbol: this.powerSymbol(),
+              text: this.blePowerText(),
+              warn: this.powerWarn()
+            })
           }
-          if (this.detail() !== '') {
-            Text(this.detail())
-              .fontSize(FontSize.Caption)
-              .lineHeight(18)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-              .maxLines(3)
-          }
-          if (this.staIpLinkVisible()) {
-            this.StaManualIpLink()
-          }
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        // 读卡失败时不显示照片数：那一行是「上次扫描留下的旧数字」，挂在红灯旁边
-        // 读起来像「其实连得挺好」；而且它会挤窄文字列，把第二行提示顶成两行。
-        if (this.linked() && !this.scanFailed() && this.svc.photoCount > 0) {
-          Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
-            .fontSize(FontSize.Caption)
-            .fontColor($r('app.color.primary'))
-            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-            .backgroundColor($r('app.color.primary_soft'))
-            .borderRadius(Radius.Chip)
-            .flexShrink(0)
-        }
-        Button(this.primaryActionLabel())
-          .height(36)
-          .padding({ left: 16, right: 16 })
-          .fontSize(FontSize.Body)
-          .fontWeight(FontWeight.Medium)
-          .borderRadius(pillRadius(36))
-          .backgroundColor(this.primaryActionFill())
-          .fontColor(this.primaryActionTextColor())
-          .enabled(!this.primaryActionDisabled())
-          .flexShrink(0)
-          .onClick(() => { this.onPrimaryAction(); })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      // 相机本体的状态：只读、不占一行标题。左缩进 18 = 状态点 8 + 间距 10，
-      // 与状态文案同一条竖线，读起来是「状态头的一部分」而不是一个新分组。
-      if (this.bleInfoVisible()) {
-        Row({ space: 8 }) {
-          CameraStatusChip({
-            symbol: this.batterySymbol(),
-            text: this.bleBatteryText(),
-            warn: this.batteryLow()
-          })
-          CameraStatusChip({
-            symbol: this.powerSymbol(),
-            text: this.blePowerText(),
-            warn: this.powerWarn()
-          })
         }
         .width('100%')
-        .padding({ left: 18 })
+        .alignItems(VerticalAlign.Center)
+
+        if (this.scanFailed() && this.scanErrorHint() !== '') {
+          Text(this.scanErrorHint())
+            .fontSize(FontSize.Micro)
+            .lineHeight(14)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .maxLines(2)
+        }
+        if (this.detail() !== '') {
+          Text(this.detail())
+            .fontSize(FontSize.Caption)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .maxLines(3)
+        }
+        if (this.staIpLinkVisible()) {
+          this.StaManualIpLink()
+        }
       }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      // 读卡失败时不显示照片数：那一行是「上次扫描留下的旧数字」，挂在红灯旁边
+      // 读起来像「其实连得挺好」；而且它会挤窄文字列，把第二行提示顶成两行。
+      if (this.linked() && !this.scanFailed() && this.svc.photoCount > 0) {
+        Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.primary'))
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+          .backgroundColor($r('app.color.primary_soft'))
+          .borderRadius(Radius.Chip)
+          .flexShrink(0)
+      }
+      Button(this.primaryActionLabel())
+        .height(36)
+        .padding({ left: 16, right: 16 })
+        .fontSize(FontSize.Body)
+        .fontWeight(FontWeight.Medium)
+        .borderRadius(pillRadius(36))
+        .backgroundColor(this.primaryActionFill())
+        .fontColor(this.primaryActionTextColor())
+        .enabled(!this.primaryActionDisabled())
+        .flexShrink(0)
+        .onClick(() => { this.onPrimaryAction(); })
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .alignItems(VerticalAlign.Center)
     .bindSheet($$this.ipSheetOpen, this.IpSheet(), this.ipSheetOptions())
   }
 
@@ -3378,7 +3381,7 @@ struct CameraInfoRow {
 /**
  * 相机状态小胶囊：一个系统图标 + 一段值（1.72.0）。
  *
- * 用在状态头第二行的电量 / 唤醒状态。以前它们是「电量 82%」这种两列行，和功能
+ * 用在状态头里、紧跟「已连接」后面的电量 / 唤醒状态。以前它们是「电量 82%」这种两列行，和功能
  * 入口同一种排版；换成图标之后一行两个胶囊，扫一眼就知道相机有没有电、醒没醒。
  * 底色用 `filter_chip_bg`（中性淡灰）而不是主色淡底：照片数那颗胶囊已经是主色，
  * 两颗主色胶囊并排会把状态头拽成一块蓝。`warn` 只把图标换成警示色，文字不变红——
