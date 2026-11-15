@@ -31,6 +31,11 @@
       "buildFunction": "PairedCamerasPageBuilder"
     },
     {
+      "name": "CameraInfoPage",
+      "pageSourceFile": "src/main/ets/pages/CameraInfoPage.ets",
+      "buildFunction": "CameraInfoPageBuilder"
+    },
+    {
       "name": "BleRemotePage",
       "pageSourceFile": "src/main/ets/pages/BleRemotePage.ets",
       "buildFunction": "BleRemotePageBuilder"

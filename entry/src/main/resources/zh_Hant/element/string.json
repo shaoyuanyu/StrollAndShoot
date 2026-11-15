@@ -577,8 +577,8 @@
       "value": "序號"
     },
     {
-      "name": "camera_firmware_footer",
-      "value": "韌體版本 %1$s"
+      "name": "camera_info_firmware",
+      "value": "韌體版本"
     },
     {
       "name": "camera_power_valid_wake",
@@ -609,8 +609,20 @@
       "value": "連線方式"
     },
     {
-      "name": "camera_connection_ptp",
-      "value": "USB PTP"
+      "name": "camera_info_section_connection",
+      "value": "連線"
+    },
+    {
+      "name": "camera_info_section_data",
+      "value": "資料"
+    },
+    {
+      "name": "camera_info_empty",
+      "value": "暫無裝置資訊"
+    },
+    {
+      "name": "camera_info_empty_hint",
+      "value": "連接相機後這裡會顯示型號、序號與韌體版本。"
     },
     {
       "name": "camera_action_full_scan",
@@ -1683,10 +1695,6 @@
     {
       "name": "camera_state_ble_paired",
       "value": "已配對"
-    },
-    {
-      "name": "camera_conn_wifi_host",
-      "value": "相機 Wi-Fi %1$s:%2$s"
     },
     {
       "name": "camera_hero_serial",

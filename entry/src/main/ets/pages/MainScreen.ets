@@ -1226,6 +1226,9 @@ export struct MainScreen {
             onOpenBleRemote: () => {
               this.pageInfos.pushPath({ name: 'BleRemotePage' });
             },
+            onOpenCameraInfo: () => {
+              this.pageInfos.pushPath({ name: 'CameraInfoPage' });
+            },
             onSelectMode: (mode: number) => {
               this.svc.setLinkMode(mode);
             },

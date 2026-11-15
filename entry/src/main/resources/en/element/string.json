@@ -577,8 +577,8 @@
       "value": "Serial Number"
     },
     {
-      "name": "camera_firmware_footer",
-      "value": "Firmware %1$s"
+      "name": "camera_info_firmware",
+      "value": "Firmware"
     },
     {
       "name": "camera_power_valid_wake",
@@ -606,11 +606,23 @@
     },
     {
       "name": "camera_info_connection",
+      "value": "Connection type"
+    },
+    {
+      "name": "camera_info_section_connection",
       "value": "Connection"
     },
     {
-      "name": "camera_connection_ptp",
-      "value": "USB PTP"
+      "name": "camera_info_section_data",
+      "value": "Data"
+    },
+    {
+      "name": "camera_info_empty",
+      "value": "No device info"
+    },
+    {
+      "name": "camera_info_empty_hint",
+      "value": "Connect a camera to see its model, serial number and firmware."
     },
     {
       "name": "camera_action_full_scan",
@@ -1683,10 +1695,6 @@
     {
       "name": "camera_state_ble_paired",
       "value": "Paired"
-    },
-    {
-      "name": "camera_conn_wifi_host",
-      "value": "Camera Wi-Fi %1$s:%2$s"
     },
     {
       "name": "camera_hero_serial",

@@ -577,8 +577,8 @@
       "value": "序列号"
     },
     {
-      "name": "camera_firmware_footer",
-      "value": "固件版本 %1$s"
+      "name": "camera_info_firmware",
+      "value": "固件版本"
     },
     {
       "name": "camera_power_valid_wake",
@@ -609,8 +609,20 @@
       "value": "连接方式"
     },
     {
-      "name": "camera_connection_ptp",
-      "value": "USB PTP"
+      "name": "camera_info_section_connection",
+      "value": "连接"
+    },
+    {
+      "name": "camera_info_section_data",
+      "value": "数据"
+    },
+    {
+      "name": "camera_info_empty",
+      "value": "暂无设备信息"
+    },
+    {
+      "name": "camera_info_empty_hint",
+      "value": "连接相机后这里会显示型号、序列号与固件版本。"
     },
     {
       "name": "camera_action_full_scan",
@@ -1683,10 +1695,6 @@
     {
       "name": "camera_state_ble_paired",
       "value": "已配对"
-    },
-    {
-      "name": "camera_conn_wifi_host",
-      "value": "相机 Wi-Fi %1$s:%2$s"
     },
     {
       "name": "camera_hero_serial",
