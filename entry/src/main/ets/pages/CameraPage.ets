@@ -354,6 +354,8 @@ export struct CameraPage {
   @Event onOpenBleRemote: () => void = () => {};
   /** 打开设备信息二级页（品牌 / 型号 / 序列号 / 固件 / 连接方式 / 照片数量）。 */
   @Event onOpenCameraInfo: () => void = () => {};
+  /** 打开 Wi-Fi 遥控拍摄（实时取景 / 快门 / 对焦 / 变焦）。 */
+  @Event onOpenWifiRemote: () => void = () => {};
   /** 切换链路模式（USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA）。 */
   @Event onSelectMode: (mode: number) => void = (_m: number) => {};
   /** 锁定确认后：先断开当前连接，再切到新模式（由 MainScreen 串行执行）。 */
@@ -2913,14 +2915,24 @@ export struct CameraPage {
   }
 
   /**
-   * 数据操作：快速扫描 / 全量扫描。
+   * 已连接后的操作：Wi-Fi STA 遥控、快速扫描 / 全量扫描。
    *
-   * 「断开连接」已经交给状态头那颗胶囊（1.64.0），这里只留与照片数据有关的两条：
-   * 上面管「补新增」，下面管「忽略缓存重来」。
+   * 「断开连接」已经交给状态头那颗胶囊（1.64.0）；扫描两条上面管「补新增」，
+   * 下面管「忽略缓存重来」。遥控只在 STA 无线会话出现，AP / 蓝牙不显示。
    */
   @Builder
   ActionRows() {
     Column() {
+      // Wi-Fi STA 专属：实时取景与遥控拍摄。AP / 蓝牙暂不显示，避免把只有
+      // 一条 PTP 会话的相机的控制权抢来抢去。
+      if (this.svc.linkMode === CameraLinkMode.STA && this.svc.wireless) {
+        CameraActionRow({
+          label: $r('app.string.camera_wifi_remote_title'),
+          subtitle: $r('app.string.camera_wifi_remote_action_desc'),
+          disabled: this.svc.scanning,
+          onTap: () => { this.onOpenWifiRemote(); }
+        })
+      }
       CameraActionRow({
         label: $r('app.string.camera_main_quick_scan'),
         subtitle: $r('app.string.camera_action_quick_scan_desc'),

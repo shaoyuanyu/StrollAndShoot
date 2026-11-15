@@ -1,7 +1,7 @@
 import { PtpPriority, PtpEndpointKind, PtpError, PTP_ERR_USB, PTP_ERR_NOT_OPEN,
   ptpParseDeviceInfo, ptpParseStorageIDs, ptpParseObjectHandles, ptpParseObjectInfo,
   ptpParseObjectPropList, type PtpEndpoint, type PtpTransport, type DeviceInfo,
-  type ObjectInfo, type ObjectPropList } from '../pages/PtpHost';
+  type ObjectInfo, type ObjectPropList, type PtpRawResult } from '../pages/PtpHost';
 import { WifiPtpLink, type PtpIpResult } from './WifiPtpLink';
 
 /** PTP 操作码（标准 PTP + MTP 扩展）。 */
@@ -182,6 +182,26 @@ export class WifiPtpSession implements PtpTransport {
     }
   }
 
+  /**
+   * 原始 PTP 事务：尼康 Wi-Fi 遥控命令的入口。
+   *
+   * 返回相机响应码、响应参数与数据段；链路错误返回 null（调用方按失败处理）。
+   * 实时取景每帧都会走这里，不能在失败时抛异常——否则页面会被一条断链刷屏。
+   */
+  async rawCommand(opcode: number, params: number[], expectData: boolean,
+    _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    if (!this.open) return null;
+    try {
+      const frame = opcode === 0x9203 || opcode === 0x9428;
+      const r = await this.exec(opcode, params, expectData,
+        `NikonOp(0x${opcode.toString(16)})`, frame ? 3000 : undefined);
+      return { code: r.code, params: r.params, data: r.data };
+    } catch (err) {
+      this.log(`NikonOp(0x${opcode.toString(16)}) 失败: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   async getStorageIDs(_priority?: PtpPriority): Promise<number[]> {
     if (!this.open) throw new PtpError('GetStorageIDs', PTP_ERR_NOT_OPEN);
     const r = await this.exec(OP_GET_STORAGE_IDS, [], true, 'GetStorageIDs');
@@ -348,7 +368,7 @@ export class WifiPtpSession implements PtpTransport {
   }
 
   private async exec(opcode: number, params: number[], expectData: boolean,
-    name: string): Promise<PtpIpResult> {
+    name: string, timeoutMs?: number): Promise<PtpIpResult> {
     const link = this.link;
     if (!link) {
       throw new PtpError(name, PTP_ERR_NOT_OPEN);
@@ -357,7 +377,7 @@ export class WifiPtpSession implements PtpTransport {
       throw new PtpError(name, PTP_ERR_USB, 'PTP/IP 链路已断开');
     }
     try {
-      return await link.transaction(opcode, params, expectData);
+      return await link.transaction(opcode, params, expectData, timeoutMs);
     } catch (err) {
       const msg = (err as Error).message;
       this.log(`${name} 失败: ${msg}`);

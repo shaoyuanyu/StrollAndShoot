@@ -16,6 +16,7 @@ import { PtpSession, PtpPriority, PtpEndpointKind, setPtpLog, setPtpQuietOps, Pt
   type PtpTransport } from '../pages/PtpHost';
 import { PtpScheduler } from './PtpScheduler';
 import { WifiPtpSession } from './WifiPtpSession';
+import { NikonWifiLiveView } from './NikonWifiLiveView';
 import { NsdScanner, type WifiCameraInfo } from './NsdScanner';
 import { SubnetScanner } from './SubnetScanner';
 import { BleScanner, BleCameraLink, type BleCameraDevice, type BleRemoteStatus } from './BleScanner';
@@ -333,6 +334,8 @@ export class CameraService {
   @Trace pairingRequired: boolean = false;
   /** 当前无线会话实例，配对命令要直接落在它上面（PtpScheduler 不转发）。 */
   private wifiSession: WifiPtpSession | null = null;
+  /** Wi-Fi STA 实时取景 / 遥控；每次 Wi-Fi 会话重建，断开时丢弃。 */
+  @Trace wifiLiveView: NikonWifiLiveView | null = null;
   /** mDNS 发现的局域网相机。 */
   @Trace wifiCameras: WifiCameraInfo[] = [];
   /** mDNS 浏览是否进行中。 */
@@ -1454,6 +1457,8 @@ export class CameraService {
   onAppBackground(): void {
     // 后台不做无线心跳：没有界面要更新，也没必要陪相机跑流量。
     this.setAppForeground(false);
+    // 实时取景是持续取流，退后台必须停：既省电，也避免相机停在取景模式。
+    this.stopWifiLiveView().catch((_e: Error) => {});
     // 记一笔「带着无线会话退到后台」。Wi-Fi 会话没有合法的长时任务（见
     // SERVICES.md「长时任务类型」），进程冻结后网络资源会在 12 秒左右被系统
     // 释放，所以回前台不能直接信 `connected`——超过宽限期就重建会话。
@@ -2505,6 +2510,9 @@ export class CameraService {
       this.log.add('Wi-Fi DeviceInfo 未取到，用地址作为身份');
     }
     this.log.add(`无线连接建立: ${target}:${port}，身份 ${this.cameraIdentity}`);
+    // 一个 Wi-Fi 会话对应一个实时取景控制器；设备操作表决定页面显示哪些按钮。
+    this.wifiLiveView = new NikonWifiLiveView(this.session, this.deviceOps,
+      (msg: string) => { this.log.add(msg); });
     // 地址落盘：下次冷启动 / 断线重连先试这个地址，不用每次都扫一遍网段。
     WifiLinkStore.getInstance().save(target, port, this.cameraName);
     this.wifiAutoReconnectArmed = true;
@@ -2567,6 +2575,7 @@ export class CameraService {
     if (this.wifiSession === wifi) {
       this.wifiSession = null;
     }
+    this.wifiLiveView = null;
     this.pairingRequired = false;
     this.pairingCode = '';
     this.wifiAutoReconnectArmed = false;
@@ -2592,6 +2601,7 @@ export class CameraService {
     this.pairingCode = '';
     this.connected = false;
     this.wireless = false;
+    this.wifiLiveView = null;
     this.wifiSession = null;
     this.session = new PtpScheduler(new PtpSession());
 
@@ -5560,6 +5570,10 @@ export class CameraService {
       return;
     }
     this.lastScanStartMs = startedAt;
+    // 实时取景和扫描共用 PTP 队列；扫描要跑很多事务，先把取景停掉。
+    if (this.wifiLiveView !== null) {
+      await this.stopWifiLiveView();
+    }
     this.scanning = true;
     this.log.add('=== 开始扫描 ===');
     // 这次扫描属于当前链路选择；切模式后 USB 会话不再建立/保留。
@@ -7123,6 +7137,33 @@ export class CameraService {
     this.log.add(wantMock ? '[Mock] 使用虚拟相机' : '[Mock] 使用真实 USB 相机');
   }
 
+  /**
+   * 取当前 Wi-Fi 会话的实时取景控制器；没有连接时返回 null。
+   *
+   * 页面在 `aboutToAppear` 调一次。控制器按会话创建，扫描 / 下载与实时取景
+   * 共用同一个 `PtpScheduler`，不会在 PTP/IP 管道上插队。
+   */
+  ensureWifiLiveView(): NikonWifiLiveView | null {
+    if (!this.connected || !this.wireless) return null;
+    if (this.wifiLiveView === null) {
+      this.wifiLiveView = new NikonWifiLiveView(this.session, this.deviceOps,
+        (msg: string) => { this.log.add(msg); });
+    }
+    return this.wifiLiveView;
+  }
+
+  /** 结束实时取景并丢弃控制器；断开 / 退后台 / 开始扫描前调用。 */
+  async stopWifiLiveView(): Promise<void> {
+    const live = this.wifiLiveView;
+    this.wifiLiveView = null;
+    if (live === null) return;
+    try {
+      await live.stop();
+    } catch (err) {
+      this.log.add(`实时取景: 停止异常 ${(err as Error).message}`);
+    }
+  }
+
   async disconnect(): Promise<void> {
     this.disconnecting = true;
     try {
@@ -7133,6 +7174,9 @@ export class CameraService {
   }
 
   private async disconnectInternal(): Promise<void> {
+    // 先结束实时取景：它还要走 PTP 发 EndLiveView / ChangeCameraMode，
+    // 必须在 CloseSession 之前做。
+    await this.stopWifiLiveView();
     // 用户主动断开：正在跑的批量下载没有链路可用了，先让它停下来，
     // 否则每张照片都会重试三次、把断开拖成几十秒。
     if (this.downloadActive && !this.downloadAborted) {

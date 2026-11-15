@@ -1713,6 +1713,106 @@
       "value": "Device info"
     },
     {
+      "name": "camera_wifi_remote_title",
+      "value": "Remote shooting"
+    },
+    {
+      "name": "camera_wifi_remote_action_desc",
+      "value": "Live view, shutter and focus"
+    },
+    {
+      "name": "camera_wifi_remote_connecting",
+      "value": "Starting live view…"
+    },
+    {
+      "name": "camera_wifi_remote_live",
+      "value": "Live view"
+    },
+    {
+      "name": "camera_wifi_remote_restart",
+      "value": "Restart live view"
+    },
+    {
+      "name": "camera_wifi_remote_waiting",
+      "value": "Waiting for camera…"
+    },
+    {
+      "name": "camera_wifi_remote_not_connected",
+      "value": "Connect to the camera over Wi-Fi first"
+    },
+    {
+      "name": "camera_wifi_remote_not_live",
+      "value": "Start live view first"
+    },
+    {
+      "name": "camera_wifi_remote_unsupported",
+      "value": "This camera does not support Wi-Fi live view"
+    },
+    {
+      "name": "camera_wifi_remote_start_failed",
+      "value": "Could not start live view"
+    },
+    {
+      "name": "camera_wifi_remote_busy",
+      "value": "Camera is busy, try again"
+    },
+    {
+      "name": "camera_wifi_remote_denied",
+      "value": "Live view is not allowed now. Switch the camera back to shooting mode."
+    },
+    {
+      "name": "camera_wifi_remote_shooting",
+      "value": "Shooting…"
+    },
+    {
+      "name": "camera_wifi_remote_shot",
+      "value": "Captured"
+    },
+    {
+      "name": "camera_wifi_remote_focusing",
+      "value": "Focusing…"
+    },
+    {
+      "name": "camera_wifi_remote_af_done",
+      "value": "Focused"
+    },
+    {
+      "name": "camera_wifi_remote_af_failed",
+      "value": "Focus failed"
+    },
+    {
+      "name": "camera_wifi_remote_zoom_failed",
+      "value": "Zoom failed"
+    },
+    {
+      "name": "camera_wifi_remote_disconnected",
+      "value": "Live view disconnected"
+    },
+    {
+      "name": "camera_wifi_remote_error",
+      "value": "Camera returned %1$s"
+    },
+    {
+      "name": "camera_wifi_remote_hint",
+      "value": "Tap the image to move the focus point; tap AF to focus and the shutter to shoot. Leaving this page ends live view."
+    },
+    {
+      "name": "camera_wifi_remote_af",
+      "value": "AF"
+    },
+    {
+      "name": "camera_wifi_remote_wide",
+      "value": "W"
+    },
+    {
+      "name": "camera_wifi_remote_tele",
+      "value": "T"
+    },
+    {
+      "name": "camera_wifi_remote_fps",
+      "value": "%1$d fps"
+    },
+    {
       "name": "camera_group_actions",
       "value": "Actions"
     },

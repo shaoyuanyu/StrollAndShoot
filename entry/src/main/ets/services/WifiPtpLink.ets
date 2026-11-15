@@ -387,8 +387,9 @@ export class WifiPtpLink {
     if (cmd) await cmd.close();
   }
 
-  /** 发一条 PTP 命令并等响应（可选数据段）。 */
-  async transaction(opcode: number, params: number[], expectData: boolean): Promise<PtpIpResult> {
+  /** 发一条 PTP 命令并等响应（可选数据段）。`timeoutMs` 留给实时取景帧用。 */
+  async transaction(opcode: number, params: number[], expectData: boolean,
+                    timeoutMs: number = TRANSACTION_TIMEOUT_MS): Promise<PtpIpResult> {
     const command = this.command;
     if (!command) throw new Error('PTP/IP 未连接');
     if (this.pending) throw new Error('PTP/IP 上一笔事务尚未结束');
@@ -405,7 +406,7 @@ export class WifiPtpLink {
           this.pending = null;
           reject(new Error(`PTP/IP 事务超时 op=0x${opcode.toString(16)}`));
         }
-      }, TRANSACTION_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending = {
         transId: transId,
         expectData: expectData,

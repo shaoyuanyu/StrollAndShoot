@@ -11,6 +11,7 @@ import nikonWifiCredentialsTest from './NikonWifiCredentials.test';
 import cameraStandeeTest from './CameraStandee.test';
 import blePayloadsTest from './BlePayloads.test';
 import downloadResumeTest from './DownloadResume.test';
+import nikonWifiLiveViewTest from './NikonWifiLiveView.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -26,4 +27,5 @@ export default function testsuite() {
   cameraStandeeTest();
   blePayloadsTest();
   downloadResumeTest();
+  nikonWifiLiveViewTest();
 }

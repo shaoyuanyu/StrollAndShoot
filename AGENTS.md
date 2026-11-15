@@ -181,7 +181,7 @@ hvigorw test -p module=entry -p coverage=true
 - 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`，末尾一行是 `Tests run / Failure / Error / Pass`。
 - `entry/src/mock/Libentry.mock.ets` 是模板生成的，曾经编译不过（三处无类型对象字面量，`arkts-no-untyped-obj-literals`），已改为先声明 `interface` 再返回。改动 mock 的返回值时必须保持这一点。
 - Instrument Test 需要设备，且 `ohosTest` 的 HAP 要签名，本机模拟器装不了签名的包。
-- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 37 个用例）；`entry/src/ohosTest` 仍是模板用例。
+- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 77 个用例）；`entry/src/ohosTest` 仍是模板用例。
 
 ### macOS
 
@@ -675,6 +675,7 @@ HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_kno
 | 模块 | 职责 |
 |---|---|
 | `services/CameraService.ets` | 扫描、连接、下载、缩略图/原图加载、缓存与 GPS 匹配 |
+| `services/NikonWifiLiveView.ets` | Wi-Fi STA 实时取景、快门、AF、变焦；PTP rawCommand + 串行调度 |
 | `services/GpsRecorder.ets` | 连续定位、后台长时任务、按天聚合、模拟轨迹 |
 | `services/ThumbnailCache.ets` | 缩略图磁盘缓存、manifest、过期清理 |
 | `services/AppLog.ets` | 内存环形缓冲 + `app_log.txt` 追加写 + hilog |
@@ -768,7 +769,7 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 #### 导航骨架
 
 - `pages/Index.ets` 是唯一入口（`@Entry`），内部用 ArkUI 原生 **`Navigation`** + `NavPathStack`，隐藏系统导航栏（`hideNavBar(true)`），并注册自定义转场 `customNavContentTransition`。
-- `route_map.json` 注册 NavDestination：`MainScreen`、`PhotoViewerScreen`、`GpsManagementPage`、`GpsTrackViewerPage`、`CacheManagementPage`、`PairedCamerasPage`。
+- `route_map.json` 注册 NavDestination：`MainScreen`、`PhotoViewerScreen`、`GpsManagementPage`、`GpsTrackViewerPage`、`CacheManagementPage`、`PairedCamerasPage`、`BleRemotePage`、`CameraInfoPage`、`WifiRemotePage`。
 - 二级页（缓存管理、定位记录、轨迹全屏）都走 `route_map.json` 的 NavDestination，用 `NavPathStack.pushPath` / `pop`，不是 `@Entry`，也不再用 `router.*`。
 - `MainScreen` 承载三个标签页（画廊 / 相机 / 设置）。
 

@@ -1229,6 +1229,9 @@ export struct MainScreen {
             onOpenCameraInfo: () => {
               this.pageInfos.pushPath({ name: 'CameraInfoPage' });
             },
+            onOpenWifiRemote: () => {
+              this.pageInfos.pushPath({ name: 'WifiRemotePage' });
+            },
             onSelectMode: (mode: number) => {
               this.svc.setLinkMode(mode);
             },

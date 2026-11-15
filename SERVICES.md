@@ -381,6 +381,78 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
 
+### Wi-Fi STA 实时取景与遥控（1.78.0）
+
+Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP/IP 做实时取景和
+静止图像遥控。协议从 SnapBridge 2.14.3 的 `ptpclient/actions/liveview`、
+`snapbridge.ptpclient.c8/y7` 反编译得到，操作码与参数如下（Z50II 尚未真机验证，
+本次不推送手机）：
+
+| 操作 | 码 | 参数 / 说明 |
+|---|---|---|
+| `ChangeCameraMode` | `0x90C2` | p1=1 交给手机（HOST），p1=0 还给相机 |
+| `StartLiveView` | `0x9201` | 无参数；忙（`0x2019`）时 500ms 重试 |
+| `EndLiveView` | `0x9202` | 无参数；忙时同样重试 |
+| `GetLiveViewImage` | `0x9203` | 无参数，返回「头 + JPEG」 |
+| `GetLiveViewImageEx` | `0x9428` | 新机型优先；头更长，JPEG 仍在末尾 |
+| `DeviceReady` | `0x90C8` | 无参数；启动 / 对焦 / 拍摄后轮询到 `0x2001` |
+| `InitiateCaptureRecInMedia` | `0x9207` | `[-1, 0]` = 普通释放、存卡 |
+| `AfDrive` | `0x90C1` | 无参数 |
+| `ChangeAfArea` | `0x9205` | `[x, y]`，实时取景像素坐标 |
+| `ZoomControlOperation` | `0x9016` | `[wideSteps, teleSteps]`，SnapBridge 用 `[1,0]` / `[0,1]` |
+
+相关属性（`0x1015 GetDevicePropValue`）：
+
+| 属性 | 码 | 说明 |
+|---|---|---|
+| `RemoteCaptureProhibitionCondition` | `0xD0BD` | 非 0 不允许遥控拍摄 |
+| `LiveViewStatus` | `0xD1A2` | 1 = 实时取景已启动 |
+| `LiveViewProhibitionCondition` | `0xD1A4` | 非 0 不允许取景；bit31 是「拍摄中」标志，忽略 |
+| `LiveViewSelector` | `0xD1A6` | 0 = 静止图像，1 = 录像（本阶段未写） |
+
+**实现分层**
+
+| 文件 | 职责 |
+|---|---|
+| `pages/PtpHost.ets` | `PtpTransport.rawCommand(opcode, params, expectData)`，USB 返回 null |
+| `services/PtpScheduler.ets` | 把 `rawCommand` 与照片事务放进同一串行队列 |
+| `services/WifiPtpSession.ets` | 把 `rawCommand` 翻译成 PTP/IP 事务，返回响应码/参数/数据 |
+| `services/NikonWifiLiveView.ets` | 启动 / 停止、取景循环、快门、AF、变焦；`@ObservedV2` 状态 |
+| `pages/WifiRemotePage.ets` | 黑底全屏取景、点画面对焦、AF / 快门 / W-T |
+
+**启动顺序**（照 SnapBridge `StartLiveViewAction`）
+
+1. 取 `RemoteCaptureProhibitionCondition`、`LiveViewProhibitionCondition`；
+   非 0 时直接给「相机当前不允许实时取景」。
+2. `ChangeCameraMode(1)`；不支持该命令的机型继续尝试。
+3. 读 `LiveViewStatus`；已经为 1 就跳过 StartLiveView。
+4. `StartLiveView`，忙时 500ms 重试（最多 10 次）。
+5. `DeviceReady` 轮询到 `0x2001`，然后启动约 80ms 一帧的取景循环。
+6. 停止时 `EndLiveView` → `ChangeCameraMode(0)`，无论用户返回、退后台、
+   开始扫描还是断开 Wi-Fi 都要走这一步（相机在实时取景中会锁回放/菜单）。
+
+**取景帧解析**
+
+`GetLiveViewImage` 数据段不是纯 JPEG：前面是机型相关的头，JPEG 在末尾。
+- 老协议：偏移 4 处是 JPEG 长度（`a8`）；
+- Ex：偏移 12 处是 JPEG 长度（`b8`，前面两个 short + 两个 int）；
+- 先按声明长度取末尾并验证 `FF D8`，失败再从头扫 SOI，最后按 EOI 截断。
+不要把头的偏移写死成某个常数：不同固件版本头长度不同，末尾取帧更稳。
+
+**并发与队列**
+
+- 取景循环只保留**一笔在途事务**，不做并发请求；每帧解完再发下一帧。
+- 快门 / AF / 变焦前先 `pauseLoop()`，让已发出的那一帧结束；它们与扫描、下载
+  共用 `PtpScheduler`，不会在 PTP/IP 单管道上插队。
+- 拍摄 / 对焦后必须等 `DeviceReady`；`0x2019`、`0xA200`、`0xA201`、`0xA202`、
+  `0xA207` 视为忙，继续轮询，其它响应码立即报错。
+- 实时取景控制器随 Wi-Fi 会话创建，`CameraService.wifiLiveView` 持有；
+  断开时先 `stop()` 再 `CloseSession`。
+
+**本阶段未做**：录像（`0x920A/0x920B` 与 `LiveViewSelector` 的
+`SetDevicePropValue` 数据阶段）、曝光参数、驱动模式、白平衡。真机验证待做；
+当前只过了构建、lint 与 JPEG 头解析单测。
+
 **BLE：扫描、GATT 与两段式首配（1.38.x）**
 
 `services/BleScanner.ets` 负责扫描、GATT 连接与配对；`services/NikonPairing.ets`

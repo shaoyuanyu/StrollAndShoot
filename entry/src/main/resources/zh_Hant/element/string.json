@@ -1713,6 +1713,106 @@
       "value": "裝置資訊"
     },
     {
+      "name": "camera_wifi_remote_title",
+      "value": "遙控拍攝"
+    },
+    {
+      "name": "camera_wifi_remote_action_desc",
+      "value": "即時取景、快門與對焦"
+    },
+    {
+      "name": "camera_wifi_remote_connecting",
+      "value": "正在啟動即時取景…"
+    },
+    {
+      "name": "camera_wifi_remote_live",
+      "value": "即時取景"
+    },
+    {
+      "name": "camera_wifi_remote_restart",
+      "value": "重新啟動即時取景"
+    },
+    {
+      "name": "camera_wifi_remote_waiting",
+      "value": "等待相機畫面…"
+    },
+    {
+      "name": "camera_wifi_remote_not_connected",
+      "value": "請先在相機頁連接 Wi-Fi"
+    },
+    {
+      "name": "camera_wifi_remote_not_live",
+      "value": "請先啟動即時取景"
+    },
+    {
+      "name": "camera_wifi_remote_unsupported",
+      "value": "這台相機不支援 Wi-Fi 遙控取景"
+    },
+    {
+      "name": "camera_wifi_remote_start_failed",
+      "value": "啟動即時取景失敗"
+    },
+    {
+      "name": "camera_wifi_remote_busy",
+      "value": "相機忙碌，請稍後再試"
+    },
+    {
+      "name": "camera_wifi_remote_denied",
+      "value": "相機目前不允許即時取景，請切回拍攝模式"
+    },
+    {
+      "name": "camera_wifi_remote_shooting",
+      "value": "正在拍攝…"
+    },
+    {
+      "name": "camera_wifi_remote_shot",
+      "value": "已拍攝"
+    },
+    {
+      "name": "camera_wifi_remote_focusing",
+      "value": "正在對焦…"
+    },
+    {
+      "name": "camera_wifi_remote_af_done",
+      "value": "對焦完成"
+    },
+    {
+      "name": "camera_wifi_remote_af_failed",
+      "value": "對焦失敗"
+    },
+    {
+      "name": "camera_wifi_remote_zoom_failed",
+      "value": "變焦失敗"
+    },
+    {
+      "name": "camera_wifi_remote_disconnected",
+      "value": "即時取景已中斷"
+    },
+    {
+      "name": "camera_wifi_remote_error",
+      "value": "相機回傳錯誤 %1$s"
+    },
+    {
+      "name": "camera_wifi_remote_hint",
+      "value": "點畫面移動對焦點；按 AF 對焦，按快門拍攝。離開頁面會結束即時取景。"
+    },
+    {
+      "name": "camera_wifi_remote_af",
+      "value": "對焦"
+    },
+    {
+      "name": "camera_wifi_remote_wide",
+      "value": "W"
+    },
+    {
+      "name": "camera_wifi_remote_tele",
+      "value": "T"
+    },
+    {
+      "name": "camera_wifi_remote_fps",
+      "value": "%1$d fps"
+    },
+    {
       "name": "camera_group_actions",
       "value": "操作"
     },

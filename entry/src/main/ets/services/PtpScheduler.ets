@@ -1,6 +1,6 @@
 import hilog from '@ohos.hilog';
 import { PtpPriority, type PtpTransport, type PtpEndpoint, type DeviceInfo, type ObjectInfo,
-  type ObjectPropList } from '../pages/PtpHost';
+  type ObjectPropList, type PtpRawResult } from '../pages/PtpHost';
 
 /**
  * 一个排队中的 PTP 事务。
@@ -55,6 +55,11 @@ export class PtpScheduler implements PtpTransport {
   getDevicePropValue(propertyCode: number,
     priority: PtpPriority = PtpPriority.FOREGROUND): Promise<Uint8Array | null> {
     return this.enqueue(priority, () => this.inner.getDevicePropValue(propertyCode, priority));
+  }
+
+  rawCommand(opcode: number, params: number[], expectData: boolean,
+    priority: PtpPriority = PtpPriority.FOREGROUND): Promise<PtpRawResult | null> {
+    return this.enqueue(priority, () => this.inner.rawCommand(opcode, params, expectData, priority));
   }
 
   getStorageIDs(priority: PtpPriority = PtpPriority.SCAN): Promise<number[]> {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { PtpPriority, type PtpTransport, type PtpEndpoint, type DeviceInfo, type ObjectInfo,
-  type ObjectPropEntry, type ObjectPropList } from '../main/ets/pages/PtpHost';
+  type ObjectPropEntry, type ObjectPropList, type PtpRawResult } from '../main/ets/pages/PtpHost';
 import { PtpScheduler } from '../main/ets/services/PtpScheduler';
 
 /**
@@ -29,6 +29,11 @@ class FakeTransport implements PtpTransport {
 
   async getDevicePropValue(_propertyCode: number,
     _priority?: PtpPriority): Promise<Uint8Array | null> {
+    return null;
+  }
+
+  async rawCommand(_opcode: number, _params: number[], _expectData: boolean,
+    _priority?: PtpPriority): Promise<PtpRawResult | null> {
     return null;
   }
 

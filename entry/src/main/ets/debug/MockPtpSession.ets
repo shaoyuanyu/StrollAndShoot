@@ -1,7 +1,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { MockPtpDevice, MOCK_ROOT } from './MockPtpDevice';
 import type { DeviceInfo, ObjectInfo, ObjectPropEntry, ObjectPropList,
-  PtpEndpoint, PtpTransport } from '../pages/PtpHost';
+  PtpEndpoint, PtpTransport, PtpRawResult, PtpPriority } from '../pages/PtpHost';
 
 const TAG = 'MockPtpSession';
 const DOMAIN = 0x0000;
@@ -53,6 +53,12 @@ export class MockPtpSession implements PtpTransport {
       const level = MockPtpDevice.deviceInfo().batteryLevel ?? 87;
       return new Uint8Array([level & 0xFF]);
     }
+    return null;
+  }
+
+  async rawCommand(_opcode: number, _params: number[], _expectData: boolean,
+    _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    // 模拟相机暂时不实现尼康实时取景；页面会提示「不支持」，不影响照片流程。
     return null;
   }
 
