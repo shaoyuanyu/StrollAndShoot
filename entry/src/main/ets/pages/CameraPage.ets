@@ -159,7 +159,7 @@ const REFLECTION_BOX = REFLECTION_HEIGHT + REFLECTION_GROW_MAX;
 const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
 
 /*
- * 顶边下拉刷新（1.65.0，第二轮）。
+ * 顶边下拉刷新（1.65.0，第二轮；指示器形态 1.73.2）。
  *
  * **手势与下拉编排一行不改**：初始位置继续下拉时 `currentOffset()` 变负，
  * `pullDown` 跟着长，卡面走 1/3、卡内抽屉开 2/3、立牌倒影被拉长——全是既有行为。
@@ -168,13 +168,20 @@ const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
  * - 松手高度不到最大下拉的 [REFRESH_TRIGGER_RATIO]（80%）→ 什么都不做，
  *   继续跟着弹簧回弹（和以前完全一致）；
  * - 到了阈值 → 手指抬起那一刻定格，用**一条** `animateTo` 把「下拉量」收回到 0：
- *   卡面与抽屉完整回弹到原位，系统刷新指示器贴在卡面正上方、跟着一起落到
+ *   卡面与抽屉完整回弹到原位，刷新指示器贴在卡面正上方、跟着一起落到
  *   「标题栏与卡面之间」那段空白里继续转；
  * - 真正去读一次相机状态（1.73.0，`CameraService.refreshCameraStatus()`），读完
  *   指示器淡出、弹一句结论；至少留 [REFRESH_MIN_MS] 让转圈不至于一闪而过。
  *
  * 这样「回弹」和「进入刷新」是同一条动画，不会出现「先弹回原位、再冒出一个转圈
- * 把卡面挤下去」的两段。指示器用系统 `LoadingProgress`（系统加载动效）。
+ * 把卡面挤下去」的两段。
+ *
+ * **下拉阶段不转圈**（1.73.2，用户反馈「还没拉到 80%，图标已经和拉到之后一样是
+ * 深色的，容易被误导」）：手指还在拉的时候，指示器是一条**跟着下拉量长出来的
+ * 进度环**（官方 `Progress` 的 Ring，轨道用 `progress_track`），颜色
+ * `text_tertiary`；拉到阈值才画满一圈、同时转成 `text_primary`。于是「还差一点」
+ * 与「松手就刷新」在**弧长**和**深浅**上各有一档区别，不用读文字也分得出来。
+ * 真正进入刷新（手指抬起、阈值已到）才换成系统 `LoadingProgress` 转圈。
  */
 const REFRESH_TRIGGER_RATIO = 0.8;
 /** 触发刷新所需的下拉量（vp）= 最大下拉的 80%。 */
@@ -183,7 +190,7 @@ const REFRESH_THRESHOLD_VP = TOP_PULL_MAX * REFRESH_TRIGGER_RATIO;
  * 刷新指示器：**不占布局**，画在标题栏与卡面之间那段空白里（1.65.0 第二轮第三版，
  * 用户要求）。松手后卡面与抽屉**完整回弹到原位**，指示器留在卡面正上方继续转，
  * 刷完淡出——回弹行程因此拿到卡面的 48vp 加抽屉的 144vp，比「卡面被顶下去一行」
- * 那版长得多。指示器 22vp 必须塞得进那段空白（模拟器上约 48vp，见 `REFRESH_ICON`）。
+ * 那版长得多。指示器必须塞得进那段空白（模拟器上约 48vp，见 `REFRESH_ICON`）。
  */
 /**
  * 刷新指示器的最短停留（ms）。
@@ -195,14 +202,23 @@ const REFRESH_MIN_MS = 700;
 /** 「松手回弹到原位」与「指示器淡出」的动画时长（ms）。 */
 const REFRESH_ANIM_MS = 260;
 /**
- * 指示器的**盒子**尺寸（vp）：`LoadingProgress` 实际画出来的圆约是盒子的 2/3，
- * 盒子 27 → 视觉直径约 **18vp**（用户指定的尺寸；22 的盒子只有 13vp，太小）。
+ * 转圈（刷新中）的**盒子**尺寸（vp）：`LoadingProgress` 实际画出来的圆约是盒子的
+ * 2/3，盒子 27 → 视觉直径约 **18vp**（用户指定的尺寸；22 的盒子只有 13vp，太小）。
  *
  * 用系统 `LoadingProgress` 而不是 `SwipeRefresherV2`：后者自带尺寸固定 13vp 左右，
  * 想放大只能给容器加 `scale`，而 `scale` 是渲染变换，会按 1x 栅格化再放大、边缘发虚
  * （实测）。`LoadingProgress` 的 `width/height` 直接可给，放大后仍然清晰。
  */
 const REFRESH_ICON = 27;
+/**
+ * 下拉阶段进度环的外径（vp）与线宽（1.73.2）。
+ *
+ * `Progress` 的 Ring 画在盒子内，外径就是 20：与转圈视觉上的 18 只差 2vp、圆心
+ * 重合，松手换成 `LoadingProgress` 时看不出跳变。线宽 2.5 在 20 的环上不糊、
+ * 也不至于细到断墨。
+ */
+const REFRESH_RING = 20;
+const REFRESH_RING_STROKE = 2.5;
 /** 指示器底边与卡面上沿的间距（vp）：图标永远贴在卡面正上方、与卡面同速移动。 */
 const REFRESH_ICON_GAP = 4;
 
@@ -395,14 +411,19 @@ export struct CameraPage {
   /**
    * 下拉刷新（1.65.0）。
    *
-   * - `pullProgress`：本次下拉进度（0..1，1 = `TOP_PULL_MAX`），指示器随它淡入；
    * - `refreshing`：刷新中（由 `onTopTouch()` 置真，读完相机状态后置假）；
    * - `refreshFade`：刷新结束那一下的淡出（1→0），让指示器不是硬消失。
-   * 刷新时卡面与抽屉**回原位**，所以不再需要「撑开一行」的位移量。
+   * 下拉进度不再单独存一份：进度环的弧长直接读 `pullDown`、与阈值
+   * `REFRESH_THRESHOLD_VP` 比（1.73.2）。刷新时卡面与抽屉**回原位**，所以也不
+   * 需要「撑开一行」的位移量。
    */
-  @Local pullProgress: number = 0;
   @Local refreshing: boolean = false;
   @Local refreshFade: number = 1;
+  /** 下拉进度环的固定样式：对象只建一次，滚动帧里不重新分配。 */
+  private refreshRingStyle: RingStyleOptions = {
+    strokeWidth: REFRESH_RING_STROKE,
+    enableSmoothEffect: false
+  };
 
   /**
    * 模式选择器的锁定反馈（1.64.0 第二轮）。
@@ -3116,7 +3137,6 @@ export struct CameraPage {
     Haptics.tap();
     animateTo({ duration: REFRESH_ANIM_MS, curve: Curve.EaseOut }, () => {
       this.pullDown = 0;
-      this.pullProgress = 0;
     });
     const startedAt = Date.now();
     // 真正读一次相机状态（1.73.0）：蓝牙重读 GATT，PTP 重取 DeviceInfo，
@@ -3193,21 +3213,46 @@ export struct CameraPage {
   }
 
   /**
-   * 下拉刷新指示器：**官方** `SwipeRefresherV2`（系统加载动效）。
+   * 是否已经拉到刷新阈值（1.73.2）。
    *
-   * 只用它的「加载中」形态（`isLoading`），位置、显隐由我们自己按下拉量算：
-   * 官方的 `Refresh` 容器会把整页下移，那会改掉本页既有的下拉编排（卡面 1/3、
-   * 卡内抽屉 2/3、倒影拉长），所以容器不用、只用它的指示器组件。
-   * 组件本身不要挂通用属性（官方说明：会挂到自动生成的 __Common__ 节点上），
-   * 尺寸、透明度、位置都加在外层容器上。
+   * 到了就画满一圈、颜色转深——这是「松手就会刷新」的唯一视觉信号，判定口径必须
+   * 和 `onTopTouch()` 完全一致（都拿 `pullDown` 比 `REFRESH_THRESHOLD_VP`），
+   * 否则会出现「看起来已经拉满、松手却没刷新」。
+   */
+  private refreshArmed(): boolean {
+    return this.pullDown >= REFRESH_THRESHOLD_VP;
+  }
+
+  /**
+   * 下拉刷新指示器：下拉阶段是**进度环**，刷新阶段是系统 `LoadingProgress`。
+   *
+   * 1.73.2 之前两个阶段都是转圈：手指还没拉到阈值它就在转、颜色也已经是
+   * `text_secondary`，与「松手就能刷新」看起来没有区别（用户反馈）。现在下拉
+   * 阶段换成官方 `Progress` 的 Ring：弧长直接取 `pullDown / REFRESH_THRESHOLD_VP`，
+   * 未到阈值是 `text_tertiary`，到了才画满并转成 `text_primary`；只有真正进入
+   * 刷新才换成转圈。`enableSmoothEffect: false` 让弧长贴着手指走，不额外做平滑。
+   *
+   * 位置、显隐、尺寸仍由外层容器算：官方的 `Refresh` 容器会把整页下移，会改掉
+   * 本页既有的下拉编排（卡面 1/3、卡内抽屉 2/3、倒影拉长），所以容器不用。
+   * 组件本身不要挂通用属性（官方说明：会挂到自动生成的 __Common__ 节点上）。
    */
   @Builder
   RefreshIndicator() {
     Column() {
-      LoadingProgress()
-        .width(REFRESH_ICON)
-        .height(REFRESH_ICON)
-        .color($r('app.color.text_secondary'))
+      if (this.refreshing) {
+        LoadingProgress()
+          .width(REFRESH_ICON)
+          .height(REFRESH_ICON)
+          .color($r('app.color.text_secondary'))
+      } else {
+        Progress({ value: this.pullDown, total: REFRESH_THRESHOLD_VP, type: ProgressType.Ring })
+          .width(REFRESH_RING)
+          .height(REFRESH_RING)
+          .color(this.refreshArmed() ? $r('app.color.text_primary') : $r('app.color.text_tertiary'))
+          // 轨道用专门的 progress_track：页面底色上一条更淡的线，才能看出「还差多少」
+          .backgroundColor($r('app.color.progress_track'))
+          .style(this.refreshRingStyle)
+      }
     }
     .width(REFRESH_ICON)
     .height(REFRESH_ICON)
@@ -3256,10 +3301,6 @@ export struct CameraPage {
       const pull = y < 0 ? Math.min(TOP_PULL_MAX, -y) : 0;
       if (Math.abs(pull - this.pullDown) > 0.2) {
         this.pullDown = pull;
-      }
-      const progress = Math.min(1, pull / TOP_PULL_MAX);
-      if (Math.abs(progress - this.pullProgress) > 0.01) {
-        this.pullProgress = progress;
       }
     }
 
