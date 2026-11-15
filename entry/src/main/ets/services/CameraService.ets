@@ -32,6 +32,7 @@ import { CameraModelStore } from '../model/CameraModelStore';
 import { cameraSerialFromBleName, cameraStandeeKey } from '../utils/CameraStandee';
 import { collectLocalNetworks, networkHint } from './LocalNetworks';
 import { AtomicFile } from '../utils/AtomicFile';
+import { DownloadResume } from './DownloadResume';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
 import { BleGeoFeed } from './BleGeoFeed';
@@ -231,6 +232,35 @@ interface DownloadRegistryFile {
 const MAX_DOWNLOAD_RECORDS = 50000;
 /** 图库“最近删除”保留 30 天；超过这个时间的失效记录可以安全丢掉。 */
 const MISSING_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * 单张照片最多尝试几次（含第一次）。
+ *
+ * 802.11 抖动、相机 Wi-Fi 短暂回落、TCP 重传都可能让一笔 `GetPartialObject`
+ * 失败；一次失败就跳过整张会让批量下载在弱网下几乎不可用。3 次是「给两条
+ * 链路各自一次恢复机会」与「坏文件不要无限重试」之间的折中。
+ */
+const DOWNLOAD_MAX_ATTEMPTS = 3;
+/** 第 1 / 2 次失败后的等待；真正断链时走 `waitForWifiRetry()`，不按这个。 */
+const DOWNLOAD_RETRY_DELAYS_MS: number[] = [800, 2000];
+/** Wi-Fi 断链后等自动重连的上限；超过就放弃当前批次，残片留给下次续传。 */
+const DOWNLOAD_WIFI_RECONNECT_WAIT_MS = 20000;
+/**
+ * Wi-Fi 分块大小。
+ *
+ * PTP/IP 单笔事务 30 秒超时，2 MB 在 100 KB/s 的弱网下约 20 秒，留出余量；
+ * USB 不走这条分块（USB 的 `getObject` 自己按端点能力分块，再多切反而慢）。
+ */
+const DOWNLOAD_WIFI_CHUNK_BYTES = 2 * 1024 * 1024;
+/**
+ * 未完成分片的保留时间。
+ *
+ * 断点续传要跨应用重启才有意义；但沙箱里长期堆用户照片残片不合适，7 天后
+ * 启动时清掉。成功、永久失败（对象不存在等）都会立即删除。
+ */
+const DOWNLOAD_PART_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** 取消/断开时内部用的异常标记；不展示给用户。 */
+const DOWNLOAD_CANCELLED = 'DOWNLOAD_CANCELLED';
 
 /** 每成功保存一张照片就追加一行，崩溃后可从 journal 恢复。 */
 interface DownloadJournalEntry {
@@ -972,6 +1002,13 @@ export class CameraService {
   private downloadDir: string = '';
   private downloadTempDir: string = '';
   private downloadAborted: boolean = false;
+  /** 有批量下载在跑：阻止自动重连后的 `finishAutoLink()` 再开一轮扫描。 */
+  private downloadActive: boolean = false;
+  /**
+   * 本次 Wi-Fi 会话已确认相机不支持 `GetPartialObject`（或首块连续失败后退回整包）。
+   * 同一会话的后续照片直接走 `GetObject`，不再每张先撞一次分块。
+   */
+  private wifiPartialUnsupported: boolean = false;
   private registryLoaded: boolean = false;
   private registryLoading: Promise<void> | null = null;
   /** 用于按 URI 查询媒体库；没有 context 或没有权限时退化为逐个打开 URI。 */
@@ -1043,15 +1080,51 @@ export class CameraService {
       this.context = ctx;
     }
     this.downloadTempDir = dir + '/download_temp';
-    // 上次中断留下的沙箱临时图片不再需要；先清空再建目录。
-    AtomicFile.deleteDirRecursive(this.downloadTempDir);
-    try {
-      fileIo.mkdirSync(this.downloadTempDir, true);
-    } catch (_e) {
-      // best effort
-    }
+    this.prepareDownloadTempDir();
     this.cachePrefs.init(dir);
     this.loadRegistry();
+  }
+
+  /**
+   * 准备下载临时目录。
+   *
+   * 不能像以前那样整个删掉：`.part` 是断点续传的原料，跨应用重启也要留着。
+   * 只清两类东西：不是断点的普通临时文件（上次崩溃留下的半成品/完整临时图），
+   * 以及超过 `DOWNLOAD_PART_TTL_MS` 的断点。
+   */
+  private prepareDownloadTempDir(): void {
+    try {
+      if (!fileIo.accessSync(this.downloadTempDir)) {
+        fileIo.mkdirSync(this.downloadTempDir, true);
+      }
+    } catch (_e) {
+      // 目录建不出来时下载阶段会报错，这里不重复抛
+    }
+    let names: string[] = [];
+    try {
+      names = fileIo.listFileSync(this.downloadTempDir);
+    } catch (_e) {
+      return;
+    }
+    const now = Date.now();
+    for (const name of names) {
+      const base = name.substring(name.lastIndexOf('/') + 1);
+      const full = this.downloadTempDir + '/' + base;
+      const isPart = base.endsWith('.part') || base.endsWith('.part.json');
+      try {
+        const stat = fileIo.statSync(full);
+        if (!isPart) {
+          fileIo.unlinkSync(full);
+          continue;
+        }
+        // mtime 单位是秒；断点保留 7 天。
+        if (now - stat.mtime * 1000 > DOWNLOAD_PART_TTL_MS) {
+          fileIo.unlinkSync(full);
+        }
+      } catch (_e) {
+        // 单个文件读不到/删不掉不影响其余清理
+      }
+    }
   }
 
   /**
@@ -1471,6 +1544,23 @@ export class CameraService {
     onProgress: (progress: DownloadProgress) => void,
     context: common.UIAbilityContext
   ): Promise<DownloadResult[]> {
+    if (this.downloadActive) {
+      this.log.add('已有下载在进行，忽略本次请求');
+      return [];
+    }
+    this.downloadActive = true;
+    try {
+      return await this.downloadPhotosInner(handles, onProgress, context);
+    } finally {
+      this.downloadActive = false;
+    }
+  }
+
+  private async downloadPhotosInner(
+    handles: number[],
+    onProgress: (progress: DownloadProgress) => void,
+    context: common.UIAbilityContext
+  ): Promise<DownloadResult[]> {
     // Ensure registry is loaded before starting
     await this.loadRegistry();
 
@@ -1544,28 +1634,53 @@ export class CameraService {
         totalBytes, downloadedBytes, errors
       });
 
-      let data: Uint8Array | null = null;
+      const localFilename = this.sanitizeFilename(photo.filename);
+      const localPath = this.downloadTempDir + '/' + localFilename;
+      const partPath = DownloadResume.partPath(this.downloadTempDir, localFilename, photo.size);
+      let transferred = false;
 
-      // Reuse preloaded data from cache to avoid re-downloading via USB
+      // 预览器/邻近预加载可能已经把原图放进内存：优先落盘，不再占一次链路。
       if (this.compressedCache.has(photo.handle)) {
-        data = this.compressedCache.get(photo.handle)!;
-        this.log.add(`下载(缓存命中): ${photo.filename} (${this.formatSize(data.length)})`);
-      } else {
-        try {
-          data = await this.session.getObject(photo.handle);
-        } catch (err) {
-          const msg = `${photo.filename}: USB传输失败: ${JSON.stringify(err)}`;
-          errors.push(msg);
-          results.push({ handle: photo.handle, key, success: false, localPath: '', error: msg });
-          continue;
+        const cached = this.compressedCache.get(photo.handle)!;
+        if (cached.length > 0) {
+          try {
+            DownloadResume.removePart(partPath);
+            await this.writeFullTemp(partPath, cached);
+            await this.finalizePart(partPath, localPath, photo, false);
+            this.log.add(`下载(缓存命中): ${photo.filename} (${this.formatSize(cached.length)})`);
+            transferred = true;
+          } catch (err) {
+            this.log.add(`缓存放盘失败，改为重新传输: ${photo.filename} — ${(err as Error).message}`);
+            DownloadResume.removePart(partPath);
+          }
         }
       }
 
-      if (!data || data.length === 0) {
-        errors.push(`${photo.filename}: USB传输返回空数据`);
-        results.push({ handle: photo.handle, key, success: false,
-          localPath: '', error: 'USB transfer returned empty data' });
-        continue;
+      if (!transferred) {
+        try {
+          await this.transferPhotoToTemp(photo, partPath, localPath);
+        } catch (err) {
+          const e = err as Error;
+          if (this.downloadAborted || e.message === DOWNLOAD_CANCELLED) {
+            // 取消/断开：当前照片的 `.part` 留着，下次进来可以从这里续。
+            this.downloadAborted = false;
+            errors.push('用户取消下载');
+            this.log.add('下载已取消');
+            break;
+          }
+          const msg = `${photo.filename}: 传输失败: ${e.message}`;
+          errors.push(msg);
+          results.push({ handle: photo.handle, key, success: false, localPath: '', error: msg });
+          this.log.add(`下载失败: ${photo.filename} — ${e.message}`);
+          // 链路已经没了，再对剩下几百张各等 20 秒没有意义。保留当前残片，
+          // 用户重新连上后再选同一批即可续传。
+          if (this.wireless && !this.connected) {
+            errors.push('无线连接已断开，剩余照片已停止；重新连接后会从断点继续');
+            this.log.add('下载停止: 无线连接已断开');
+            break;
+          }
+          continue;
+        }
       }
 
       onProgress({
@@ -1575,21 +1690,8 @@ export class CameraService {
         totalBytes, downloadedBytes, errors
       });
 
-      const localFilename = this.sanitizeFilename(photo.filename);
-      const localPath = this.downloadTempDir + '/' + localFilename;
-      try {
-        const f = await fileIo.open(localPath,
-          fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
-        await fileIo.write(f.fd, data.buffer as ArrayBuffer);
-        await fileIo.close(f);
-      } catch (err) {
-        const msg = `${photo.filename}: 写入文件失败: ${JSON.stringify(err)}`;
-        errors.push(msg);
-        results.push({ handle: photo.handle, key, success: false, localPath: '', error: msg });
-        continue;
-      }
-
-      downloadedBytes += data.length;
+      const actualSize = DownloadResume.sizeOf(localPath);
+      downloadedBytes += actualSize > 0 ? actualSize : photo.size;
       results.push({ handle: photo.handle, key, success: true, localPath: localPath });
 
       // Apply GPS geotagging to the sandbox file before Gallery save
@@ -1664,6 +1766,274 @@ export class CameraService {
 
     await this.endTransferTask();
     return results;
+  }
+
+  /**
+   * 单张照片的传输入口：按链路选分块/整包，失败按退避重试。
+   *
+   * 重试只在**传输层**；GPS 写入与系统相册保存失败不会重传。每次重试都从
+   * `.part` 的当前长度继续（Wi-Fi 真机分块路径），所以 `GetPartialObject`
+   * 已经写入的字节不会白下。
+   */
+  private async transferPhotoToTemp(photo: PhotoEntry, partPath: string,
+                                    localPath: string): Promise<void> {
+    let lastError: Error = new Error('下载失败');
+    for (let attempt = 0; attempt < DOWNLOAD_MAX_ATTEMPTS; attempt++) {
+      this.throwIfDownloadAborted();
+      // 断链后不要拿旧 socket 去撞：等自动重连（最多 20 秒）再发第一块。
+      if (this.wireless && !this.connected) {
+        const ready = await this.waitForWifiRetry();
+        if (!ready) {
+          if (this.downloadAborted) throw new Error(DOWNLOAD_CANCELLED);
+          throw new Error('无线连接未恢复');
+        }
+      }
+      try {
+        let strictSize = false;
+        // 最后一次尝试不再赌分块：有些机型的 objectCompressedSize 不可靠，
+        // 按它切永远等不到最后一块；整包至少能把照片拿下来（大小按实际）。
+        const lastAttempt = attempt === DOWNLOAD_MAX_ATTEMPTS - 1;
+        if (this.wireless && !this.sessionIsMock && !this.wifiPartialUnsupported && !lastAttempt) {
+          strictSize = await this.fetchWifiPhotoResumable(photo, partPath);
+        } else {
+          await this.fetchFullPhoto(photo, partPath);
+        }
+        await this.finalizePart(partPath, localPath, photo, strictSize);
+        return;
+      } catch (err) {
+        lastError = err as Error;
+        if (this.downloadAborted) throw new Error(DOWNLOAD_CANCELLED);
+        if (!this.isRetryableDownloadError(lastError)) {
+          this.log.add(`下载失败（不可重试）: ${photo.filename} — ${lastError.message}`);
+          break;
+        }
+        if (attempt >= DOWNLOAD_MAX_ATTEMPTS - 1) break;
+        const delay = DOWNLOAD_RETRY_DELAYS_MS[
+          Math.min(attempt, DOWNLOAD_RETRY_DELAYS_MS.length - 1)];
+        this.log.add(`下载失败，${delay}ms 后重试 ${attempt + 1}/${DOWNLOAD_MAX_ATTEMPTS - 1}: ` +
+          `${photo.filename} — ${lastError.message}`);
+        if (this.wireless && !this.connected) {
+          const ready = await this.waitForWifiRetry();
+          if (!ready) {
+            if (this.downloadAborted) throw new Error(DOWNLOAD_CANCELLED);
+            break;
+          }
+        } else {
+          await this.sleep(delay);
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /** 整包下载（USB、模拟相机，以及相机不支持分块时的兜底）。 */
+  private async fetchFullPhoto(photo: PhotoEntry, partPath: string): Promise<void> {
+    const data = await this.session.getObject(photo.handle, PtpPriority.FOREGROUND);
+    if (data === null || data.length === 0) {
+      throw new Error('相机返回空数据');
+    }
+    // 整包路径以相机实际返回为准：某些机型/格式的 objectCompressedSize 并不可靠，
+    // 旧版本也没有按它校验。分块路径才必须严格对得上（否则续传长度不可信）。
+    if (!this.sessionIsMock && photo.size > 0 && data.length !== photo.size) {
+      this.log.add(`整包大小与元数据不一致: ${photo.filename} ${data.length}/${photo.size}`);
+    }
+    await this.writeFullTemp(partPath, data);
+  }
+
+  /** 整包写 `.part`；写失败时残片可能只到一半，下一次重试会从头覆盖。 */
+  private async writeFullTemp(partPath: string, data: Uint8Array): Promise<void> {
+    const file = await fileIo.open(partPath,
+      fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
+    try {
+      const written = await fileIo.write(file.fd, this.exactBuffer(data));
+      if (written !== data.length) {
+        throw new Error(`写入 ${written}/${data.length} 字节`);
+      }
+    } finally {
+      try { await fileIo.close(file); } catch (_e) { /* best effort */ }
+    }
+  }
+
+  /**
+   * Wi-Fi 真机：按 2 MB 分块写到 `.part`，每块后按文件实际长度推进 offset。
+   *
+   * 第一块就空（相机不支持 `GetPartialObject`，或刚好断链）时退回整包；
+   * 后续块空则抛错，由外层重试并从已写入长度续传。
+   */
+  private async fetchWifiPhotoResumable(photo: PhotoEntry, partPath: string): Promise<boolean> {
+    let offset = this.preparePart(photo, partPath);
+    if (photo.size > 0 && offset >= photo.size) return true;
+    if (offset > 0) {
+      this.log.add(`续传: ${photo.filename} 从 ${this.formatSize(offset)}` +
+        `${photo.size > 0 ? ' / ' + this.formatSize(photo.size) : ''} 开始`);
+    }
+    const file = await fileIo.open(partPath,
+      fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.APPEND);
+    let fallbackFull = false;
+    try {
+      let guard = 0;
+      while (photo.size <= 0 || offset < photo.size) {
+        this.throwIfDownloadAborted();
+        const remaining = photo.size > 0 ? photo.size - offset : DOWNLOAD_WIFI_CHUNK_BYTES;
+        const want = Math.max(1, Math.min(DOWNLOAD_WIFI_CHUNK_BYTES, remaining));
+        const chunk = await this.session.getPartialObject(photo.handle, offset, want,
+          PtpPriority.FOREGROUND);
+        if (chunk === null || chunk.length === 0) {
+          if (offset === 0) {
+            // 相机不支持分块，或首块正撞上断链：交给整包再试一次。整包也失败
+            // 时外层会重试，下一次仍先试分块，不会把“断链”误判成“不支持”。
+            fallbackFull = true;
+            break;
+          }
+          if (photo.size <= 0) break;
+          throw new Error(`分块在 ${offset} 字节处返回空数据`);
+        }
+        let payload = chunk;
+        if (photo.size > 0 && payload.length > photo.size - offset) {
+          payload = payload.slice(0, photo.size - offset);
+        }
+        const written = await fileIo.write(file.fd, this.exactBuffer(payload));
+        if (written !== payload.length) {
+          throw new Error(`分块写入 ${written}/${payload.length} 字节`);
+        }
+        offset += payload.length;
+        guard++;
+        if (guard > 200000) throw new Error('分块次数异常');
+      }
+    } finally {
+      try { await fileIo.close(file); } catch (_e) { /* best effort */ }
+    }
+    if (fallbackFull) {
+      this.log.add(`改用整包下载: ${photo.filename}`);
+      await this.fetchFullPhoto(photo, partPath);
+      this.wifiPartialUnsupported = true;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 校验/创建 `.part`，返回可续传的 offset。
+   *
+   * 只有残片的元数据与当前相机、handle、文件名、大小全部一致才续；否则整段
+   * 丢弃。尺寸异常（比元数据还大）同样丢弃，避免把上一次不同对象的字节拼进来。
+   */
+  private preparePart(photo: PhotoEntry, partPath: string): number {
+    if (!DownloadResume.exists(partPath)) {
+      DownloadResume.removeMeta(partPath);
+      DownloadResume.writeMeta(partPath,
+        DownloadResume.makeMeta(this.cameraIdentity, photo.handle, photo.filename, photo.size));
+      return 0;
+    }
+    const meta = DownloadResume.readMeta(partPath);
+    if (!DownloadResume.matches(meta, this.cameraIdentity, photo.handle,
+      photo.filename, photo.size)) {
+      this.log.add(`丢弃不匹配的断点: ${photo.filename}`);
+      DownloadResume.removePart(partPath);
+      DownloadResume.writeMeta(partPath,
+        DownloadResume.makeMeta(this.cameraIdentity, photo.handle, photo.filename, photo.size));
+      return 0;
+    }
+    const size = DownloadResume.sizeOf(partPath);
+    if (photo.size > 0 && size > photo.size) {
+      this.log.add(`断点比元数据大，丢弃: ${photo.filename} ${size}/${photo.size}`);
+      DownloadResume.removePart(partPath);
+      DownloadResume.writeMeta(partPath,
+        DownloadResume.makeMeta(this.cameraIdentity, photo.handle, photo.filename, photo.size));
+      return 0;
+    }
+    if (size > 0) {
+      this.log.add(`发现断点: ${photo.filename} ${this.formatSize(size)}`);
+    }
+    return size;
+  }
+
+  /**
+   * `.part` → 正式临时文件。
+   *
+   * 真机校验最终大小（模拟相机的元数据大小是假的 2.4 MB，不能按它校验）；
+   * 成功后删 `.part.json`，让下一次同张照片从零开始。
+   */
+  private async finalizePart(partPath: string, localPath: string, photo: PhotoEntry,
+                             strictSize: boolean): Promise<void> {
+    const actual = DownloadResume.sizeOf(partPath);
+    if (actual <= 0) throw new Error('下载文件为空');
+    if (!this.sessionIsMock && photo.size > 0 && actual !== photo.size) {
+      if (strictSize) {
+        // 分段长度是按元数据切的；对不上说明这段残片不能再用。
+        DownloadResume.removePart(partPath);
+        throw new Error(`文件大小不符: ${actual}/${photo.size}`);
+      }
+      this.log.add(`文件大小与元数据不一致，按实际大小保存: ${photo.filename} ${actual}/${photo.size}`);
+    }
+    DownloadResume.remove(localPath);
+    let partConsumed = false;
+    try {
+      fileIo.renameSync(partPath, localPath);
+      partConsumed = true;
+    } catch (_e) {
+      try {
+        fileIo.copyFileSync(partPath, localPath, 0);
+      } catch (err) {
+        throw new Error(`保存临时文件失败: ${(err as Error).message}`);
+      }
+      try {
+        fileIo.unlinkSync(partPath);
+        partConsumed = true;
+      } catch (_e2) {
+        // copy 已经成功，正式文件可用；残片留着，下一次会按 meta 再收掉。
+      }
+    }
+    if (partConsumed) {
+      DownloadResume.removeMeta(partPath);
+    }
+  }
+
+  /**
+   * 等 Wi-Fi 自动重连；返回 false 表示这一批不用再等了。
+   *
+   * 用户取消、切模式、主动断开（`wifiAutoReconnectArmed=false`）都立即返回，
+   * 不把 20 秒拖满。
+   */
+  private async waitForWifiRetry(): Promise<boolean> {
+    const deadline = Date.now() + DOWNLOAD_WIFI_RECONNECT_WAIT_MS;
+    while (Date.now() < deadline) {
+      this.throwIfDownloadAborted();
+      if (this.connected && this.wireless) return true;
+      if (!this.wireless || !this.wifiAutoReconnectArmed) return false;
+      if (!this.wifiReconnecting && !this.wifiAutoConnecting && this.wirelessFailed !== '') {
+        return false;
+      }
+      await this.sleep(250);
+    }
+    return this.connected && this.wireless;
+  }
+
+  private throwIfDownloadAborted(): void {
+    if (this.downloadAborted) throw new Error(DOWNLOAD_CANCELLED);
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  /** `Uint8Array` 可能是大缓冲上的视图；交给 fileIo 前裁出精确区间。 */
+  private exactBuffer(data: Uint8Array): ArrayBuffer {
+    if (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength) {
+      return data.buffer as ArrayBuffer;
+    }
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  }
+
+  /** 对象不存在/存储不存在重试也没用；其余（含断链、超时、0x200F）都重试。 */
+  private isRetryableDownloadError(err: Error): boolean {
+    if (err.message === DOWNLOAD_CANCELLED) return false;
+    if (err instanceof PtpError) {
+      return err.code !== 0x2009 && err.code !== 0x2008;
+    }
+    return true;
   }
 
   /**
@@ -2055,6 +2425,8 @@ export class CameraService {
   /** `connectWifi()` 的主体；`wifiConnecting` 的起落由外层统一管理。 */
   private async connectWifiAttempt(target: string, port: number, silent: boolean,
                                    epoch: number): Promise<boolean> {
+    // 新会话重新探一次分块能力；上一台相机不支持不代表这一台也不支持。
+    this.wifiPartialUnsupported = false;
     if (this.connected) {
       await this.disconnect();
       if (!this.epochCurrent(epoch)) return false;
@@ -3705,6 +4077,10 @@ export class CameraService {
   /** 用户切换模式。切模式不做自动连接，等用户点「搜索相机」。 */
   setLinkMode(mode: number): void {
     if (mode === this.linkMode) return;
+    if (this.downloadActive && !this.downloadAborted) {
+      this.downloadAborted = true;
+      this.log.add('切换链路模式：中止正在进行的下载');
+    }
     const label = ['USB', '蓝牙', 'Wi-Fi AP', 'Wi-Fi STA'][mode] ?? `${mode}`;
     this.log.add(`链路模式切到 ${label}`);
     this.linkMode = mode;
@@ -5093,6 +5469,12 @@ export class CameraService {
 
   async scanForCamera(quickMode: boolean = true, bypassThrottle: boolean = false): Promise<void> {
     const startedAt = Date.now();
+    // 下载与扫描共用一条 PTP 队列。断链重连成功后 `finishAutoLink()` 会顺手
+    // 扫一轮照片，那会把续传的下一块挤到几百张缩略图后面；下载期间直接跳过。
+    if (this.downloadActive) {
+      this.log.add('下载进行中，跳过本次扫描');
+      return;
+    }
     if (this.scanning || this.pendingCachingResolve !== null) {
       this.log.add('[节流] 已有扫描在进行中，忽略本次请求');
       return;
@@ -6670,6 +7052,12 @@ export class CameraService {
   }
 
   private async disconnectInternal(): Promise<void> {
+    // 用户主动断开：正在跑的批量下载没有链路可用了，先让它停下来，
+    // 否则每张照片都会重试三次、把断开拖成几十秒。
+    if (this.downloadActive && !this.downloadAborted) {
+      this.downloadAborted = true;
+      this.log.add('断开连接：中止正在进行的下载');
+    }
     // 用户主动断开：撤掉自动重连，避免刚断开就被自己接回来。
     const wasWireless = this.wireless;
     if (wasWireless) {

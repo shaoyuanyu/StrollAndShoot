@@ -16,7 +16,7 @@
 - `getOriginalBytes(handle)`：给预览器「分享原图」用，返回相机原始压缩字节（优先读 `compressedCache`，未命中时串行取一次 USB 并缓存）；不重新编码、保留 EXIF。扫描中返回 null，避免和扫描队列抢 USB。
 - `loadFullPhoto(handle)`：优先读 `compressedCache`，未命中走 USB，解码在 TaskPool 里执行，返回 `DecodedPhotoResult`（PixelMap + 旋转后的尺寸）。完成时打一行四段耗时 `下载完成: 1.0s (取图 …ms / 方向 …ms / 拷贝 …ms / 解码 …ms)`：**「第一次打开照片卡一下」先看这行**——取图占大头是 USB/排队，拷贝占大头是主线程 30MB `ArrayBuffer.slice`，解码占大头才是 TaskPool。
 - **邻近预加载半径是 2，且预览器打开期间整体挂起**（`suspendNeighborPreload` / `resumeNeighborPreload`）。以前是 5 且每翻一张就重新排队 10 张，与预览器自己的队列抢 USB。**解码按最长边降采样到 `FULL_DECODE_MAX_EDGE`（3072px）**：手机屏幕长边约 2700px、预览器最多 5x 捏合，3072 已够用；24MP 原图全尺寸是 96MB/张，预览器同时驻留 6-7 张会把内存与纹理带宽打满。降采样用 `DecodingOptions.desiredSize`（2026-11-07 在模拟器把上限压到 600 验证过，日志 `full decode done 600x400 scale=0.500`）。
-- `downloadPhotos(handles, onProgress, ctx)`：批量下载到沙箱，按拍摄时间匹配 GPS 并写入 EXIF，最后经 `showAssetsCreationDialog` 保存到系统相册，同时维护 `download_registry.json`
+- `downloadPhotos(handles, onProgress, ctx)`：批量下载到沙箱，按拍摄时间匹配 GPS 并写入 EXIF，最后经 `showAssetsCreationDialog` 保存到系统相册，同时维护 `download_registry.json`；单张失败会按退避重试，Wi-Fi 真机断链后从 `.part` 续传（1.74.0，见下文「下载失败重试与断点续传」）
 - `disconnect()`：关闭会话，清空全部内存缓存
 
 ### 传输期间的后台长时任务与通知进度环（2026-11-09）
@@ -88,6 +88,20 @@
 - `validateRegistry()` 在启动和每次扫描结束后执行：先 `fileIo.open` 相册 URI；失败且错误码像“已删除”（13900002 / media URI 的 13900001、13900012、201）时，再用 `photoAccessHelper.getAssets` 按 URI 查媒体库。查到资产就视为仍存在，查不到才标记 `missingSince`。
 - 图库「最近删除」保留 30 天；`missingSince` 超过 30 天的记录自动清理。用户在系统图库恢复照片后，下一次校验会清掉 `missingSince`，绿点恢复。
 - 重新下载同一张时 `addDownloadRecord()` 直接覆盖旧记录，清掉缺失状态。
+
+### 下载失败重试与断点续传（1.74.0）
+
+弱网下「一张失败就跳过整批」和「从头再传一遍」都不可接受。现在的规则：
+
+- **重试**：每张最多 3 次（含第一次），退避 0.8s / 2s；`0x2009`（对象不存在）、`0x2008`（存储不存在）不重试，其余（断链、超时、`0x200F` 等）都重试。重试只覆盖传输，GPS 写入与系统相册保存失败不重传。
+- **分块**：只有 **Wi-Fi 真机**走 `GetPartialObject`，2 MB 一块，写 `download_temp/<文件名>.<大小>.part`；每块后按文件的**实际长度**推进 offset。USB 与模拟相机仍用整包 `GetObject`——USB 的 `getObject` 自己按端点能力分块，JS 再切反而慢；模拟相机的元数据大小是假的 2.4 MB，不能按它切。
+- **续传判据**：`.part.json` 记录 `cameraIdentity / handle / filename / size / version`；五项全一致才续，否则整段丢弃。换相机、卡格式化、同名不同大小都不会拼错。
+- **断链**：传输抛错后若 `wireless && !connected`，先等自动重连最多 **20 秒**；重连成功就从 `.part` 当前长度继续，失败则停掉整批（不再让剩下每张各等 20 秒），残片保留，用户重新连上后再选同一批即可续。用户取消、主动断开、切模式都会置 `downloadAborted`，立即收手。
+- **完成后**：`.part` → 正式临时文件（`rename`，失败退回 `copy + unlink`），删 `.part.json`。分块路径严格校验最终大小；整包路径以相机实际返回为准（有些机型的 `objectCompressedSize` 不可靠，旧版本也没按它校验，只记一行不一致日志）。
+- **清理**：应用启动时 `prepareDownloadTempDir()` 只删普通临时文件，`.part` / `.part.json` 保留 **7 天**；成功、永久失败、分块尺寸不符时立即删。以前启动会整目录清空，跨重启续传因此不成立。
+- **与扫描互斥**：`downloadActive` 为真时 `scanForCamera()` 直接跳过——自动重连成功后 `finishAutoLink()` 会顺手扫一轮，那会把续传的下一个 2 MB 挤到几百张缩略图后面。
+- **能力兜底**：分块首块返回空（相机不支持 `GetPartialObject`，或首块正撞上断链）时退回整包；整包成功就把 `wifiPartialUnsupported` 置真，本会话后续照片直接走整包。首块空但整包也失败时不置位，下一次仍先试分块，避免把「断链」误判成「不支持」。
+- **日志**：`发现断点` / `续传: … 从 x / y 开始` / `下载失败，… 后重试 n/2` / `改用整包下载` / `下载停止: 无线连接已断开`。真机验收先看这几行。
 
 ### AppLog（`services/AppLog.ets`）
 

@@ -10,6 +10,7 @@ import usbAttachUtilTest from './UsbAttachUtil.test';
 import nikonWifiCredentialsTest from './NikonWifiCredentials.test';
 import cameraStandeeTest from './CameraStandee.test';
 import blePayloadsTest from './BlePayloads.test';
+import downloadResumeTest from './DownloadResume.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -24,4 +25,5 @@ export default function testsuite() {
   nikonWifiCredentialsTest();
   cameraStandeeTest();
   blePayloadsTest();
+  downloadResumeTest();
 }
