@@ -1512,8 +1512,8 @@ AP：点「连接相机」加入相机热点；STA：点「连接相机」搜索
   `model/StaHotspotStore.ets`（PersistenceV2 key `sta_hotspot`），**不要并进 `SettingsStore`**
   （旧对象恢复时不会补新字段）。打开后只在 STA 空闲态、`isHotspotActive()` 明确为 false
   时弹 `showAlertDialog`：左边「仍然搜索」（相机走同一路由器 Wi-Fi），右边「已开启，继续」
-  （用户手动去系统设置开热点后回来再探；仍没开就 toast）。HarmonyOS 不允许三方应用自动
-  打开热点，文案里要写清这一点，不能把它做成「自动打开」的假开关。
+  （用户手动去系统设置开热点后回来再探；仍没开就 toast）。系统限制只留在开发文档与代码注释里，**不要写进用户文案**：
+  用户只需要知道「去设置里打开个人热点」，不需要知道为什么应用不能替他开。
 - **「蓝牙相机」分组（1.66.17）**：两行开关——「连接后对时」与「位置注入」，默认都开，
   副标题说明各自作用。取值放在独立的 `model/BleInjectStore.ets`（新 PersistenceV2 key
   `ble_inject`），**不要往 `SettingsStore` 加字段**：它是早期落盘的全局对象，旧对象恢复

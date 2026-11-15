@@ -742,7 +742,7 @@
     },
     {
       "name": "camera_sta_hotspot_message",
-      "value": "HarmonyOS does not allow apps to turn on the hotspot. If the camera uses your phone hotspot, open Settings > Mobile network > Personal hotspot, then tap \"Already on, continue\". If both use the same wireless network, tap \"Search anyway\"."
+      "value": "If the camera uses your phone hotspot, open Settings > Mobile network > Personal hotspot, then tap \"Already on, continue\". If both use the same wireless network, tap \"Search anyway\"."
     },
     {
       "name": "camera_sta_hotspot_continue",
