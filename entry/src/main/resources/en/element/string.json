@@ -1874,11 +1874,11 @@
     },
     {
       "name": "settings_sta_hotspot_check",
-      "value": "Check hotspot before STA"
+      "value": "Remind when hotspot is off"
     },
     {
       "name": "settings_sta_hotspot_check_desc",
-      "value": "Prompt to turn on the phone hotspot before STA search; turn off if the camera uses a router."
+      "value": "Off by default. When on, STA search shows a prompt if the hotspot is not on. Turn off if the camera uses a router."
     },
     {
       "name": "settings_ble_clock_sync",

@@ -1733,9 +1733,9 @@ blob 是 **97B 或 102B** 密文：`32B 加密 SSID + 64B 加密密码 + 1B 安�
   要 `MANAGE_WIFI_HOTSPOT_EXT` + `WiFi.AP.Extension`，官方限定路由器等非通用产品且
   API 10 已废弃；手机侧 `MANAGE_WIFI_HOTSPOT` 是 `system_core` / `SYSTEM`。所以 STA
   只能做成「一次性配置 + 之后自动接续」，相机页给了步骤引导。
-- **热点检查开关（1.75.0）**：设置 → Wi-Fi STA → 「STA 前检查手机热点」，默认关，
+- **热点弹窗开关（1.75.0）**：设置 → Wi-Fi STA → 「热点未开时弹窗提醒」，默认关，
   存在独立 `model/StaHotspotStore.ets`（key `sta_hotspot`，**不要并进 SettingsStore**）。
-  只在 STA 空闲态、`phoneHotspotActive()` 明确为 false 时弹引导：
+  打开后只在 STA 空闲态、`phoneHotspotActive()` 明确为 false 时弹引导：
   「仍然搜索」（相机走同一 Wi-Fi）或「已开启，继续」（用户手动开完热点回来再探，
   仍没开就 toast）。失败后的重试不再重复弹。
 - 连接失败的第一嫌疑仍是「相机不在『连接向导』页」——显示 IP/掩码的页面 15740 没开。

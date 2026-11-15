@@ -1026,8 +1026,8 @@ export struct CameraPage {
       this.onDisconnectBle();
       return;
     }
-    // STA 空闲态先检查手机热点。系统不允许三方应用自动打开热点，这里只能
-    // 引导用户手动去设置；失败后的「重试」不再重复弹，避免每次失败都拦一下。
+    // 设置里打开了「热点未开时弹窗提醒」才检查；系统不允许三方应用自动打开
+    // 热点，这里只能引导用户手动去设置。失败后的「重试」不再重复弹。
     if (phase === CameraPhase.Idle && this.svc.linkMode === CameraLinkMode.STA
       && this.staHotspotPref.check && !this.staHotspotPromptDismissed
       && phoneHotspotActive() === false) {

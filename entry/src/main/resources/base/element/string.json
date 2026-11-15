@@ -1874,11 +1874,11 @@
     },
     {
       "name": "settings_sta_hotspot_check",
-      "value": "STA 前检查手机热点"
+      "value": "热点未开时弹窗提醒"
     },
     {
       "name": "settings_sta_hotspot_check_desc",
-      "value": "相机连手机热点时，搜索前提示手动开启；用路由器 Wi-Fi 可关"
+      "value": "默认关闭；打开后 STA 搜索前若热点未开启，会弹窗提示。相机走路由器时不用开。"
     },
     {
       "name": "settings_ble_clock_sync",

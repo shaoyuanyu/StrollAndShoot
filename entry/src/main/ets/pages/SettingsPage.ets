@@ -535,7 +535,7 @@ export struct SettingsPage {
         .shadow(CardShadow)
 
         // ---- Wi-Fi STA ----
-        // HarmonyOS 不允许三方应用打开个人热点；这里只能做「搜索前检查 + 提示」。
+        // HarmonyOS 不允许三方应用打开个人热点；这里只能做「搜索前弹窗提醒」。
         // 默认关，避免走路由器 Wi-Fi 的用户每次都被提示。
         this.GroupTitle($r('app.string.settings_section_wifi_sta'))
         Column() {

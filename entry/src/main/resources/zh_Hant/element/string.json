@@ -1874,11 +1874,11 @@
     },
     {
       "name": "settings_sta_hotspot_check",
-      "value": "STA 前檢查手機熱點"
+      "value": "熱點未開時彈窗提醒"
     },
     {
       "name": "settings_sta_hotspot_check_desc",
-      "value": "相機連手機熱點時，搜尋前提示手動開啟；用路由器 Wi-Fi 可關"
+      "value": "預設關閉；開啟後 STA 搜尋前若熱點未開啟，會彈窗提示。相機走路由器時不用開。"
     },
     {
       "name": "settings_ble_clock_sync",
