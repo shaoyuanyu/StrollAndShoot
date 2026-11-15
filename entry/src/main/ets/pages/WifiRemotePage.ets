@@ -37,6 +37,8 @@ export struct WifiRemotePage {
 
   aboutToAppear(): void {
     this.applyDarkSystemBars();
+    // 遥控取景期间不要熄屏：用户双手可能在操作相机/构图。
+    WindowUtils.window?.setWindowKeepScreenOn(true).catch((_e: Error) => {});
     this.live = this.svc.ensureWifiLiveView();
     if (this.live !== null) {
       this.live.start().catch((_e: Error) => {
@@ -53,6 +55,7 @@ export struct WifiRemotePage {
     this.live?.stop().catch((_e: Error) => {
       // 链路已断时只清本地状态
     });
+    WindowUtils.window?.setWindowKeepScreenOn(false).catch((_e: Error) => {});
     WindowUtils.applyThemeSystemBars(
       WindowUtils.isDarkMode(this.getUIContext().getHostContext()));
   }
