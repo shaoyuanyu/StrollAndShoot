@@ -1727,9 +1727,17 @@ blob 是 **97B 或 102B** 密文：`32B 加密 SSID + 64B 加密密码 + 1B 安�
 
 - 只支持 STA/热点这种「手机与相机同网」的路径；AP 模式（手机连相机热点）没做。
   凭据解密已经落地（1.41.0），缺的是 `wifiManager` 候选配置族那一层接入。
-- **「相机入网」这一步 App 代替不了**：三方应用没有任何接口能开热点
-  （`enableHotspot` 要系统权限），相机也必须人工在菜单里选一次网络。所以 STA
+- **「相机入网」这一步 App 代替不了**：相机必须人工在菜单里选一次网络。手机
+  热点也不能由应用自动打开（1.75.0 查证）：`@ohos.wifiManager` 只公开
+  `isHotspotActive()` / `on('hotspotStateChange')`；`wifiManagerExt.enableHotspot()`
+  要 `MANAGE_WIFI_HOTSPOT_EXT` + `WiFi.AP.Extension`，官方限定路由器等非通用产品且
+  API 10 已废弃；手机侧 `MANAGE_WIFI_HOTSPOT` 是 `system_core` / `SYSTEM`。所以 STA
   只能做成「一次性配置 + 之后自动接续」，相机页给了步骤引导。
+- **热点检查开关（1.75.0）**：设置 → Wi-Fi STA → 「STA 前检查手机热点」，默认关，
+  存在独立 `model/StaHotspotStore.ets`（key `sta_hotspot`，**不要并进 SettingsStore**）。
+  只在 STA 空闲态、`phoneHotspotActive()` 明确为 false 时弹引导：
+  「仍然搜索」（相机走同一 Wi-Fi）或「已开启，继续」（用户手动开完热点回来再探，
+  仍没开就 toast）。失败后的重试不再重复弹。
 - 连接失败的第一嫌疑仍是「相机不在『连接向导』页」——显示 IP/掩码的页面 15740 没开。
 - `GetStorageIDs` 被拒时返回 `0xFFFFFFFF` 哨兵，由 `GetObjectHandles` 按「所有存储」枚举——这是 SnapBridge 会话的已知行为。
 - 部分机型对同一台相机只保留一个 PTP/IP initiator；另一个设备的 `Init` 会踢掉前一个会话，甚至把相机踢出配对模式。调试时不要并发探测。

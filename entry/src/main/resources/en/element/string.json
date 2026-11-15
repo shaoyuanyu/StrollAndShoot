@@ -737,6 +737,26 @@
       "value": "No camera found on this network"
     },
     {
+      "name": "camera_sta_hotspot_title",
+      "value": "Phone hotspot is off"
+    },
+    {
+      "name": "camera_sta_hotspot_message",
+      "value": "HarmonyOS does not allow apps to turn on the hotspot. If the camera uses your phone hotspot, open Settings > Mobile network > Personal hotspot, then tap \"Already on, continue\". If both use the same wireless network, tap \"Search anyway\"."
+    },
+    {
+      "name": "camera_sta_hotspot_continue",
+      "value": "Search anyway"
+    },
+    {
+      "name": "camera_sta_hotspot_retry",
+      "value": "Already on, continue"
+    },
+    {
+      "name": "camera_sta_hotspot_still_off",
+      "value": "Hotspot is still off"
+    },
+    {
       "name": "camera_sta_manual_lead",
       "value": "Can't connect?"
     },
@@ -1847,6 +1867,18 @@
     {
       "name": "settings_section_ble_camera",
       "value": "Bluetooth camera"
+    },
+    {
+      "name": "settings_section_wifi_sta",
+      "value": "Wi-Fi STA"
+    },
+    {
+      "name": "settings_sta_hotspot_check",
+      "value": "Check hotspot before STA"
+    },
+    {
+      "name": "settings_sta_hotspot_check_desc",
+      "value": "Prompt to turn on the phone hotspot before STA search; turn off if the camera uses a router."
     },
     {
       "name": "settings_ble_clock_sync",

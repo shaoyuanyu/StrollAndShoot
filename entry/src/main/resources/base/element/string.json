@@ -737,6 +737,26 @@
       "value": "同一网络里没有发现相机"
     },
     {
+      "name": "camera_sta_hotspot_title",
+      "value": "手机热点未开启"
+    },
+    {
+      "name": "camera_sta_hotspot_message",
+      "value": "HarmonyOS 不允许应用自动打开热点。相机连手机热点时，请先在「设置 > 移动网络 > 个人热点」打开，再回来点「已开启，继续」；相机若连的是同一个无线网络，可以点「仍然搜索」。"
+    },
+    {
+      "name": "camera_sta_hotspot_continue",
+      "value": "仍然搜索"
+    },
+    {
+      "name": "camera_sta_hotspot_retry",
+      "value": "已开启，继续"
+    },
+    {
+      "name": "camera_sta_hotspot_still_off",
+      "value": "热点还没打开"
+    },
+    {
       "name": "camera_sta_manual_lead",
       "value": "无法连接？"
     },
@@ -1847,6 +1867,18 @@
     {
       "name": "settings_section_ble_camera",
       "value": "蓝牙相机"
+    },
+    {
+      "name": "settings_section_wifi_sta",
+      "value": "Wi-Fi STA"
+    },
+    {
+      "name": "settings_sta_hotspot_check",
+      "value": "STA 前检查手机热点"
+    },
+    {
+      "name": "settings_sta_hotspot_check_desc",
+      "value": "相机连手机热点时，搜索前提示手动开启；用路由器 Wi-Fi 可关"
     },
     {
       "name": "settings_ble_clock_sync",

@@ -6,6 +6,8 @@ import { titleBarTotalVp } from '../utils/TitleBarMetrics';
 import { CardShadow, HeroCardShadow, FontSize, IconSize, Radius, RowHeight, pillRadius } from '../utils/UiTokens';
 import type { WifiCameraInfo } from '../services/NsdScanner';
 import { CameraLinkMode, isWifiMode } from '../model/CameraLinkMode';
+import { StaHotspotStore } from '../model/StaHotspotStore';
+import { phoneHotspotActive } from '../services/LocalNetworks';
 import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2, uiMaterial } from '@kit.ArkUI';
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
@@ -340,6 +342,10 @@ export struct CameraPage {
   @Local svc: CameraService = CameraService.getInstance();
   /** 已配对过的相机身份（落盘）：决定「搜索相机」还是「连接相机」。 */
   @Local bleId: BleIdentityStore = BleIdentityStore.getInstance();
+  /** 用户设置：STA 搜索前是否检查手机热点。 */
+  @Local staHotspotPref: StaHotspotStore = StaHotspotStore.getInstance();
+  /** 本次 STA 空闲态已经提示过热点，避免「知道了」后又连点两次还弹。 */
+  @Local staHotspotPromptDismissed: boolean = false;
   /** 未识别机型时使用的默认立牌（用户设置）。 */
   @Local standeePref: StandeePreferenceStore = StandeePreferenceStore.getInstance();
   /** 立牌卡面交叉淡入淡出：当前 / 上一张 / 进度。 */
@@ -467,6 +473,7 @@ export struct CameraPage {
   @Monitor('svc.linkMode')
   onLinkModeChanged(): void {
     this.guideSheetOpen = false;
+    this.staHotspotPromptDismissed = false;
   }
 
   /** 真实机型变化：立牌交叉淡入淡出。 */
@@ -1019,9 +1026,53 @@ export struct CameraPage {
       this.onDisconnectBle();
       return;
     }
+    // STA 空闲态先检查手机热点。系统不允许三方应用自动打开热点，这里只能
+    // 引导用户手动去设置；失败后的「重试」不再重复弹，避免每次失败都拦一下。
+    if (phase === CameraPhase.Idle && this.svc.linkMode === CameraLinkMode.STA
+      && this.staHotspotPref.check && !this.staHotspotPromptDismissed
+      && phoneHotspotActive() === false) {
+      this.showStaHotspotDialog();
+      return;
+    }
     // 未连接 / 失败后重试：统一走 searchByMode。STA 也是「自动发现并连接」，
     // 不再让用户先看一张列表再手点一台。
     this.svc.searchByMode();
+  }
+
+  /**
+   * STA 搜索前的热点引导。
+   *
+   * 不能替用户打开热点（需要 system_core 权限，且手机侧没有公开的 enableHotspot
+   * 接口），所以只给两个出口：
+   * - 仍然搜索：相机和手机连的是同一 Wi-Fi，热点与本次搜索无关；
+   * - 已开启，继续：用户去设置打开热点后回来，再探一次；仍没开就 toast 说明。
+   */
+  private showStaHotspotDialog(): void {
+    this.getUIContext().showAlertDialog({
+      title: $r('app.string.camera_sta_hotspot_title'),
+      message: $r('app.string.camera_sta_hotspot_message'),
+      autoCancel: true,
+      primaryButton: {
+        value: $r('app.string.camera_sta_hotspot_continue'),
+        action: () => {
+          this.staHotspotPromptDismissed = true;
+          this.svc.searchByMode();
+        }
+      },
+      secondaryButton: {
+        value: $r('app.string.camera_sta_hotspot_retry'),
+        fontColor: $r('app.color.primary'),
+        action: () => {
+          const active = phoneHotspotActive();
+          if (active !== false) {
+            this.staHotspotPromptDismissed = true;
+            this.svc.searchByMode();
+          } else {
+            this.toast($r('app.string.camera_sta_hotspot_still_off'));
+          }
+        }
+      }
+    });
   }
 
   /**

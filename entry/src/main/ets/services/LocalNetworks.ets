@@ -18,6 +18,21 @@ import { wifiManager } from '@kit.ConnectivityKit';
  * 第 3 条是启发式，所以只在「热点确实开着、且前两条没覆盖到」时才加。
  */
 
+/**
+ * 手机热点是否开启。
+ *
+ * `isHotspotActive()` 是公开接口，只需要 `GET_WIFI_INFO`；但部分设备没有
+ * 热点能力（801）或权限被拒，这时返回 `null`，调用方不能把它当成「没开」，
+ * 否则会误弹提示。
+ */
+export function phoneHotspotActive(): boolean | null {
+  try {
+    return wifiManager.isHotspotActive();
+  } catch (_e) {
+    return null;
+  }
+}
+
 /** 一条本机网络快照。 */
 export interface LocalNetworkInfo {
   /** 本机所有 IPv4 地址（已去重，不含回环与链路本地）。 */

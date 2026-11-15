@@ -8,6 +8,7 @@ import { CameraService } from '../services/CameraService';
 import { SavedCameraStore } from '../services/SavedCameraStore';
 import { GpsRecorder } from '../services/GpsRecorder';
 import { BleInjectStore } from '../model/BleInjectStore';
+import { StaHotspotStore } from '../model/StaHotspotStore';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { cameraStandeeKeys, cameraStandeeLabel } from '../utils/CameraStandee';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -127,6 +128,8 @@ export struct SettingsPage {
   @Local standeePref: StandeePreferenceStore = StandeePreferenceStore.getInstance();
   /** 蓝牙相机的对时 / 位置注入开关（单独 PersistenceV2 key）。 */
   @Local injectPrefs: BleInjectStore = BleInjectStore.getInstance();
+  /** STA 前是否检查手机热点（单独 PersistenceV2 key）。 */
+  @Local staHotspotPref: StaHotspotStore = StaHotspotStore.getInstance();
   /** GPS 服务的真实状态。直接读单例的 @Trace 字段，不再要页面之间传副本。 */
   @Local gps: GpsRecorder = GpsRecorder.getInstance();
   /** 开关的显示值。用 !! 双向绑定，启动失败时才能把滑块弹回去。 */
@@ -523,6 +526,35 @@ export struct SettingsPage {
 
             Toggle({ type: ToggleType.Switch, isOn: this.injectPrefs.locationInject })
               .onChange((on: boolean) => { this.onLocationInjectToggle(on); })
+          }
+          .width('100%').constraintSize({ minHeight: RowHeight.Double })
+        }
+        .width('100%').padding({ left: 16, right: 16 })
+        .backgroundColor($r('app.color.bg_surface'))
+        .borderRadius(Radius.Card)
+        .shadow(CardShadow)
+
+        // ---- Wi-Fi STA ----
+        // HarmonyOS 不允许三方应用打开个人热点；这里只能做「搜索前检查 + 提示」。
+        // 默认关，避免走路由器 Wi-Fi 的用户每次都被提示。
+        this.GroupTitle($r('app.string.settings_section_wifi_sta'))
+        Column() {
+          Row() {
+            Column({ space: 2 }) {
+              Text($r('app.string.settings_sta_hotspot_check'))
+                .fontSize(FontSize.CardTitle)
+                .fontColor($r('app.color.text_primary'))
+                .alignSelf(ItemAlign.Start)
+              Text($r('app.string.settings_sta_hotspot_check_desc'))
+                .fontSize(FontSize.Caption)
+                .fontColor($r('app.color.text_tertiary'))
+                .alignSelf(ItemAlign.Start)
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Toggle({ type: ToggleType.Switch, isOn: this.staHotspotPref.check })
+              .onChange((on: boolean) => { this.staHotspotPref.check = on; })
           }
           .width('100%').constraintSize({ minHeight: RowHeight.Double })
         }
