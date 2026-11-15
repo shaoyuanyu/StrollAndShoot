@@ -369,6 +369,24 @@ export class BleCameraLink {
   private reconnectingFast: boolean = false;
   /** 上层正在主动连接：这段时间内不要再起自动重连，否则两条路会各建一条链路。 */
   private explicitBusy: boolean = false;
+  /**
+   * 还有几笔 `connectGatt()` 在等结果（任何调用方）。
+   *
+   * `explicitBusy` 只挡「上层主动连接」，挡不住「上一条路的失败收尾再开重连」：
+   * 2026-11-15 真机日志里，页面这一轮直连还挂在 10 秒超时里，另一条已经失败的
+   * 旧流程把自动重连接上了，随后旧流程的失败收尾又把这条刚建好的链路拆了。
+   * 建链在途时一律不排重连，让在途那一笔自己出结果。
+   *
+   * 用计数而不是布尔：被模式切掉的旧尝试会晚几秒才落定，布尔会被它提前清零。
+   */
+  private connectAttempts: number = 0;
+  /**
+   * 中止在途建链的回调（由 `connectGatt()` 注册）。
+   *
+   * `disconnect()` 里主动叫停：否则取消/切模式之后 `connect()` 还要空等到
+   * 10 秒超时才肯返回（真机日志里 8:29:24 取消、8:29:32 才落定）。
+   */
+  private abortConnect: (() => void) | null = null;
   /** 上次直连地址失败过：地址多半已经换了，后面的轮次别再白等。 */
   private staleAddress: boolean = false;
   /** 重连成功后的回调（上层用它恢复校时与保活）。 */
@@ -544,6 +562,10 @@ export class BleCameraLink {
   }
 
   private async connectGatt(deviceId: string, timeoutMs: number = CONNECT_TIMEOUT_MS): Promise<boolean> {
+    this.connectAttempts = this.connectAttempts + 1;
+    // 本笔的中止回调。别用共享字段判归属：旧尝试落定时新尝试可能已经注册了
+    // 自己的回调，谁都不能清掉别人的。
+    let myAbort: (() => void) | null = null;
     try {
       const gatt = ble.createGattClientDevice(deviceId);
       // 新客户端 = 服务表缓存空的：这一轮必须重新发现，订阅前先看 `servicesReady`。
@@ -560,8 +582,17 @@ export class BleCameraLink {
         const finish = (v: boolean): void => {
           if (settled) return;
           settled = true;
+          if (this.abortConnect === myAbort) this.abortConnect = null;
           resolve(v);
         };
+        // 让 `disconnect()` 能立刻结束这一笔：取消连接不该再等满超时。
+        myAbort = (): void => {
+          if (settled) return;
+          abandoned = true;
+          this.onLog('BLE 建链已被主动中止');
+          finish(false);
+        };
+        this.abortConnect = myAbort;
         try {
           gatt.on('BLEConnectionStateChange', (state: ble.BLEConnectionChangeState) => {
             this.onLog(`BLE 连接状态: ${state.state}`);
@@ -635,6 +666,15 @@ export class BleCameraLink {
         }
         setTimeout(() => {
           if (settled) return;
+          // 超时判定前链路其实已经通了：蓝牙状态事件可能正好压在边界上
+          // （2026-11-15 真机：`连接状态: 2` 与「10s 无状态事件」在同一秒，
+          // 结果把一条刚建好的链路判成失败并主动拆掉）。这里以实际连接状态
+          // 为准，宁可多连一次也不拆好的链路。
+          if (this.connected) {
+            this.onLog('BLE 连接超时判定前已连上，按成功处理');
+            finish(true);
+            return;
+          }
           abandoned = true;
           this.onLog(`BLE 连接超时（${Math.round(timeoutMs / 1000)}s 无状态事件）`);
           finish(false);
@@ -664,6 +704,9 @@ export class BleCameraLink {
     } catch (err) {
       this.onLog(`BLE 连接失败: ${(err as BusinessError).message}`);
       return false;
+    } finally {
+      this.connectAttempts = Math.max(0, this.connectAttempts - 1);
+      if (this.abortConnect === myAbort) this.abortConnect = null;
     }
   }
 
@@ -1406,6 +1449,12 @@ export class BleCameraLink {
     this.identityNonce = store.identityNonce;
     this.identitySerial = serial.length > 0 ? serial : store.serial;
     await this.writeControllerName();
+    // 地址回写（1.71.1）：相机每次断电重开都会换一个随机 BLE 地址，而
+    // 「复用握手」这条路以前从不更新 `store.deviceId`，于是每次重连都先拿
+    // 一个早已作废的地址硬等一个连接超时（10 秒），再靠扫描把新地址找回来。
+    // 2026-11-15 真机日志：`BLE 直连 84:49:…`（旧）连续失败三次，扫描到的
+    // 新地址是 `FE:33:…`。握手成功后这里把真正连上的地址写回去。
+    this.rememberAddress(serial.length > 0 ? serial : store.serial);
     // 复用握手也要唤起相机无线。以前只有首配写这一笔，于是相机休眠/重开之后
     // 走 resume 的路径上相机无线一直是关着的：BLE 全绿、PTP 永远连不上。
     if (wakeWifi) {
@@ -1425,6 +1474,24 @@ export class BleCameraLink {
     this.paired = true;
     this.onLog(`配对完成: 复用握手通过，相机序列号 ${this.identitySerial}`);
     return this.identitySerial;
+  }
+
+  /**
+   * 把这次真正连上的 BLE 地址写回身份仓库。
+   *
+   * 相机的 BLE 地址是随机的，**每次断电重开都会换一个**；身份（device/nonce）
+   * 不变，地址会变。以前只有首配会写地址，重连全走复用握手，于是下次连接又拿
+   * 旧地址去直连，白等一个 10 秒超时再扫描（2026-11-15 真机日志里连续三次）。
+   * 地址没变时不写，避免无谓的持久化。
+   */
+  private rememberAddress(serial: string): void {
+    if (this.deviceId === '') return;
+    const store = BleIdentityStore.getInstance();
+    if (store.deviceId === this.deviceId) return;
+    store.save(this.deviceId, this.cameraName !== '' ? this.cameraName : store.cameraName,
+      store.identityDevice, store.identityNonce,
+      serial !== '' ? serial : store.serial);
+    this.onLog(`配对: 地址已更新为 ${this.deviceId}`);
   }
 
   private async pairFresh(cameraName: string, store: BleIdentityStore): Promise<string | null> {
@@ -1757,6 +1824,9 @@ export class BleCameraLink {
    * 用户点「断开连接」时 `disconnect()` 会把它关掉。
    */
   wakeReconnectWatch(): void {
+    // 已经连着 / 另一笔建链还在途：不要再排一轮。排了就会和它抢相机那唯一
+    // 一个 BLE 连接槽，最后两条路互相拆台（见 `connectAttempts` 的注释）。
+    if (this.connected || this.connectAttempts > 0) return;
     this.explicitBusy = false;
     if (!this.autoReconnect) this.enableAutoReconnect();
     // 刚才直连失败的那个地址大概率已经作废，别再每轮白等 5 秒。
@@ -1842,6 +1912,9 @@ export class BleCameraLink {
       await this.writeControllerName();
       this.paired = true;
       this.outageSince = 0;
+      // 自动重连常常是「扫描找到新地址」才连上的：把地址写回去，下一轮直连
+      // 就不用再拿旧地址白等超时。
+      this.rememberAddress(serial);
       this.onLog(`BLE 自动重连成功（序列号 ${serial}）`);
       this.onReconnecting(false);
       this.onReconnected(serial);
@@ -1904,6 +1977,7 @@ export class BleCameraLink {
   /** 清链路但保留自动重连开关（重连流程内部用）。 */
   private async disconnectInner(): Promise<void> {
     await this.settleDiscovery();
+    this.abortConnectNow();
     this.stopKeepalive();
     const gatt = this.gatt;
     const wasConnected = this.connected;
@@ -1927,8 +2001,17 @@ export class BleCameraLink {
     }
   }
 
+  /** 叫停在途建链（没有在途就什么都不做）。 */
+  private abortConnectNow(): void {
+    const abort = this.abortConnect;
+    if (abort === null) return;
+    this.abortConnect = null;
+    abort();
+  }
+
   async disconnect(): Promise<void> {
     await this.settleDiscovery();
+    this.abortConnectNow();
     this.cancelled = true;
     this.disableAutoReconnect();
     this.paired = false;

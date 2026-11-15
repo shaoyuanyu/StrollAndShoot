@@ -542,6 +542,15 @@ export class CameraService {
   /** 线缆接入通知是否已订阅（每次连接只开一次）。 */
   private bleCableNotifyOn: boolean = false;
   /**
+   * 已保存的 BLE 地址这一轮已经直连失败过（1.71.1）。
+   *
+   * 相机的 BLE 地址是随机地址，断电重开就换一个；拿旧地址直连会一直停在
+   * CONNECTING 直到 10 秒超时。第一次失败之后就别再拿它试了——直接按厂商
+   * deviceId 扫描，扫到的地址才是当前的（2026-11-15 真机：同一轮里拿旧地址
+   * 连了三次，每次都白等 10 秒）。连上 / 换相机 / 重新配对都会清掉。
+   */
+  private bleAddressStale: boolean = false;
+  /**
    * 遥控请求的串行队列（1.71.0）。
    *
    * `0x2021` 上每一笔请求都靠**同一条特征的 indication** 回执，而链路里只有一个
@@ -2422,6 +2431,8 @@ export class CameraService {
       }
       if (!ok) {
         this.bleServices = [];
+        // 这笔地址连不上：多半是相机换了随机地址，下一轮别再白等 10 秒。
+        this.bleAddressStale = true;
         if (silent) {
           this.log.add('BLE 自动连接失败（静默，不打扰页面）');
         } else {
@@ -2431,6 +2442,7 @@ export class CameraService {
         return false;
       }
       this.bleConnected = true;
+      this.bleAddressStale = false;
       // **不在这里枚举服务表**（1.66.7）：它纯粹是日志用的，而相机半睡时
       // `getServices()` 能挂 10 秒并卡住 JS 主线程（2026-11-14 17:41 的
       // THREAD_BLOCK_3S 闪退）。握手里有 `ensureServices()`，需要时它自己查一次。
@@ -3126,6 +3138,9 @@ export class CameraService {
    */
   private keepWaitingForCamera(): void {
     if (this.bleLink === null) return;
+    // 已经连上了：这一笔失败属于别的路径（典型是并行的直连超时），绝不能
+    // 再去排一轮重连——那会立刻拆掉这条刚建好的链路（2026-11-15 实测）。
+    if (this.bleConnected) return;
     if (!BleIdentityStore.getInstance().hasIdentity()) return;
     this.log.add('BLE 没连上：转入后台等待相机重新广播');
     this.bleLink.wakeReconnectWatch();
@@ -3178,24 +3193,33 @@ export class CameraService {
       return false;
     }
     this.log.add(`BLE 自动连接已配对相机（${store.cameraName}）（仅待机，不切无线）`);
-    if (await this.connectBle(store.deviceId, store.cameraName, false, silent, false)) {
+    if (this.bleAddressStale) {
+      this.log.add('BLE 上次直连这个地址失败，跳过直连，直接按设备号扫描');
+    } else if (await this.connectBle(store.deviceId, store.cameraName, false, silent, false)) {
       return this.epochCurrent(epoch);
     }
     if (!this.epochCurrent(epoch)) return false;
+    // 这一笔失败了，但链路可能已经被另一条路连上了（自动重连、另一轮点击）。
+    // 后面的扫描 / 切 Wi-Fi / 开等待循环都会把那条好的链路拆掉，所以每步之前
+    // 都要先确认「还是没连上」。
+    if (this.bleConnected) return true;
     // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
     // 重扫一次（休眠相机的广播没有名字，只能靠厂商数据认）。
     this.log.add('BLE 直连未成，按设备号重扫相机');
     const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
+    if (this.bleConnected) return true;
     if (!this.epochCurrent(epoch)) return false;
     for (const dev of devices) {
       if (await this.connectBle(dev.deviceId, dev.name, false, silent, false)) {
         return this.epochCurrent(epoch);
       }
+      if (this.bleConnected) return true;
       if (!this.epochCurrent(epoch)) return false;
     }
     // BLE 这条路彻底不通时，无线这半条仍单独试一次（比如蓝牙被系统关了、
     // 但手机还挂在相机所在的热点上）。
     if (await this.autoLinkWifi('cold-start-ble-failed', false)) return false;
+    if (this.bleConnected) return true;
     if (!this.epochCurrent(epoch)) return false;
     if (quiet) {
       // 冷启动的自动连接不是用户发起的：失败就彻底安静地回到未连接。
@@ -3465,6 +3489,8 @@ export class CameraService {
     this.lastScanError = '';
     this.bleSerial = '';
     this.resetBleInfo();
+    // 换了相机：上一条地址的「连不上」结论不适用（1.71.1）。
+    this.bleAddressStale = false;
     this.bleRemoteActive = false;
     this.bleRemoteEntering = false;
     this.clearRemoteState();
@@ -3490,6 +3516,8 @@ export class CameraService {
     this.lastScanError = '';
     this.bleSerial = '';
     this.resetBleInfo();
+    // 换了相机：上一条地址的「连不上」结论不适用（1.71.1）。
+    this.bleAddressStale = false;
     this.bleRemoteActive = false;
     this.bleRemoteEntering = false;
     this.clearRemoteState();

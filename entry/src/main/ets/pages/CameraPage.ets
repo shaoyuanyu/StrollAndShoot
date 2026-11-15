@@ -486,6 +486,20 @@ export struct CameraPage {
   }
 
   /**
+   * 蓝牙模式要不要显示「搜到的相机」列表（1.71.1）。
+   *
+   * 列表是给「找一台相机」用的：正在连某台相机时把它摆出来没有意义——点任何
+   * 一项都只会得到「正在连接中」，而且会让人以为连的不是这台已配对的相机
+   * （用户 2026-11-15 的反馈：连已配对设备时列表还挂着）。所以连接/重连进行
+   * 中一律收起，连上之后由 `blePaired()` 收起，只有空闲或失败时才摆出来。
+   */
+  private bleListVisible(): boolean {
+    if (this.blePaired() || this.bleBrowsing()) return false;
+    if (this.svc.bleConnecting || this.svc.bleReconnecting) return false;
+    return true;
+  }
+
+  /**
    * 这台相机以前配对过（身份已落盘）。
    *
    * 与 `blePaired()` 不是一回事：断开之后链路没了，但相机那边还记着这台手机，
@@ -597,7 +611,10 @@ export struct CameraPage {
     if (isWifiMode(m) && this.svc.wirelessFailed !== '') return this.svc.wirelessFailed;
     // GATT 连上却没有序列号 = 配对那一步没过。它可能发生在 BLE，也可能发生在
     // AP 的「配对」这一步，两种模式都要把这句说清楚。
-    if (this.svc.bleConnected && !this.blePaired()) {
+    // **连接还在进行中时不算失败**（1.71.1）：GATT 先连上、握手后到，中间那
+    // 一两秒会满足 `bleConnected && !blePaired()`，页面因此闪一下「配对失败」，
+    // 而实际上一切正常。真失败时 `bleConnecting` 已经归位。
+    if (!this.svc.bleConnecting && this.svc.bleConnected && !this.blePaired()) {
       return $r('app.string.camera_status_ble_pair_failed_detail');
     }
     return this.svc.lastScanError;
@@ -2094,7 +2111,7 @@ export struct CameraPage {
     if (this.svc.linkMode === CameraLinkMode.BLE) {
       // 已配对/已连接时列表必须消失：那是「搜索出来的候选」，不是当前相机。
       // （服务端连上之后也会把 `bleCameras` 清空，这里再兜一层。）
-      if (!this.blePaired() && !this.bleBrowsing()) this.BleCameraList()
+      if (this.bleListVisible()) this.BleCameraList()
       // 待机连着、或断着但配对过：给一条去照片的入口（1.67.0）。
       // 浏览会话已经在跑时不再显示——那时相机的操作行已经由 `connected` 那段
       // 渲染出来了，同一条入口出现两次会让人猜点哪个。
