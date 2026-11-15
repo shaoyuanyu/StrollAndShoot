@@ -160,6 +160,13 @@ const BLE_SHOOT_STOP = 2;
  * 太长方向键会连跳。
  */
 const BLE_KEY_TAP_MS = 90;
+/**
+ * 菜单键的按住时长（ms）。
+ *
+ * 菜单是「开/关」切换：90ms 的轻点可能落在相机两次扫描之间被吞掉。真机反馈
+ * 「相机菜单无效」时优先怀疑这个时长，按住 260ms 更接近人手按一下。
+ */
+const BLE_KEY_MENU_HOLD_MS = 260;
 
 /**
  * 特殊拍摄的三种类型（就是 `0x14` 的 functionCode）。
@@ -2484,8 +2491,20 @@ export class CameraService {
       }
       if (serial === null) {
         this.bleSerial = '';
-        if (freshPairing) this.bleHint = L10n.tr('camera_ble_hint_repair');
+        // 配对没成：**把半开的链路收掉**（1.71.2）。留着它，页面会停在
+        // 「配对失败 + 取消连接」这种死胡同，文案还让用户「重试」，而唯一的
+        // 按钮是「取消」（用户 2026-11-15 的原话）。收掉之后回到
+        // 「已配对 · 未连接」，主按钮是「连接相机」，下面一行说清原因。
         this.log.add('BLE 配对失败（相机可能不在「开始配对」页，或已配对过）');
+        try {
+          await this.bleLink.disconnect();
+        } catch (_e) {
+          // 链路已经断了也算收掉
+        }
+        this.bleConnected = false;
+        this.bleServices = [];
+        this.bleHint = freshPairing
+          ? L10n.tr('camera_ble_hint_repair') : L10n.tr('camera_ble_hint_pair_retry');
         if (armWatch) this.keepWaitingForCamera();
         return false;
       }
@@ -2757,12 +2776,16 @@ export class CameraService {
         this.applyCableAttachment(BleCameraLink.parseCableAttachment(cable.value));
       }
       if (!this.bleCableNotifyOn) {
-        try {
-          await link.enableCableNotify();
-          this.bleCableNotifyOn = true;
-        } catch (err) {
-          // 订阅失败不影响定时读取，只是插拔不能立刻反映出来。下次刷新再试。
-          this.log.add(`BLE 线缆通知订阅失败: ${(err as Error).message}`);
+        // CCCD 写入偶尔会撞上「上一笔还没回调完」（2900011 busy）：真机日志里
+        // 每轮都出现一次。歇 600ms 重试一次，仍失败就等下一轮刷新。
+        for (let attempt = 0; attempt < 2 && !this.bleCableNotifyOn; attempt++) {
+          try {
+            await this.bleInfoSleep(attempt === 0 ? 0 : 600);
+            await link.enableCableNotify();
+            this.bleCableNotifyOn = true;
+          } catch (err) {
+            this.log.add(`BLE 线缆通知订阅失败: ${(err as Error).message}`);
+          }
         }
       }
     } finally {
@@ -2929,13 +2952,14 @@ export class CameraService {
    * 方向键连跳。整段 ON→停→OFF 作为一个队列操作发出去，中途不会被别的请求
    * 插进来把某一半丢掉。
    */
-  private async bleRemoteKeyTap(key: number, label: string): Promise<boolean> {
+  private async bleRemoteKeyTap(key: number, label: string,
+                                holdMs: number = BLE_KEY_TAP_MS): Promise<boolean> {
     const link = this.bleLink;
     if (link === null || !this.bleRemoteActive) return false;
     try {
       const code = await this.enqueueRemote<number>(async (): Promise<number> => {
         const press = await link.remoteKey(key, true);
-        await this.bleInfoSleep(BLE_KEY_TAP_MS);
+        await this.bleInfoSleep(holdMs);
         await link.remoteKey(key, false);
         return press;
       });
@@ -2944,6 +2968,9 @@ export class CameraService {
         this.log.add(`蓝牙遥控: ${label}失败 code=${code}`);
         return false;
       }
+      // 成功也记一行：菜单这类键相机可能「收了但不做事」，排查时要看是不是
+      // code=1（协议层成功、相机侧没反应）。
+      this.log.add(`蓝牙遥控: ${label} code=1`);
       return true;
     } catch (err) {
       this.bleRemoteToolError = (err as Error).message;
@@ -3012,10 +3039,36 @@ export class CameraService {
     await this.bleRemoteKeyTap(BLE_KEY_PLAYBACK, '进入回放');
   }
 
-  /** 打开/关闭相机菜单（发 MENU 键）。 */
+  /**
+   * 打开/关闭相机菜单（发 MENU 键），并核对相机是不是真的进了菜单。
+   *
+   * 相机对这种「切换类」按键可能收了命令却不动作（遥控模式下菜单可能是锁的）。
+   * 真机反馈「相机菜单无效」时，用户看到的只是一个没反应的按钮；这里等 1.4 秒
+   * 读一次 `0x2020`，没进菜单就把原因写进半模态，而不是让按钮看起来像坏了。
+   */
   async bleRemoteToggleMenu(): Promise<void> {
     this.bleRemoteToolError = '';
-    await this.bleRemoteKeyTap(BLE_KEY_MENU, '菜单键');
+    const opening = this.bleRemoteMain !== 3;
+    const ok = await this.bleRemoteKeyTap(BLE_KEY_MENU, '菜单键', BLE_KEY_MENU_HOLD_MS);
+    if (!ok) return;
+    await this.bleInfoSleep(1400);
+    await this.refreshRemoteStatus();
+    if (opening && this.bleRemoteMain !== 3) {
+      this.bleRemoteToolError = L10n.tr('camera_remote_menu_locked');
+      this.log.add('蓝牙遥控: 菜单键被接受但相机没有进入菜单');
+    }
+  }
+
+  /** 主动读一次 0x2020（菜单/回放的核对用）。 */
+  private async refreshRemoteStatus(): Promise<void> {
+    const link = this.bleLink;
+    if (link === null || !this.bleConnected) return;
+    try {
+      const status = await link.readRemoteStatus();
+      if (status !== null) this.applyRemoteStatus(status);
+    } catch (_e) {
+      // 读不到就沿用上一条指示的状态
+    }
   }
 
   /** 选择特殊拍摄类型（1 间隔定时 / 2 延时摄影 / 3 焦点移位）。 */
@@ -3080,10 +3133,19 @@ export class CameraService {
   }
 
   private applyRemoteStatus(status: BleRemoteStatus): void {
+    // 状态变了才记一行：0x2020 是每一拍都会来的指示，全记会淹掉日志；但
+    // 「按键发出去相机到底有没有反应」全靠这一行（菜单/回放排查用）。
+    const changed = this.bleRemoteMain !== status.main
+      || this.bleRemoteCapture !== status.capture
+      || this.bleRemoteRestriction !== status.restriction;
     this.bleRemoteMain = status.main;
     this.bleRemoteCapture = status.capture;
     this.bleRemoteRestriction = status.restriction;
     this.bleRemoteFocus = status.focus;
+    if (changed) {
+      this.log.add(`蓝牙遥控: 状态 main=${status.main} capture=${status.capture}`
+        + ` restriction=0x${status.restriction.toString(16)}`);
+    }
   }
 
   private clearRemoteState(): void {

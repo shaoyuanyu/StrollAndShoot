@@ -384,35 +384,60 @@ export struct BleRemotePage {
         .width('100%')
 
       if (this.inPlayback()) {
-        Row({ space: 8 }) {
-          RemoteKeyButton({
-            label: $r('app.string.camera_remote_playback_prev'),
-            onTap: () => {
-              Haptics.tap();
-              this.svc.bleRemotePlaybackStep(true);
+        // 两行两列，不用「一行四颗」：半模态两侧各 24vp 内边距之后，一颗只有
+        // 约 73vp，「上一张」这种三字标签加上 Button 默认内边距会直接截断
+        // （用户 2026-11-15 反馈「文字都显示不全」）。两列之后每颗约 150vp，
+        // 任何语言都排得下。
+        Column({ space: 8 }) {
+          Row({ space: 8 }) {
+            Column() {
+              RemoteKeyButton({
+                label: $r('app.string.camera_remote_playback_prev'),
+                onTap: () => {
+                  Haptics.tap();
+                  this.svc.bleRemotePlaybackStep(true);
+                }
+              })
             }
-          })
-          RemoteKeyButton({
-            label: $r('app.string.camera_remote_playback_zoom_out'),
-            onTap: () => {
-              Haptics.tap();
-              this.svc.bleRemotePlaybackZoom(false);
+            .layoutWeight(1)
+
+            Column() {
+              RemoteKeyButton({
+                label: $r('app.string.camera_remote_playback_next'),
+                onTap: () => {
+                  Haptics.tap();
+                  this.svc.bleRemotePlaybackStep(false);
+                }
+              })
             }
-          })
-          RemoteKeyButton({
-            label: $r('app.string.camera_remote_playback_zoom_in'),
-            onTap: () => {
-              Haptics.tap();
-              this.svc.bleRemotePlaybackZoom(true);
+            .layoutWeight(1)
+          }
+          .width('100%')
+
+          Row({ space: 8 }) {
+            Column() {
+              RemoteKeyButton({
+                label: $r('app.string.camera_remote_playback_zoom_out'),
+                onTap: () => {
+                  Haptics.tap();
+                  this.svc.bleRemotePlaybackZoom(false);
+                }
+              })
             }
-          })
-          RemoteKeyButton({
-            label: $r('app.string.camera_remote_playback_next'),
-            onTap: () => {
-              Haptics.tap();
-              this.svc.bleRemotePlaybackStep(false);
+            .layoutWeight(1)
+
+            Column() {
+              RemoteKeyButton({
+                label: $r('app.string.camera_remote_playback_zoom_in'),
+                onTap: () => {
+                  Haptics.tap();
+                  this.svc.bleRemotePlaybackZoom(true);
+                }
+              })
             }
-          })
+            .layoutWeight(1)
+          }
+          .width('100%')
         }
         .width('100%')
 
@@ -434,11 +459,13 @@ export struct BleRemotePage {
             this.svc.bleRemoteEnterPlayback();
           }
         })
-        Text($r('app.string.camera_remote_playback_need_mode'))
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
+        if (this.svc.bleRemoteToolError === '') {
+          Text($r('app.string.camera_remote_playback_need_mode'))
+            .fontSize(FontSize.Caption)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
       }
 
       if (this.svc.bleRemoteToolError !== '') {
@@ -504,11 +531,14 @@ export struct BleRemotePage {
             this.svc.bleRemoteToggleMenu();
           }
         })
-        Text($r('app.string.camera_remote_menu_need_mode'))
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
+        // 有错误时不再重复「先点打开菜单」：那句正是用户刚做过的事。
+        if (this.svc.bleRemoteToolError === '') {
+          Text($r('app.string.camera_remote_menu_need_mode'))
+            .fontSize(FontSize.Caption)
+            .lineHeight(18)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+        }
       }
 
       if (this.svc.bleRemoteToolError !== '') {
@@ -716,7 +746,7 @@ struct RemoteKeyButton {
 
   build() {
     Button(this.label)
-      .layoutWeight(1)
+      .width('100%')
       .height(44)
       .fontSize(FontSize.Reading)
       .fontColor($r('app.color.text_primary'))

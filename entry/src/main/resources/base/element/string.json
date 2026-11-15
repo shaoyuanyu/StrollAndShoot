@@ -233,6 +233,14 @@
       "value": "若一直配对不上，可能是相机里还记着这台手机：到相机菜单删除已配对的设备后重新开始配对。"
     },
     {
+      "name": "camera_ble_hint_pair_retry",
+      "value": "配对没完成：请让相机停在「开始配对」页后再点「连接相机」。"
+    },
+    {
+      "name": "camera_ble_power_off_hint",
+      "value": "相机没有开机：蓝牙还能连上，但拍照与遥控都用不了。打开相机电源后再试。"
+    },
+    {
       "name": "camera_ble_cancel",
       "value": "取消连接"
     },
@@ -439,6 +447,10 @@
     {
       "name": "camera_remote_menu_hint",
       "value": "方向键与确定键直接作用在相机菜单上，相机屏幕会同步显示。相机不接受「打开菜单」时，按机身上的 MENU 键也行。"
+    },
+    {
+      "name": "camera_remote_menu_locked",
+      "value": "相机没有打开菜单：遥控模式下相机会锁住菜单，请在机身上按 MENU 键。"
     },
     {
       "name": "camera_remote_menu_open",
@@ -726,7 +738,7 @@
     },
     {
       "name": "camera_status_ble_pair_failed_detail",
-      "value": "配对未完成，请让相机停在\n「开始配对」页后重试"
+      "value": "配对没有完成"
     },
     {
       "name": "camera_state_paired",

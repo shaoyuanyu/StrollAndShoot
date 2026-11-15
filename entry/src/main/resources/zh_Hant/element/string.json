@@ -233,6 +233,14 @@
       "value": "若一直配對不上，可能是相機裡還記著這台手機：到相機選單刪除已配對的裝置後重新開始配對。"
     },
     {
+      "name": "camera_ble_hint_pair_retry",
+      "value": "配對沒完成：請讓相機停在「開始配對」頁後再點「連接相機」。"
+    },
+    {
+      "name": "camera_ble_power_off_hint",
+      "value": "相機沒有開機：藍牙還能連上，但拍照與遙控都用不了。打開相機電源後再試。"
+    },
+    {
       "name": "camera_ble_cancel",
       "value": "取消連線"
     },
@@ -439,6 +447,10 @@
     {
       "name": "camera_remote_menu_hint",
       "value": "方向鍵與確定鍵直接作用在相機選單上，相機螢幕會同步顯示。相機不接受「開啟選單」時，按機身上的 MENU 鍵也行。"
+    },
+    {
+      "name": "camera_remote_menu_locked",
+      "value": "相機沒有開啟選單：遙控模式下相機會鎖住選單，請在機身上按 MENU 鍵。"
     },
     {
       "name": "camera_remote_menu_open",
@@ -726,7 +738,7 @@
     },
     {
       "name": "camera_status_ble_pair_failed_detail",
-      "value": "配對未完成，請讓相機停在\n「開始配對」頁後重試"
+      "value": "配對沒有完成"
     },
     {
       "name": "camera_state_paired",

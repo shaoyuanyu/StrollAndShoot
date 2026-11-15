@@ -233,6 +233,14 @@
       "value": "If pairing keeps failing, the camera may still remember this phone. Delete the paired device in the camera menu, then start pairing again."
     },
     {
+      "name": "camera_ble_hint_pair_retry",
+      "value": "Pairing did not finish: leave the camera on the “Start pairing” screen, then tap Connect camera again."
+    },
+    {
+      "name": "camera_ble_power_off_hint",
+      "value": "The camera is not powered on: Bluetooth still connects, but shooting and remote control are unavailable. Turn the camera on and try again."
+    },
+    {
       "name": "camera_ble_cancel",
       "value": "Cancel"
     },
@@ -439,6 +447,10 @@
     {
       "name": "camera_remote_menu_hint",
       "value": "Keys act on the camera menu directly; the camera screen shows the same thing. If the camera rejects “Open camera menu”, pressing MENU on the camera also works."
+    },
+    {
+      "name": "camera_remote_menu_locked",
+      "value": "The camera did not open its menu: remote mode locks the camera menu. Press MENU on the camera instead."
     },
     {
       "name": "camera_remote_menu_open",
@@ -726,7 +738,7 @@
     },
     {
       "name": "camera_status_ble_pair_failed_detail",
-      "value": "Pairing isn’t finished.\nStay on the pairing screen and try again"
+      "value": "Pairing did not finish"
     },
     {
       "name": "camera_state_paired",

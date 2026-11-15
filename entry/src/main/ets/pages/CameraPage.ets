@@ -526,6 +526,19 @@ export struct CameraPage {
       && this.blePaired() && !this.bleBrowsing() && !this.inProgress();
   }
 
+  /**
+   * 相机在不在「能干活」的状态（1.71.2）。
+   *
+   * 蓝牙子系统在相机电源关着时照样接受连接、照样能握手，`0x2001` 因此会读到
+   * `0` 已停止 / `2` 未唤醒——链路是「已配对」，相机却什么都做不了：遥控进不去
+   * （`0x11` 回 4）、拍照没反应。用户 2026-11-15 问的「关机了有时也能连上，
+   * 显示未唤醒」就是这个状态。读不到（-1）时不拦，按未知处理。
+   */
+  private bleAwake(): boolean {
+    const state = this.svc.blePowerState;
+    return state === -1 || state === 1 || state === 3;
+  }
+
   private bleBatteryText(): ResourceStr {
     return this.svc.bleBatteryPercent >= 0
       ? `${this.svc.bleBatteryPercent}%`
@@ -2121,7 +2134,8 @@ export struct CameraPage {
       // 连回相机热点，不用等相机自己回落。
       // 蓝牙遥控：只有「链路在 + 配对落定」才给入口——遥控是写 0x2021，
       // 没链路的 Idle 状态进去也只能报错。
-      if (!this.bleBrowsing() && !this.inProgress() && this.blePaired()) {
+      // 相机没开机时不给遥控入口：进去了也只会回「相机拒绝进入遥控」。
+      if (!this.bleBrowsing() && !this.inProgress() && this.blePaired() && this.bleAwake()) {
         CameraActionRow({
           label: $r('app.string.camera_remote_action'),
           subtitle: $r('app.string.camera_remote_action_desc'),
@@ -2141,6 +2155,14 @@ export struct CameraPage {
       // 相机只读状态：电量 / 唤醒 / 固件，全部来自 GATT，不占 Wi-Fi（1.69.0）。
       if (this.bleInfoVisible()) {
         this.BleStatusBlock()
+      }
+      // 关机提示（1.71.2）：链路在、相机没开机——说清楚为什么没有遥控入口。
+      if (this.blePaired() && !this.bleAwake()) {
+        Text($r('app.string.camera_ble_power_off_hint'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
       }
       // 数据线提示（1.71.0）：相机从 0x200a 报「已插数据线」时，它多半会切到
       // USB 模式，蓝牙待机随时会断。这句话正是断线之后最需要看到的那句，

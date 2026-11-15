@@ -1635,9 +1635,15 @@ export class BleCameraLink {
     if (gatt === null) return false;
     this.servicesReady = false;
     const quick = fast || this.reconnectingFast;
-    const attempts = quick ? 1 : 5;
     const perCall = quick ? 2500 : SERVICE_TIMEOUT_MS;
-    for (let attempt = 0; attempt < attempts; attempt++) {
+    // 相机刚连上时 GATT 表常常要十几秒才可读：2026-11-15 真机日志里 MTU 在
+    // +5.6 秒才回来，紧接着的 `getServices()` 还要挂一次超时、补探一次才可能
+    // 给内容。原来 quick 模式只试一次（2.5 秒）就放弃，**一半的重连死在
+    // 「服务表未就绪」上**，用户看到的就是「有时连得上、有时连不上」。
+    // 现在改成按总时限重试：quick 12 秒、常规 25 秒，空结果也继续试。
+    const startedAt = Date.now();
+    const deadline = startedAt + (quick ? 12000 : 25000);
+    while (Date.now() < deadline) {
       const probe = await this.servicesOrTimeout(gatt, perCall);
       if (probe.services.length > 0) {
         // 服务表到位后再等一拍，让链路加密/参数更新落定。
@@ -1647,22 +1653,16 @@ export class BleCameraLink {
       }
       // 超时说明这一笔还挂在蓝牙栈里：再发一笔就会排队等它、把 JS 线程卡死。
       if (probe.timedOut) {
-        // 等它自己落地，然后补探一次（这次是全新一笔，不会排队）。
         if (!await this.waitDiscovery(SERVICE_LANDING_MS)) {
           this.onLog('配对: 服务发现一直没回来，本轮放弃（不在主线程上冒卡死的险）');
           return false;
         }
-        const again = await this.servicesOrTimeout(gatt, perCall);
-        if (again.services.length > 0) {
-          this.servicesReady = true;
-          await BleCameraLink.sleep(300);
-          return true;
-        }
-        return false;
+      } else {
+        // 空表（不是超时）：相机还没把 ATT 表准备好，歇一下再问。
+        await BleCameraLink.sleep(800);
       }
-      await BleCameraLink.sleep(400);
     }
-    this.onLog('配对: GATT 服务表为空，本轮不订阅');
+    this.onLog(`配对: GATT 服务表为空（等了 ${Date.now() - startedAt}ms），本轮不订阅`);
     return false;
   }
 
@@ -1695,11 +1695,23 @@ export class BleCameraLink {
     // 复用握手（连的是一台已配对的相机）时不等服务表：相机半睡时
     // `getServices()` 能挂十秒，而 stage1 重发本身就是叫醒手段。
     if (!await this.ensureServices(resume)) {
-      // **拿不到服务表就绝不能往下走**：订阅内部会同步发现服务，相机半睡时
-      // 卡满 6 秒，系统判 THREAD_BLOCK_6S 闪退（2026-11-14 18:29）。这一轮
-      // 放弃，交给重连循环；下一轮相机多半已经醒了。
-      this.onLog('配对: 服务表未就绪，本轮不订阅（避免主线程卡死）');
-      return null;
+      // **拿不到服务表就绝不能订阅**：订阅内部会同步发现服务，相机半睡时
+      // 卡满 6 秒，系统判 THREAD_BLOCK_6S 闪退（2026-11-14 18:29）。
+      //
+      // 但也别直接放弃（1.71.2）：stage1 本身就是叫醒相机的那一帧，可它一直
+      // 排在服务表后面，于是「相机半睡」变成了「永远等不到服务表」。这里先把
+      // stage1 发出去（写入不需要订阅），给相机一点刺激，再补一次服务发现。
+      this.onLog('配对: 服务表未就绪，先发 stage1 唤醒相机再补探');
+      try {
+        await this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw);
+      } catch (_e) {
+        // 服务表还没好时写入可能被拒，忽略：唤醒刺激已经发出去了
+      }
+      await BleCameraLink.sleep(600);
+      if (!await this.ensureServices(true)) {
+        this.onLog('配对: 补探后仍没有服务表，本轮不订阅（避免主线程卡死）');
+        return null;
+      }
     }
     // 先开 0x2008 通知，相机半睡时也要靠 GATT 流量叫醒。
     // **0x2008 是 notify，不是 indicate**（1.66.18）：nsg 的 Android 实现与
