@@ -1,5 +1,5 @@
 import { PageHeader } from '../components/PageHeader';
-import { BleRemoteDirection, BleSpecialShoot, CameraService } from '../services/CameraService';
+import { BleSpecialShoot, CameraService } from '../services/CameraService';
 import { L10n } from '../utils/L10n';
 import { WindowUtils } from '../utils/WindowUtils';
 import { CardShadow, FontSize, IconSize, RowHeight } from '../utils/UiTokens';
@@ -18,14 +18,14 @@ import { uiMaterial } from '@kit.ArkUI';
  * 全按 OFF 由服务层在 600ms 后补一笔复位。状态从 `0x2020` 的指示来，页面只用
  * `CameraService` 的 @Trace 字段，不直接碰 GATT。
  *
- * 工具区四件事（1.71.0）：
+ * 工具区三件事（1.71.0 起；「相机菜单」在 1.71.3 移除——真机探针证明相机在
+ * 遥控模式下收下 `MENU` 却不进菜单，见 SERVICES.md）：
  * - **录像**：只放入口，禁用并标「尚未开发」（用户明确要求先摆位、不实现）；
  * - **特殊拍摄**：`0x14` 启停相机侧的间隔定时 / 延时摄影 / 焦点移位；
- * - **相机回放**：`PLAYBACK` 进回放，方向键翻页、变焦键放大缩小；
- * - **相机菜单**：`MENU` 开关菜单，方向键 + 确定键操作。
+ * - **相机回放**：`PLAYBACK` 进回放，方向键翻页、变焦键放大缩小。
  *
- * 后三件都走同一个半模态容器（`bindSheet`），因为快门才是这一页的主角：
- * 面板收起来时页面结构完全不变，只多一张工具卡。
+ * 后两件走半模态容器（`bindSheet`），因为快门才是这一页的主角：面板收起来时
+ * 页面结构完全不变，只多一张工具卡。
  */
 @Builder
 export function BleRemotePageBuilder() {
@@ -40,7 +40,6 @@ export struct BleRemotePage {
   /** 三个工具半模态各自独立开关：同一次只会有一个是 true。 */
   @Local specialSheetOpen: boolean = false;
   @Local playSheetOpen: boolean = false;
-  @Local menuSheetOpen: boolean = false;
 
   aboutToAppear(): void {
     this.enter();
@@ -239,21 +238,13 @@ export struct BleRemotePage {
         label: $r('app.string.camera_remote_playback'),
         subtitle: $r('app.string.camera_remote_playback_desc'),
         disabled: !this.svc.bleRemoteActive,
+        last: true,
         onTap: () => {
           this.svc.clearBleRemoteToolError();
           this.playSheetOpen = true;
         }
       })
-      RemoteToolRow({
-        label: $r('app.string.camera_remote_menu'),
-        subtitle: $r('app.string.camera_remote_menu_desc'),
-        disabled: !this.svc.bleRemoteActive,
-        last: true,
-        onTap: () => {
-          this.svc.clearBleRemoteToolError();
-          this.menuSheetOpen = true;
-        }
-      })
+
     }
     .width('100%')
   }
@@ -480,112 +471,6 @@ export struct BleRemotePage {
     .padding({ left: 24, right: 24, top: 4, bottom: 24 })
   }
 
-  /** 相机菜单：开关菜单 + 方向盘。 */
-  @Builder
-  MenuSheet() {
-    Column({ space: 16 }) {
-      Text($r('app.string.camera_remote_menu_hint'))
-        .fontSize(FontSize.Caption)
-        .lineHeight(18)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
-
-      if (this.inMenu()) {
-        Column({ space: 10 }) {
-          Row() {
-            this.DirKey('↑', BleRemoteDirection.Up)
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-
-          Row({ space: 10 }) {
-            this.DirKey('←', BleRemoteDirection.Left)
-            this.OkKey()
-            this.DirKey('→', BleRemoteDirection.Right)
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-
-          Row() {
-            this.DirKey('↓', BleRemoteDirection.Down)
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Center)
-        }
-        .width('100%')
-
-        RemoteSheetButton({
-          label: $r('app.string.camera_remote_menu_close'),
-          active: this.svc.bleRemoteActive,
-          onTap: () => {
-            Haptics.tap();
-            this.svc.bleRemoteToggleMenu();
-          }
-        })
-      } else {
-        RemoteSheetButton({
-          label: $r('app.string.camera_remote_menu_open'),
-          active: this.svc.bleRemoteActive,
-          onTap: () => {
-            Haptics.tap();
-            this.svc.bleRemoteToggleMenu();
-          }
-        })
-        // 有错误时不再重复「先点打开菜单」：那句正是用户刚做过的事。
-        if (this.svc.bleRemoteToolError === '') {
-          Text($r('app.string.camera_remote_menu_need_mode'))
-            .fontSize(FontSize.Caption)
-            .lineHeight(18)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-        }
-      }
-
-      if (this.svc.bleRemoteToolError !== '') {
-        Text(this.svc.bleRemoteToolError)
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.status_error'))
-          .width('100%')
-      }
-    }
-    .width('100%')
-    .padding({ left: 24, right: 24, top: 4, bottom: 24 })
-  }
-
-  /** 方向键：文字箭头，圆形中性底。 */
-  @Builder
-  DirKey(arrow: string, dir: number) {
-    Button(arrow)
-      .width(56)
-      .height(56)
-      .fontSize(FontSize.Title)
-      .fontColor($r('app.color.text_primary'))
-      .backgroundColor($r('app.color.action_neutral_fill'))
-      .borderRadius(28)
-      .onClick(() => {
-        Haptics.tap();
-        this.svc.bleRemoteMenuMove(dir);
-      })
-  }
-
-  /** 确定键。 */
-  @Builder
-  OkKey() {
-    Button($r('app.string.camera_remote_menu_ok'))
-      .width(88)
-      .height(56)
-      .fontSize(FontSize.Body)
-      .fontWeight(FontWeight.Medium)
-      .fontColor($r('app.color.text_primary'))
-      .backgroundColor($r('app.color.action_neutral_fill'))
-      .borderRadius(28)
-      .onClick(() => {
-        Haptics.tap();
-        this.svc.bleRemoteMenuOk();
-      })
-  }
-
   build() {
     NavDestination() {
       Column() {
@@ -643,8 +528,6 @@ export struct BleRemotePage {
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.bg_page'))
-      .bindSheet($$this.menuSheetOpen, this.MenuSheet(),
-        this.toolSheetOptions($r('app.string.camera_remote_menu_title')))
     }
     .hideTitleBar(true)
     .onReady((context: NavDestinationContext) => {

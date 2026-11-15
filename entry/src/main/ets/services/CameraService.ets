@@ -136,11 +136,7 @@ const BLE_INFO_REFRESH_MS = 300000;
 /** 蓝牙遥控按键值（官方 `KeyCode`）。 */
 const BLE_KEY_HALF = 2;
 const BLE_KEY_FULL = 3;
-const BLE_KEY_MENU = 5;
 const BLE_KEY_PLAYBACK = 6;
-const BLE_KEY_OK = 7;
-const BLE_KEY_UP = 8;
-const BLE_KEY_DOWN = 9;
 const BLE_KEY_RIGHT = 10;
 const BLE_KEY_LEFT = 11;
 const BLE_KEY_ZOOM_IN = 12;
@@ -160,13 +156,6 @@ const BLE_SHOOT_STOP = 2;
  * 太长方向键会连跳。
  */
 const BLE_KEY_TAP_MS = 90;
-/**
- * 菜单键的按住时长（ms）。
- *
- * 菜单是「开/关」切换：90ms 的轻点可能落在相机两次扫描之间被吞掉。真机反馈
- * 「相机菜单无效」时优先怀疑这个时长，按住 260ms 更接近人手按一下。
- */
-const BLE_KEY_MENU_HOLD_MS = 260;
 
 /**
  * 特殊拍摄的三种类型（就是 `0x14` 的 functionCode）。
@@ -181,13 +170,6 @@ export class BleSpecialShoot {
   static readonly FocusShift: number = BLE_SHOOT_FOCUS_SHIFT;
 }
 
-/** 菜单方向盘的方向（页面与方向键一一对应，不传数字）。 */
-export class BleRemoteDirection {
-  static readonly Up: number = 0;
-  static readonly Down: number = 1;
-  static readonly Left: number = 2;
-  static readonly Right: number = 3;
-}
 /**
  * 直连「缓存热点」的等上链时限（1.68.0）。
  *
@@ -2991,28 +2973,6 @@ export class CameraService {
       zoomIn ? '回放放大' : '回放缩小');
   }
 
-  /** 菜单方向键（`dir` 用 `BleRemoteDirection` 的四个值）。 */
-  async bleRemoteMenuMove(dir: number): Promise<void> {
-    let key = BLE_KEY_UP;
-    let label = '菜单上';
-    if (dir === BleRemoteDirection.Down) {
-      key = BLE_KEY_DOWN;
-      label = '菜单下';
-    } else if (dir === BleRemoteDirection.Left) {
-      key = BLE_KEY_LEFT;
-      label = '菜单左';
-    } else if (dir === BleRemoteDirection.Right) {
-      key = BLE_KEY_RIGHT;
-      label = '菜单右';
-    }
-    await this.bleRemoteKeyTap(key, label);
-  }
-
-  /** 菜单确定键（SELECTOR_OK）。 */
-  async bleRemoteMenuOk(): Promise<void> {
-    await this.bleRemoteKeyTap(BLE_KEY_OK, '菜单确定');
-  }
-
   /** 半按一下（不拍）：官方靠这一下把相机从回放/菜单唤回拍摄。 */
   async bleRemoteHalfTap(): Promise<boolean> {
     const link = this.bleLink;
@@ -3037,38 +2997,6 @@ export class CameraService {
   async bleRemoteEnterPlayback(): Promise<void> {
     this.bleRemoteToolError = '';
     await this.bleRemoteKeyTap(BLE_KEY_PLAYBACK, '进入回放');
-  }
-
-  /**
-   * 打开/关闭相机菜单（发 MENU 键），并核对相机是不是真的进了菜单。
-   *
-   * 相机对这种「切换类」按键可能收了命令却不动作（遥控模式下菜单可能是锁的）。
-   * 真机反馈「相机菜单无效」时，用户看到的只是一个没反应的按钮；这里等 1.4 秒
-   * 读一次 `0x2020`，没进菜单就把原因写进半模态，而不是让按钮看起来像坏了。
-   */
-  async bleRemoteToggleMenu(): Promise<void> {
-    this.bleRemoteToolError = '';
-    const opening = this.bleRemoteMain !== 3;
-    const ok = await this.bleRemoteKeyTap(BLE_KEY_MENU, '菜单键', BLE_KEY_MENU_HOLD_MS);
-    if (!ok) return;
-    await this.bleInfoSleep(1400);
-    await this.refreshRemoteStatus();
-    if (opening && this.bleRemoteMain !== 3) {
-      this.bleRemoteToolError = L10n.tr('camera_remote_menu_locked');
-      this.log.add('蓝牙遥控: 菜单键被接受但相机没有进入菜单');
-    }
-  }
-
-  /** 主动读一次 0x2020（菜单/回放的核对用）。 */
-  private async refreshRemoteStatus(): Promise<void> {
-    const link = this.bleLink;
-    if (link === null || !this.bleConnected) return;
-    try {
-      const status = await link.readRemoteStatus();
-      if (status !== null) this.applyRemoteStatus(status);
-    } catch (_e) {
-      // 读不到就沿用上一条指示的状态
-    }
   }
 
   /** 选择特殊拍摄类型（1 间隔定时 / 2 延时摄影 / 3 焦点移位）。 */

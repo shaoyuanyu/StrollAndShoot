@@ -353,14 +353,6 @@
       "value": "Page and zoom on the camera screen"
     },
     {
-      "name": "camera_remote_menu",
-      "value": "Camera menu"
-    },
-    {
-      "name": "camera_remote_menu_desc",
-      "value": "Arrow keys and OK"
-    },
-    {
       "name": "camera_remote_special_title",
       "value": "Special shooting"
     },
@@ -439,34 +431,6 @@
     {
       "name": "camera_remote_playback_need_mode",
       "value": "The camera is still in shooting mode. Tap “Enter camera playback” first."
-    },
-    {
-      "name": "camera_remote_menu_title",
-      "value": "Camera menu"
-    },
-    {
-      "name": "camera_remote_menu_hint",
-      "value": "Keys act on the camera menu directly; the camera screen shows the same thing. If the camera rejects “Open camera menu”, pressing MENU on the camera also works."
-    },
-    {
-      "name": "camera_remote_menu_locked",
-      "value": "The camera did not open its menu: remote mode locks the camera menu. Press MENU on the camera instead."
-    },
-    {
-      "name": "camera_remote_menu_open",
-      "value": "Open camera menu"
-    },
-    {
-      "name": "camera_remote_menu_close",
-      "value": "Close camera menu"
-    },
-    {
-      "name": "camera_remote_menu_ok",
-      "value": "OK"
-    },
-    {
-      "name": "camera_remote_menu_need_mode",
-      "value": "The camera menu is closed. Tap “Open camera menu” first."
     },
     {
       "name": "camera_remote_cable_hint",
@@ -1842,7 +1806,7 @@
     },
     {
       "name": "camera_guide_partial_3",
-      "value": "Bluetooth remote: shutter, interval/time-lapse/focus shift, playback and menu control work; movie is not implemented yet."
+      "value": "Bluetooth remote: shutter, interval/time-lapse/focus shift and playback control work. Movie is not implemented yet, and the camera ignores the menu key in remote mode."
     },
     {
       "name": "camera_title_with_serial",
