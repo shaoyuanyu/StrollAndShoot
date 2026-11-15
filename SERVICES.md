@@ -381,7 +381,7 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
 
-### Wi-Fi STA 实时取景与遥控（1.78.0）
+### Wi-Fi STA 实时取景与遥控（1.78.1）
 
 Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP/IP 做实时取景和
 静止图像遥控。协议从 SnapBridge 2.14.3 的 `ptpclient/actions/liveview`、

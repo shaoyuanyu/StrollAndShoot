@@ -499,7 +499,9 @@ export class NikonWifiLiveView {
       const r = await this.raw(op, [], true);
       if (!this.active || token !== this.loopToken) return;
 
-      if (r !== null && r.code === RESPONSE_OPERATION_NOT_SUPPORTED && this.useEx) {
+      if (r !== null && this.useEx
+        && (r.code === RESPONSE_OPERATION_NOT_SUPPORTED
+          || r.code === RESPONSE_DEVICE_PROP_NOT_SUPPORTED)) {
         // 相机没声明 Ex 或声明了却不支持：退回老协议，不让循环停在这里。
         this.useEx = false;
         this.log('实时取景: Ex 不支持，改走 0x9203');
