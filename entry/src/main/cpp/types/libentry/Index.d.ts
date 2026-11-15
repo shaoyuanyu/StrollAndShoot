@@ -16,6 +16,10 @@ export interface PtpDeviceInfo {
   serialNumber: string;
   /** 相机自报支持的操作码（如 0x9805 = GetObjectPropList）。 */
   operationsSupported: number[];
+  /** 相机自报支持的设备属性（如 0x5001 = BatteryLevel）。 */
+  devicePropertiesSupported?: number[];
+  /** DeviceInfo 尾部的电量（0–100）；0 表示相机没给，业务层按未知处理。 */
+  batteryLevel?: number;
 }
 
 export interface PtpObjectInfo {

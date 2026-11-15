@@ -245,7 +245,10 @@ export class MockPtpDevice {
       model: MockPtpDevice.mockProductName(),
       deviceVersion: '1.0',
       serialNumber: 'MOCK-0001',
-      vendorExtensionID: 6
+      vendorExtensionID: 6,
+      // 让模拟器上也能验收「PTP 模式显示电量」：真机由 DeviceInfo 尾字节决定。
+      batteryLevel: 87,
+      devicePropertiesSupported: [0x5001]
     };
     return info;
   }

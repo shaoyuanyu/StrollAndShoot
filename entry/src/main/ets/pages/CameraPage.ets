@@ -1,4 +1,4 @@
-import { CameraService } from '../services/CameraService';
+import { CameraService, type CameraStatusReport } from '../services/CameraService';
 import { BleIdentityStore } from '../services/BleIdentityStore';
 import { SavedCameraStore } from '../services/SavedCameraStore';
 import { StandeePreferenceStore } from '../model/StandeePreferenceStore';
@@ -10,6 +10,8 @@ import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2, 
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { Haptics } from '../utils/Haptics';
+import { L10n } from '../utils/L10n';
+import { BleStatus } from '../utils/BleStatus';
 import { WindowUtils } from '../utils/WindowUtils';
 import { GlassEffect } from '../utils/GlassEffect';
 /**
@@ -170,11 +172,11 @@ const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
  * - 到了阈值 → 手指抬起那一刻定格，用**一条** `animateTo` 把「下拉量」收回到 0：
  *   卡面与抽屉完整回弹到原位，系统刷新指示器贴在卡面正上方、跟着一起落到
  *   「标题栏与卡面之间」那段空白里继续转；
- * - [REFRESH_FAKE_MS] 之后（现在没有实质刷新动作，先写死 2s）指示器淡出，
- *   其余组件早已在原位，不需要再动。
+ * - 真正去读一次相机状态（1.73.0，`CameraService.refreshCameraStatus()`），读完
+ *   指示器淡出、弹一句结论；至少留 [REFRESH_MIN_MS] 让转圈不至于一闪而过。
  *
  * 这样「回弹」和「进入刷新」是同一条动画，不会出现「先弹回原位、再冒出一个转圈
- * 把卡面挤下去」的两段。指示器用官方 `SwipeRefresherV2`（系统加载动效）。
+ * 把卡面挤下去」的两段。指示器用系统 `LoadingProgress`（系统加载动效）。
  */
 const REFRESH_TRIGGER_RATIO = 0.8;
 /** 触发刷新所需的下拉量（vp）= 最大下拉的 80%。 */
@@ -185,8 +187,13 @@ const REFRESH_THRESHOLD_VP = TOP_PULL_MAX * REFRESH_TRIGGER_RATIO;
  * 刷完淡出——回弹行程因此拿到卡面的 48vp 加抽屉的 144vp，比「卡面被顶下去一行」
  * 那版长得多。指示器 22vp 必须塞得进那段空白（模拟器上约 48vp，见 `REFRESH_ICON`）。
  */
-/** 刷新动作时长（ms）：现在没有实质动作，写死 2s。 */
-const REFRESH_FAKE_MS = 2000;
+/**
+ * 刷新指示器的最短停留（ms）。
+ *
+ * 真正读 GATT / PTP 可能 100ms 就回来，指示器一闪而过反而像没刷新；留 700ms
+ * 让「转了一圈 + 淡出」看得完。读得比 700ms 慢就按实际时间收。
+ */
+const REFRESH_MIN_MS = 700;
 /** 「松手回弹到原位」与「指示器淡出」的动画时长（ms）。 */
 const REFRESH_ANIM_MS = 260;
 /**
@@ -345,15 +352,6 @@ export struct CameraPage {
     return [0, max - stick > 2 ? stick : Math.max(1, stick - 2)];
   }
 
-  /**
-   * 顶边下拉刷新（1.65.0）。
-   *
-   * 界面这一层只管手势、阈值与动画：现在没有实质刷新动作，加载动画时长写死
-   * `REFRESH_FAKE_MS`（2s）。这个回调是给后续接「重新扫描相机」留的口子——
-   * 动作要接的时候在 MainScreen 里实现即可，页面不用动；它不影响动画时长。
-   */
-  @Event onRefresh: () => void = () => {};
-
   /** 无线连接输入框；首次进入用上次成功的地址预填。 */
   @Local wifiInput: string = '';
   /** 指定相机 IP 的半模态是否打开。 */
@@ -400,7 +398,7 @@ export struct CameraPage {
    * 下拉刷新（1.65.0）。
    *
    * - `pullProgress`：本次下拉进度（0..1，1 = `TOP_PULL_MAX`），指示器随它淡入；
-   * - `refreshing`：刷新中（由 `onTopTouch()` 置真，`REFRESH_FAKE_MS` 后置假）；
+   * - `refreshing`：刷新中（由 `onTopTouch()` 置真，读完相机状态后置假）；
    * - `refreshFade`：刷新结束那一下的淡出（1→0），让指示器不是硬消失。
    * 刷新时卡面与抽屉**回原位**，所以不再需要「撑开一行」的位移量。
    */
@@ -3118,15 +3116,39 @@ export struct CameraPage {
     this.refreshing = true;
     this.refreshFade = 1;
     Haptics.tap();
-    this.onRefresh();
     animateTo({ duration: REFRESH_ANIM_MS, curve: Curve.EaseOut }, () => {
       this.pullDown = 0;
       this.pullProgress = 0;
     });
-    setTimeout(() => { this.endRefresh(); }, REFRESH_FAKE_MS);
+    const startedAt = Date.now();
+    // 真正读一次相机状态（1.73.0）：蓝牙重读 GATT，PTP 重取 DeviceInfo，
+    // 未连接则只给结论。指示器至少转 REFRESH_MIN_MS，读完再淡出。
+    this.svc.refreshCameraStatus().then((report: CameraStatusReport) => {
+      this.toast(this.refreshSummary(report));
+    }).catch((err: Error) => {
+      this.svc.getLog().add(`[刷新] 失败: ${err.message}`);
+    }).finally(() => {
+      const wait = Math.max(0, REFRESH_MIN_MS - (Date.now() - startedAt));
+      setTimeout(() => { this.endRefresh(); }, wait);
+    });
   }
 
-  /** 刷新动作结束（现在没有实质动作，就是 2s 之后）：指示器淡出，其余已在原位。 */
+  /**
+   * 刷新结论：成功给「已连接 · 电量 82% · 唤醒」，没连上 / 没响应给具体原因。
+   *
+   * 电量与唤醒的数值同时已经写进服务字段，标题栏的状态胶囊会一起更新——toast
+   * 只是一次性确认，不必让用户去标题栏找。
+   */
+  private refreshSummary(report: CameraStatusReport): ResourceStr {
+    if (!report.connected) {
+      return report.error !== '' ? report.error : $r('app.string.camera_refresh_off');
+    }
+    return L10n.tr('camera_refresh_ok',
+      BleStatus.batteryLabel(report.battery),
+      BleStatus.powerLabel(report.power));
+  }
+
+  /** 刷新动作结束：指示器淡出，其余已在原位。 */
   private endRefresh(): void {
     animateTo({ duration: REFRESH_ANIM_MS, curve: Curve.EaseInOut }, () => {
       this.refreshFade = 0;

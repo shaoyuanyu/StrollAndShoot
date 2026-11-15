@@ -317,6 +317,7 @@ export class CameraStateDemo {
     s.deviceManufacturer = 'Nikon';
     s.deviceSerialNumber = '';
     s.deviceVersion = '';
+    s.ptpBatteryPercent = -1;
     s.usbVidPid = '';
     s.usbSerialNumber = '';
   }
@@ -333,6 +334,8 @@ export class CameraStateDemo {
     s.deviceManufacturer = 'Nikon';
     s.deviceSerialNumber = CameraStateDemo.SERIAL;
     s.deviceVersion = '2.00';
+    // PTP 会话的电量（1.73.0）：标题栏胶囊在 USB / Wi-Fi 状态也要有数可显示。
+    s.ptpBatteryPercent = 87;
     s.photoCount = CameraStateDemo.PHOTO_COUNT;
     s.statusText = L10n.tr('camera_status_connected');
   }

@@ -238,6 +238,23 @@ interface DownloadJournalEntry {
   record: DownloadRecord;
 }
 
+/**
+ * 下拉刷新的结果（1.73.0）。
+ *
+ * 页面只需要两个信息：这次读成没成（`connected`），以及要弹的那句话。
+ * 具体数值已经写进 {@link CameraService.cameraBatteryPercent} / `cameraPowerState`，
+ * 标题栏的状态胶囊会自己跟着刷新，不必由页面再传一遍。
+ */
+export interface CameraStatusReport {
+  connected: boolean;
+  /** 电量百分比；-1 = 未知。 */
+  battery: number;
+  /** 唤醒状态（`0x2001` 枚举）；-1 = 未知。PTP 会话有响应时按 3 唤醒算。 */
+  power: number;
+  /** 未连接 / 没有响应时的结论（已本地化），成功时为空串。 */
+  error: string;
+}
+
 @ObservedV2
 export class CameraService {
   private static instance: CameraService;
@@ -703,6 +720,14 @@ export class CameraService {
   @Trace deviceManufacturer: string = '';
   @Trace deviceSerialNumber: string = '';
   @Trace deviceVersion: string = '';
+  /**
+   * PTP 会话读到的电量（1.73.0）。
+   *
+   * 来自 GetDeviceInfo 尾部的 BatteryLevel 字节（PTP 1.1）。很多机型不填、读出来是
+   * 0，这时一律按未知（-1）：满电显示成 0% 比显示「未知」更糟。真机日志会记原始值，
+   * 换机身/固件时看 `电量: DeviceInfo 未给（原始值 N）` 这一行即可判断。
+   */
+  @Trace ptpBatteryPercent: number = -1;
   @Trace usbVidPid: string = '';
   @Trace usbSerialNumber: string = '';
   /** Thumbnail disk cache manager. */
@@ -2075,6 +2100,7 @@ export class CameraService {
       this.deviceSerialNumber = deviceInfo.serialNumber;
       this.deviceVersion = deviceInfo.deviceVersion;
       this.deviceOps = deviceInfo.operationsSupported ?? [];
+      this.applyDeviceInfoBattery(deviceInfo, 'Wi-Fi');
       this.cameraIdentity = this.buildWifiCameraIdentity(deviceInfo, target);
       this.cameraName = deviceInfo.model || deviceInfo.manufacturer || target;
       this.log.add(`Wi-Fi DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" ` +
@@ -4786,6 +4812,124 @@ export class CameraService {
     return /^\d{1,3}(\.\d{1,3}){3}$/.test(name);
   }
 
+  /**
+   * 收下 PTP DeviceInfo 里的电量（1.73.0）。
+   *
+   * PTP 1.1 的 DeviceInfo 最后一个字节是 BatteryLevel（0–100）。很多机型不填，
+   * 读出来是 0；**0 一律按未知处理**（-1），既避免把满电显示成 0%，也让页面知道
+   * 「这台相机不报电量」。原始值写日志，换机身/固件时一眼能看出是「没给」还是
+   * 「给了但解析错」。
+   */
+  private applyDeviceInfoBattery(info: DeviceInfo | null, source: string): void {
+    if (info === null) return;
+    const raw = info.batteryLevel ?? 0;
+    if (raw > 0 && raw <= 100) {
+      this.ptpBatteryPercent = raw;
+      this.log.add(`${source} 电量: ${raw}%（DeviceInfo）`);
+      return;
+    }
+    this.ptpBatteryPercent = -1;
+    this.log.add(`${source} 电量: DeviceInfo 未给（原始值 ${raw}）`);
+  }
+
+  /**
+   * 页面展示用的电量：蓝牙待机读 GATT，PTP 会话读 DeviceInfo，都没有就是 -1。
+   *
+   * 标题栏的状态胶囊与下拉刷新的结果都走这两个方法，页面不要自己拼来源。
+   */
+  cameraBatteryPercent(): number {
+    if (this.bleStandbyLive()) return this.bleBatteryPercent;
+    if (this.connected) return this.ptpBatteryPercent;
+    return -1;
+  }
+
+  /**
+   * 页面展示用的唤醒状态。
+   *
+   * 蓝牙待机有相机自己上报的 `0x2001` 枚举；PTP 会话**没有**对应的属性——相机能
+   * 回 GetDeviceInfo 就说明它醒着（睡着的相机根本不应答），所以按「唤醒」显示，
+   * 会话断了就不再显示这个胶囊。这是「操作上成立」而不是「读到了电源枚举」。
+   */
+  cameraPowerState(): number {
+    if (this.bleStandbyLive()) return this.blePowerState;
+    if (this.connected) return 3;
+    return -1;
+  }
+
+  /** 标题栏右侧的状态胶囊要不要出现：蓝牙待机，或一条能应答的 PTP 会话。 */
+  hasCameraStatus(): boolean {
+    if (this.bleStandbyLive()) return true;
+    return this.connected && this.usable && !this.disconnecting && this.switchingTo < 0;
+  }
+
+  /**
+   * 下拉刷新：读一次当前相机的最新状态（1.73.0）。
+   *
+   * 四种模式能读到的内容不同，但「有没有响应」都能当场判定：
+   * - **蓝牙待机**：重读 GATT 的电量 `0x2A19` 与唤醒状态 `0x2001`（顺带固件、数据线）；
+   * - **USB / Wi-Fi AP / STA（含蓝牙浏览）**：重取一次 PTP `GetDeviceInfo`——会话
+   *   有响应就说明相机醒着、连接还在，电量取 DeviceInfo 尾部（相机不给就是未知）；
+   *   读失败说明会话已经断了，按断开处理并给出「相机没有响应」，页面进失败态，
+   *   用户点「重试」走正常的重新连接。
+   * - **未连接**：不主动发起连接，只回一句「相机未连接」。
+   *
+   * 卡顿时长进日志（`[刷新] …（Xms）`），和 1.72.4 的连接耗时日志一样，方便定位。
+   */
+  async refreshCameraStatus(): Promise<CameraStatusReport> {
+    const startedAt = Date.now();
+    if (this.bleStandbyLive()) {
+      // 已有 `bleInfoBusy` 兜住并发；它内部会重排下一轮 5 分钟巡检。
+      await this.refreshBleInfo();
+      this.log.add(`[刷新] 蓝牙状态已重读（${Date.now() - startedAt}ms，`
+        + `电量 ${this.bleBatteryPercent}，唤醒 ${this.blePowerState}）`);
+      return {
+        connected: true,
+        battery: this.bleBatteryPercent,
+        power: this.blePowerState,
+        error: ''
+      };
+    }
+    if (this.connected) {
+      let info: DeviceInfo | null = null;
+      try {
+        info = await this.session.getDeviceInfo(PtpPriority.FOREGROUND);
+      } catch (err) {
+        this.log.add(`[刷新] 取设备信息失败: ${(err as Error).message}`);
+        info = null;
+      }
+      if (info !== null) {
+        this.applyDeviceInfoBattery(info, '刷新');
+        this.log.add(`[刷新] PTP 会话有响应（${Date.now() - startedAt}ms，`
+          + `电量 ${this.ptpBatteryPercent}）`);
+        return {
+          connected: true,
+          battery: this.ptpBatteryPercent,
+          power: this.cameraPowerState(),
+          error: ''
+        };
+      }
+      const why = L10n.tr('camera_refresh_no_response');
+      this.connected = false;
+      this.usable = false;
+      if (this.wireless) {
+        this.wirelessFailed = why;
+        this.wirelessStage = '';
+      } else {
+        this.lastScanError = why;
+      }
+      this.statusText = why;
+      this.log.add(`[刷新] 相机没有响应（${Date.now() - startedAt}ms），按断开处理`);
+      return { connected: false, battery: -1, power: -1, error: why };
+    }
+    this.log.add('[刷新] 相机未连接，本轮不读');
+    return {
+      connected: false,
+      battery: -1,
+      power: -1,
+      error: L10n.tr('camera_refresh_off')
+    };
+  }
+
   private buildWifiCameraIdentity(info: DeviceInfo, host: string): string {
     const sanitize = (s: string): string => s.replace(/[^a-zA-Z0-9_.-]/g, '_').substring(0, 64);
     const manu = (info.manufacturer || '').trim();
@@ -4838,6 +4982,7 @@ export class CameraService {
         if (deviceInfo) {
           this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
           this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
+          this.applyDeviceInfoBattery(deviceInfo, 'USB');
           this.log.add(`相机身份(刷新): ${this.cameraIdentity}`);
         }
       }
@@ -4890,6 +5035,7 @@ export class CameraService {
       this.deviceManufacturer = deviceInfo?.manufacturer || cameras[0].manufacturerName || '';
       this.deviceSerialNumber = deviceInfo?.serialNumber || cameras[0].serial || '';
       this.deviceVersion = deviceInfo?.deviceVersion || '';
+      this.applyDeviceInfoBattery(deviceInfo, 'USB');
       this.usbVidPid = `VID_${cameras[0].vendorId.toString(16).padStart(4,'0')}_PID_${cameras[0].productId.toString(16).padStart(4,'0')}`;
       this.usbSerialNumber = cameras[0].serial || '';
       if (deviceInfo) {
@@ -6548,6 +6694,8 @@ export class CameraService {
     this.deviceManufacturer = '';
     this.deviceSerialNumber = '';
     this.deviceVersion = '';
+    // 换相机 / 断开时上一台的电量不能留着：标题栏的胶囊会把它当成当前相机的。
+    this.ptpBatteryPercent = -1;
     this.usbVidPid = '';
     this.usbSerialNumber = '';
     // Flush BEFORE clearing the flag — the old order made this branch dead and

@@ -371,6 +371,13 @@ PTPDeviceInfo PTPEngine::parseDeviceInfo(const uint8_t* data, size_t len) {
     di.DeviceVersion = readPtpString(data, len, &off);
     di.SerialNumber = readPtpString(data, len, &off);
 
+    // BatteryLevel 是 DeviceInfo 的最后一个字节（PTP 1.1）；有的相机不写这一字节。
+    // 只用来显示，解析不到就是 0（业务层按未知处理）。
+    if (off < len) {
+        di.BatteryLevel = data[off];
+        off += 1;
+    }
+
     return di;
 }
 

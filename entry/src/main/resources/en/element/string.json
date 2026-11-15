@@ -1867,6 +1867,18 @@
     {
       "name": "settings_ble_location_failed",
       "value": "Couldn't enable location injection: check location permission and the system location switch."
+    },
+    {
+      "name": "camera_refresh_ok",
+      "value": "Connected · Battery %1$s · %2$s"
+    },
+    {
+      "name": "camera_refresh_off",
+      "value": "Camera not connected"
+    },
+    {
+      "name": "camera_refresh_no_response",
+      "value": "No response from the camera (it may be off or asleep)."
     }
   ]
 }

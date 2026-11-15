@@ -562,9 +562,28 @@ AP / STA 的空闲、搜索、首配、配对失败、已配对、交接、已�
    锚在卡面正上方，所以下拉时在张开的那条缝里、松手后跟着卡面一起落到标题文字下方；显隐由
    `refreshIndicatorOpacity()` 管：刷新中看 `refreshFade`，平时看卡面下移量
    （下移 8vp 起淡入、20vp 满）；
-5. `REFRESH_FAKE_MS`（2s）后 `endRefresh()` 把 `refreshFade` 从 1 收到 0，
-   指示器淡出；卡面与抽屉早已在原位，不需要再动。现在没有实质刷新动作，
-   时长写死 2s；`@Event onRefresh` 是留给后续接「重新扫描相机」的口子。
+5. **松手后真的去读一次相机状态**（1.73.0）：`beginRefresh()` 调
+   `CameraService.refreshCameraStatus()`，读完 `endRefresh()` 把 `refreshFade` 从 1
+   收到 0；指示器至少转 `REFRESH_MIN_MS`（700ms），读得快也不会一闪而过。卡面与抽屉
+   早已在原位，不需要再动。读完弹一句 toast：
+   「已连接 · 电量 82% · 唤醒」/「相机未连接」/「相机没有响应（可能已关机或休眠）」。
+   `@Event onRefresh` 已删掉——页面自己就有服务单例，再绕一层没有意义。
+
+**四种模式各读什么**（1.73.0）：
+
+| 模式 | 连接 | 电量 | 唤醒 / 沉睡 |
+|---|---|---|---|
+| 蓝牙待机 | GATT 链路在、配对落定 | `de00/0x2a19` 重读 | `de00/0x2001` 枚举（唤醒 / 沉睡） |
+| USB | 重取 PTP `GetDeviceInfo`：有响应就在 | `GetDeviceInfo` 尾部 `BatteryLevel`（相机不给就是未知） | PTP 没有电源枚举；会话有响应就按 **唤醒** 显示 |
+| Wi-Fi AP / STA | 同上（PTP/IP） | 同上 | 同上 |
+| 蓝牙浏览（借相机热点） | 同上 | 同上 | 同上 |
+
+- **读失败 = 断开**：PTP 的 `GetDeviceInfo` 失败就判定会话已经断了（相机睡着了不会
+  应答），写 `lastScanError` / `wirelessFailed` 并 `connected = false`，页面进失败态；
+  用户点「重试」走正常的重新连接。蓝牙待机读失败只影响那几格数值，链路状态不动。
+- **未连接时不去主动连**：下拉刷新不是「连接」按钮，只回一句「相机未连接」。
+- 状态胶囊（`TitleStatusCapsule`）跟着刷新结果一起更新：蓝牙待机用 GATT 值，PTP 会话
+  用 DeviceInfo 电量；换相机 / 断开时 `ptpBatteryPercent` 清回 -1，不拿上一台的数顶替。
 
 - **不要再引入「刷新行」把卡面顶下去**（1.65.0 第二轮试过两版：44vp 那版卡面的
   下拉位移最大只有 48vp，松手时几乎无处可回弹，看起来像「不松手就不回弹」；
@@ -1065,15 +1084,20 @@ Row 用 `VerticalAlign.Center`：只有 `headline()` 时，点、文字、按钮
 
 #### 相机状态胶囊在标题栏（1.69.0 起读，1.72.3 定位置，1.72.5 合并成双拼）
 
-蓝牙待机（`blePaired()`、没有浏览会话、没有进行中的事）时，相机页**标题栏右侧**
-出现**一颗双拼玻璃胶囊**：左格电量、右格唤醒，两格之间一根 12vp 竖线，整体用
-沉浸光感材质（`MainScreen.TitleStatusCapsule`）。1.72.3 时是两颗并排，用户觉得略杂，
-1.72.5 合成了一个控件。
+相机页**标题栏右侧**在两种情况下出现**一颗双拼玻璃胶囊**：左格电量、右格唤醒，
+两格之间一根 12vp 竖线，整体用沉浸光感材质（`MainScreen.TitleStatusCapsule`）。
+1.72.3 时是两颗并排，用户觉得略杂，1.72.5 合成了一个控件。
+
+- **蓝牙待机**（`blePaired()`、没有浏览会话、没有进行中的事）：GATT 读到的电量与
+  唤醒状态；
+- **USB / Wi-Fi AP / STA / 蓝牙浏览**（1.73.0）：一条能应答的 PTP 会话。电量取
+  `GetDeviceInfo` 尾部的 `BatteryLevel`，唤醒按「会话有响应」显示成唤醒（PTP 没有
+  电源枚举）；读不到电量时那一格写「未知」，不拿 0 当 0%。
 
 | 格子 | 值 | 图标（`sys.symbol`） | 来源 |
 |---|---|---|---|
-| 电量 | `82%` / 未知 | `battery_100percent` … `battery_5percent` 按档位取；读不到用空心 `battery`；≤20% 转 `status_error` 红 | `de00/0x2a19` |
-| 唤醒 | **唤醒 / 沉睡 / 未知** | 唤醒 `bolt_fill`、沉睡 `moon_z_fill`（转 `status_error` 红）、未知 `questionmark_circle` | `de00/0x2001` 枚举 |
+| 电量 | `82%` / 未知 | `battery_100percent` … `battery_5percent` 按档位取；读不到用空心 `battery`；≤20% 转 `status_error` 红 | 蓝牙 `de00/0x2a19`；PTP `GetDeviceInfo` 尾部字节 |
+| 唤醒 | **唤醒 / 沉睡 / 未知** | 唤醒 `bolt_fill`、沉睡 `moon_z_fill`（转 `status_error` 红）、未知 `questionmark_circle` | 蓝牙 `de00/0x2001` 枚举；PTP 会话有响应即唤醒 |
 
 - **唤醒只给两个状态**（1.72.5，用户要求）：不写「已唤醒 / 未唤醒」这种「已/未」
   前缀，直接是「唤醒 / 沉睡」。底层四个枚举折叠进来：`3 valid_wake` 与
@@ -1085,9 +1109,8 @@ Row 用 `VerticalAlign.Center`：只有 `headline()` 时，点、文字、按钮
   1.72.0 放进状态头（另起一行）、1.72.2 贴着「已连接」排同一行，用户都判为「难看/
   像挂件」；1.72.3 起只有标题栏这一处，1.72.5 合成一颗双拼。
 - **什么时候出现**：`MainScreen.cameraStatusVisible()` = 相机页 + `CameraService.bleStandbyLive()`
-  （蓝牙待机、配对落定、没有进行中的连接/扫描/交接/断开/切模式）。换到画廊 / 设置
-  页时隐藏——电量不属于那两页；浏览（借相机热点）时蓝牙已经让位，读数没有意义。
-  相机页的固件脚注共用同一个判据。
+  （蓝牙待机，或一条能应答的 PTP 会话；进行中的连接/扫描/交接/断开/切模式都收起）。
+  换到画廊 / 设置页时隐藏——电量不属于那两页。相机页的固件脚注用蓝牙待机那一份判据。
 - **材质**：`ImmersiveMaterial(ULTRA_THIN)` + `materialColor: glass_bg`。**不能只靠
   `colorInvert` 自动反色**：官方限制是「系统颜色资源 + 高/中算力设备」才生效，
   低算力设备与自定义色不参与；相机页往上滚时深色立牌会压到标题栏下方，玻璃跟着

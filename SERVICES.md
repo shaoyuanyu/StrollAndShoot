@@ -805,6 +805,38 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
   电源枚举，**不是**我们主动唤醒它的手段——0x2001 在 APK 里只被 `read()` 检查
   （`CameraConnectByBtcUseCase` 用它判断相机醒没醒），没有写入路径。
 
+*PTP 电量与下拉刷新（1.73.0，2026-11-15）*
+
+下拉刷新以前只是 2 秒假动画。现在真的读一次相机状态，四种模式分别走：
+
+| 模式 | 连接判定 | 电量 | 唤醒 |
+|---|---|---|---|
+| 蓝牙待机 | GATT 链路在、配对落定 | `de00/0x2a19` 重读 | `de00/0x2001` 枚举 |
+| USB / Wi-Fi AP / STA / 蓝牙浏览 | PTP `GetDeviceInfo` 有响应 | DeviceInfo 尾部 `BatteryLevel` | 没有电源枚举；有响应即按唤醒 |
+
+- **电量从哪来**：PTP 1.1 的 `GetDeviceInfo` 数据集最后一个字节就是 `BatteryLevel`
+  （0–100）。`ptp_engine.cpp` 的 `parseDeviceInfo` 现在把它读出来，经 napi 交给
+  ArkTS；`CameraService.applyDeviceInfoBattery()` **只认 1–100**，0 一律按未知（-1）：
+  不少机型不填这一格，把满电显示成 0% 比显示「未知」更糟。原始值写进日志
+  （`USB 电量: 87%（DeviceInfo）` / `USB 电量: DeviceInfo 未给（原始值 0）`），
+  换机身/固件时看这一行就能判断。
+- **Z50II 是否给这个值还没定**：1.73.0 上线后第一次 USB/Wi-Fi 连接看日志即可。
+  如果它只认 Nikon 厂家的 `0xD0B9 MultiBatteryInfo`（ptp.h 里有），下一步再补一条
+  `GetDevicePropValue`；`devicePropertiesSupported` 已经交出来了，可以先看它自报的
+  属性表里有没有 `0x5001`，避免盲试（参考 `GetObjectPropList` 的教训：未列入的操作
+  发过去会等 10 秒超时，还拖累后续事务）。
+- **会话就是「醒着」的证据**：PTP 没有 `0x2001` 那种电源枚举。相机睡着/关机时
+  `GetDeviceInfo` 不会应答，所以刷新把它按「连接断开」处理：写 `lastScanError`
+  （Wi-Fi 写 `wirelessFailed`）、`connected = false`，页面进失败态，点「重试」走正常
+  重连。`cameraPowerState()` 对 PTP 会话返回 3（唤醒），这是操作上的结论，不是读数。
+- **未连接时不去连**：下拉刷新不是连接按钮，只回一句「相机未连接」（日志
+  `[刷新] 相机未连接，本轮不读`）。
+- **耗时进日志**：`[刷新] PTP 会话有响应（80ms，电量 87）` /
+  `[刷新] 蓝牙状态已重读（…ms，电量 …，唤醒 …）`。页面侧指示器至少转 700ms
+  （`REFRESH_MIN_MS`），读得快也不至于一闪而过。
+- 换相机 / 断开时 `ptpBatteryPercent` 清回 -1（与 `deviceVersion` 等同一处收尾），
+  标题栏胶囊不会拿上一台的电量顶替。
+
 *蓝牙遥控探针（1.69.1，仅调试包）*
 
 `debug/BleRemoteProbe.ets` 把官方 `0x2020/0x2021` 的协议先跑通，再接 UI。
@@ -1896,6 +1928,10 @@ prop list 不可用 → 元数据没法合批；缩略图是每个文件一次�
 - 响应解析：`processResponse`、`parseDeviceInfo`、`parseStorageIDs`、`parseObjectHandles`、`parseObjectInfo`、`parseObjectPropList`
 
 `processResponse(data, expectData)` 负责累积多包 USB 数据，返回动作码：`0` 数据还在累积（继续读），`1` 拿到数据包，`2` 拿到响应包（`responseCode` 为 `0x2001` 表示成功）。
+
+`parseDeviceInfo` 返回的 `PtpDeviceInfo` 自 1.73.0 起还带两个字段：
+`batteryLevel`（DeviceInfo 尾部那个 UINT8，0 = 相机没给）与
+`devicePropertiesSupported`（设备属性表，判断相机会不会给标准 `0x5001` 用）。
 
 ### Native PTP 引擎（`cpp/`）
 

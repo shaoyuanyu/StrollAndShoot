@@ -105,6 +105,18 @@ static napi_value MakeDeviceInfoObj(napi_env env, const PTPDeviceInfo& di) {
         napi_set_element(env, ops, i, v);
     }
     napi_set_named_property(env, obj, "operationsSupported", ops);
+    // 设备属性表：刷新时用它判断相机会不会给标准 BatteryLevel(0x5001)，
+    // 也是排查「这台机器为什么没有某个设定项」的依据。
+    napi_value props;
+    napi_create_array_with_length(env, di.DevicePropertiesSupported.size(), &props);
+    for (size_t i = 0; i < di.DevicePropertiesSupported.size(); i++) {
+        napi_value v;
+        napi_create_uint32(env, di.DevicePropertiesSupported[i], &v);
+        napi_set_element(env, props, i, v);
+    }
+    napi_set_named_property(env, obj, "devicePropertiesSupported", props);
+    // DeviceInfo 尾部的电量字节（0 = 相机没给）。
+    setU32("batteryLevel", di.BatteryLevel);
     return obj;
 }
 

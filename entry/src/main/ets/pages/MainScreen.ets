@@ -839,15 +839,17 @@ export struct MainScreen {
   }
 
   /**
-   * 标题栏右侧要不要画相机状态胶囊（1.72.3）。
+   * 标题栏右侧要不要画相机状态胶囊（1.72.3，1.73.0 扩到四种模式）。
    *
-   * 只在相机页、且蓝牙待机配对落定、没有进行中的动作时出现：换到画廊 / 设置页时
-   * 电量不属于那一页的信息；浏览（借相机热点）与连接中读数都是半截的，先让状态
-   * 头把「正在做什么」说完。判据在 `CameraService.bleStandbyLive()`，相机页的
-   * 固件脚注共用同一份。
+   * - 蓝牙待机：GATT 读到的电量与唤醒状态（配对落定、没有进行中的动作）；
+   * - USB / Wi-Fi AP / STA / 蓝牙浏览：一条能应答的 PTP 会话（`hasCameraStatus()`），
+   *   电量取 DeviceInfo，唤醒按「会话有响应」算。
+   *
+   * 换到画廊 / 设置页时隐藏——电量不属于那两页；正在连接 / 断开 / 切模式时也收起，
+   * 先让状态头把「正在做什么」说完。
    */
   private cameraStatusVisible(): boolean {
-    return this.visualTab === 1 && this.svc.bleStandbyLive();
+    return this.visualTab === 1 && this.svc.hasCameraStatus();
   }
 
   /**
@@ -927,12 +929,12 @@ export struct MainScreen {
         Blank()
         Row() {
           TitleStatusCapsule({
-            batterySymbol: BleStatus.batterySymbol(this.svc.bleBatteryPercent),
-            batteryText: BleStatus.batteryText(this.svc.bleBatteryPercent),
-            batteryWarn: BleStatus.batteryLow(this.svc.bleBatteryPercent),
-            powerSymbol: BleStatus.powerSymbol(this.svc.blePowerState),
-            powerText: BleStatus.powerText(this.svc.blePowerState),
-            powerWarn: BleStatus.powerWarn(this.svc.blePowerState)
+            batterySymbol: BleStatus.batterySymbol(this.svc.cameraBatteryPercent()),
+            batteryText: BleStatus.batteryText(this.svc.cameraBatteryPercent()),
+            batteryWarn: BleStatus.batteryLow(this.svc.cameraBatteryPercent()),
+            powerSymbol: BleStatus.powerSymbol(this.svc.cameraPowerState()),
+            powerText: BleStatus.powerText(this.svc.cameraPowerState()),
+            powerWarn: BleStatus.powerWarn(this.svc.cameraPowerState())
           })
         }
         .flexShrink(0)
@@ -1216,12 +1218,6 @@ export struct MainScreen {
             },
             onSwitchMode: (mode: number) => {
               this.switchCameraMode(mode);
-            },
-            // 顶边下拉刷新（1.65.0）：界面只负责手势、阈值与动画，这里决定
-            // 真正做什么。现在不做实际动作，只留日志与接口——接「重新扫描相机」
-            // 时把下面这行换成 `this.svc.scanForCamera(true, true)` 即可。
-            onRefresh: () => {
-              this.svc.getLog().add('[刷新] 下拉刷新（暂未接入实际动作）');
             }
           })
         }

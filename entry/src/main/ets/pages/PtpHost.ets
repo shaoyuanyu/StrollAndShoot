@@ -58,6 +58,15 @@ export interface DeviceInfo {
   vendorExtensionID: number;
   /** 相机自报支持的操作码；旧包/虚拟相机可能没有。 */
   operationsSupported?: number[];
+  /** 相机自报支持的设备属性（0x5001 = BatteryLevel）；旧包/虚拟相机可能没有。 */
+  devicePropertiesSupported?: number[];
+  /**
+   * DeviceInfo 尾部的电量（0–100）。
+   *
+   * PTP 1.1 的最后一个字段，很多机型不填（读出来是 0）；业务层把 0 当未知，
+   * 不显示成「0%」。旧虚拟相机与旧包可能没有这个字段。
+   */
+  batteryLevel?: number;
 }
 export interface ObjectInfo {
   filename: string;

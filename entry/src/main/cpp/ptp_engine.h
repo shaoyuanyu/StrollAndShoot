@@ -114,6 +114,9 @@ struct PTPDeviceInfo {
     std::string Model;
     std::string DeviceVersion;
     std::string SerialNumber;
+    // PTP 1.1 DeviceInfo 的最后一个字段：BatteryLevel（UINT8，0–100，0 = 未提供）。
+    // 有的机型省略这一字节，解析时按 0 处理；0 在业务层一律当「未知」。
+    uint8_t BatteryLevel = 0;
 };
 
 // ---- PTP Object Info ----

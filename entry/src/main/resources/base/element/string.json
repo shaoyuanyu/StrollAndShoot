@@ -1867,6 +1867,18 @@
     {
       "name": "settings_ble_location_failed",
       "value": "没能启用位置注入：请检查定位权限与系统定位开关"
+    },
+    {
+      "name": "camera_refresh_ok",
+      "value": "已连接 · 电量 %1$s · %2$s"
+    },
+    {
+      "name": "camera_refresh_off",
+      "value": "相机未连接"
+    },
+    {
+      "name": "camera_refresh_no_response",
+      "value": "相机没有响应（可能已关机或休眠）"
     }
   ]
 }
