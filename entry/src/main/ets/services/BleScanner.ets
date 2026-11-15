@@ -23,16 +23,17 @@ const NIKON_COMPANY_ID = 0x0399;
  * 一拍保活/注入的配置（1.66.17）。
  *
  * 对时和位置是两个独立开关：对时不需要任何权限，位置要先拿到定位。
- * `fixProvider` 每次都重新取，走到哪写到哪。
+ * `wantTime` / `fixProvider` 都是**每拍重新问一次**：设置页把开关拨掉，下一拍
+ * 就按新值走（1.72.1），不必断开重连。
  */
 export interface BleKeepaliveConfig {
   /** 两拍之间的间隔。 */
   intervalMs: number;
   /** 时区偏移分钟数（东八区 480），写进 0x2006 的后两个字节。 */
   offsetMinutes: number;
-  /** 是否写 0x2006。 */
-  writeTime: boolean;
-  /** 当前位置；null 表示这次没有定位。 */
+  /** 这一拍写不写 0x2006（每拍取一次，拨开关立即生效）。 */
+  wantTime: () => boolean;
+  /** 当前位置；null 表示这次没有定位（每拍取一次）。 */
   fixProvider: () => BleGeoFix | null;
   /** 每一拍的结论写进 AppLog，真机上排查「相机没反应」全靠它。 */
   onLog: (message: string) => void;
@@ -1257,7 +1258,7 @@ export class BleCameraLink {
       return;
     }
     try {
-      if (cfg.writeTime) {
+      if (cfg.wantTime()) {
         await this.writeTime(cfg.offsetMinutes);
       }
       await this.injectLocation(cfg);

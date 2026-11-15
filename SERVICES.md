@@ -1157,7 +1157,7 @@ bt_sdp:   sdp_disconnect ... reason 0xfff2
 |---|---|
 | `services/BleGeoFeed.ets` | 注入专用的轻量定位源。定位记录开着就借它的 `lastFix`（同一个点，照片匹配轨迹和相机注入口径一致）；没开就自己订阅 `locationChange`（31 秒一拍，`TRANSPORT`），只留最后一个点，**不落轨迹**；顺带订阅 `satelliteStatusChange` 拿真实卫星数 |
 | `BleScanner.startKeepalive(BleKeepaliveConfig)` | 一拍里先写 `0x2006`（`writeTime` 开关控制），再写 `0x2007`；丢星时按「只发一条 valid=0」的规矩通知相机 |
-| `CameraService.startBleKeepalive()` | 读设置（`SettingsStore.bleClockSync` / `bleLocationInject`，默认都开）→ 起 `BleGeoFeed` → 起保活；4 秒后**读回 `0x2006`** 校验相机到底收没收到（日志 `对时校验：相机时钟 …（与本机一致）`） |
+| `CameraService.startBleKeepalive()` | 读设置（`BleInjectStore.clockSync` / `locationInject`，默认都开；**每拍重新读**，见下）→ 起 `BleGeoFeed` → 起保活；4 秒后**读回 `0x2006`** 校验相机到底收没收到（日志 `对时校验：相机时钟 …（与本机一致）`） |
 
 协议细节（社区逆向 + nsg/ZPill 双源对拍，1.66.17 复核）：
 
@@ -1218,6 +1218,31 @@ bt_sdp:   sdp_disconnect ... reason 0xfff2
   但先到的任务已经把进程留住了，两边的定位订阅也都还在，所以功能不受影响。
 - 要彻底摆脱「一个任务」的限制（比如同时要蓝牙、定位、传输三条通知分开）需要
   API 21+ 的 `startBackgroundRunning(context, ContinuousTaskRequest)`，这一轮没动。
+
+**通知里的「正在运行定位任务」来自「位置注入」，不是「定位记录」（1.72.1）**
+
+用户 2026-11-15 反馈「没开定位记录，退到后台却看到『正在运行定位任务』」。查真机
+AppLog 确认是默认开启的「位置注入」：蓝牙待机连着时 `BleGeoFeed` 每 31 秒取一次
+位置写 `0x2007`，后台要继续取就必须持有 `LOCATION` 长时任务，通知栏因此显示
+「正在运行定位任务」。**默认值不改**（否则蓝牙待机拍的照片默认没有 GPS），改的是
+三处：
+
+1. **写清副作用**：设置页「位置注入」副标题与连接引导的「部分支持与已知限制」都
+   注明「退到后台会持续定位，通知栏会显示『正在运行定位任务』」；
+2. **关掉开关当场生效**：以前设置只写偏好，保活里只在连接那一刻读一次，要断开重连
+   才停——后台定位还在跑、通知还挂着。现在 `BleKeepaliveConfig` 的 `wantTime` /
+   `fixProvider` 改成**每拍重新取**；`CameraService.setLocationInject()` 还会立即
+   `BleGeoFeed.stop()` 并 `refreshBackgroundTaskMode()` 把任务换回
+   `BLUETOOTH_INTERACTION`（通知变成「正在运行蓝牙相关任务」）。关掉之后下一拍
+   `fixProvider` 返回 null，按「有效 → 无效」的规矩补一条 `valid=0`，相机自己丢掉
+   保存的位置；
+3. **起不来就把开关拨回去**：拒绝定位权限 / 系统定位关着时，设置页弹提示并回弹，
+   不留下「开关开着、实际什么都没跑」的状态；没连相机时先过
+   `BleGeoFeed.ensureReady()`（只查权限与系统开关，不订阅）。
+
+日志一并修正：`stopTransferTask()` 以前不分类型一律写「后台传输长时任务已取消」，
+现在按 `taskModeName()` 写「后台定位 / 蓝牙 / 数据传输长时任务已取消」——排查
+后台通知时这三条日志是唯一能对上的线索。
 
 **主线程禁区：会同步等系统服务的接口（1.66.16 汇总）**
 

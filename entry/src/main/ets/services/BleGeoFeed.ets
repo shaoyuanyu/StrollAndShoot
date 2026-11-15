@@ -1,4 +1,5 @@
 import geoLocationManager from '@ohos.geoLocationManager';
+import { L10n } from '../utils/L10n';
 import { AppLog } from './AppLog';
 import { GpsRecorder } from './GpsRecorder';
 import { BleGeoFix } from './BlePayloads';
@@ -49,6 +50,25 @@ export class BleGeoFeed {
    * 返回 false 表示这次拿不到位置（没权限 / 系统定位关着 / 订阅失败），
    * 原因已经写进日志。
    */
+  /**
+   * 前置检查：定位权限 + 系统定位开关（1.72.1）。
+   *
+   * 只检查、不订阅。设置页拨「位置注入」时先过一遍：没连相机也能当场说明
+   * 「权限没给」或「系统定位关着」，而不是等连上相机才在日志里失败。
+   * 返回空串表示就绪，否则是给用户看的失败原因。
+   */
+  async ensureReady(): Promise<string> {
+    const permError = await GpsRecorder.getInstance().ensureLocationPermission();
+    if (permError !== '') return permError;
+    try {
+      // @SuppressWarnings syscap
+      return geoLocationManager.isLocationEnabled() ? '' : L10n.tr('error_location_service_off');
+    } catch (_e) {
+      // 拿不到系统定位状态：按「不能用」处理，提示语与关掉定位时同一句。
+      return L10n.tr('settings_ble_location_failed');
+    }
+  }
+
   async start(): Promise<boolean> {
     if (this.starting) return this.running;
     const recorder = GpsRecorder.getInstance();
@@ -60,20 +80,9 @@ export class BleGeoFeed {
     }
     this.starting = true;
     try {
-      const permError = await recorder.ensureLocationPermission();
-      if (permError !== '') {
-        this.log.add(`位置注入未启动: ${permError}`);
-        return false;
-      }
-      let enabled = false;
-      try {
-        // @SuppressWarnings syscap
-        enabled = geoLocationManager.isLocationEnabled();
-      } catch (_e) {
-        enabled = false;
-      }
-      if (!enabled) {
-        this.log.add('位置注入未启动: 系统定位开关未打开');
+      const notReady = await this.ensureReady();
+      if (notReady !== '') {
+        this.log.add(`位置注入未启动: ${notReady}`);
         return false;
       }
       if (!this.subscribeSatellites()) return false;

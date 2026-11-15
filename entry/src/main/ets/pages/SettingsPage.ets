@@ -277,6 +277,27 @@ export struct SettingsPage {
     }
   }
 
+  /**
+   * 拨「位置注入」（1.72.1）。
+   *
+   * 与「连接后对时」不同，位置这件事要**当场起停定位源**：关掉之后后台长时任务
+   * 才能从「定位」换回「蓝牙」，通知栏那句「正在运行定位任务」才会消失。起不来
+   * （拒绝定位权限 / 系统定位关着）时把开关拨回去并说明原因——开关停在「开」
+   * 而实际什么都没跑，正是这次用户困惑的根源。
+   */
+  private onLocationInjectToggle(on: boolean): void {
+    this.injectPrefs.locationInject = on;
+    this.svc.setLocationInject(on).then((ok: boolean) => {
+      if (ok) return;
+      this.injectPrefs.locationInject = false;
+      this.toast($r('app.string.settings_ble_location_failed'));
+    }).catch((err: Error) => {
+      this.injectPrefs.locationInject = false;
+      this.toast($r('app.string.settings_ble_location_failed'));
+      this.svc.getLog().add(`位置注入开关失败: ${err.message}`);
+    });
+  }
+
   private toast(message: ResourceStr): void {
     try {
       this.getUIContext().getPromptAction().showToast({ message: message, duration: 3000 });
@@ -480,6 +501,7 @@ export struct SettingsPage {
             .alignItems(HorizontalAlign.Start)
 
             Toggle({ type: ToggleType.Switch, isOn: this.injectPrefs.clockSync })
+              // 保活每一拍重新读这个开关（1.72.1），改完下一拍就生效，不用重连。
               .onChange((on: boolean) => { this.injectPrefs.clockSync = on; })
           }
           .width('100%').constraintSize({ minHeight: RowHeight.Double })
@@ -500,7 +522,7 @@ export struct SettingsPage {
             .alignItems(HorizontalAlign.Start)
 
             Toggle({ type: ToggleType.Switch, isOn: this.injectPrefs.locationInject })
-              .onChange((on: boolean) => { this.injectPrefs.locationInject = on; })
+              .onChange((on: boolean) => { this.onLocationInjectToggle(on); })
           }
           .width('100%').constraintSize({ minHeight: RowHeight.Double })
         }

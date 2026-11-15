@@ -1778,7 +1778,7 @@
     },
     {
       "name": "camera_guide_partial_1",
-      "value": "Location injection works over Bluetooth: camera menu \"Location data (smart device)\" shows latitude, longitude and UTC. Altitude is always 0; location permission is required; switches are in Settings → Bluetooth camera."
+      "value": "Location injection works over Bluetooth: camera menu \"Location data (smart device)\" shows latitude, longitude and UTC. Altitude is always 0; location permission is required (it keeps locating in the background, so a \"Location task running\" notification stays in the shade); switches are in Settings → Bluetooth camera."
     },
     {
       "name": "camera_guide_partial_2",
@@ -1866,7 +1866,11 @@
     },
     {
       "name": "settings_ble_location_desc",
-      "value": "Send the phone's latest location to the camera so photos carry GPS; no need to enable Location log"
+      "value": "Sends the phone's latest location to the camera so photos carry GPS; no Location log needed. It keeps locating in the background, so the notification shade shows “Location task running”."
+    },
+    {
+      "name": "settings_ble_location_failed",
+      "value": "Couldn't enable location injection: check location permission and the system location switch."
     }
   ]
 }

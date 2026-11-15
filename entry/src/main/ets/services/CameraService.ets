@@ -1021,6 +1021,62 @@ export class CameraService {
     });
   }
 
+  /**
+   * 设置页拨「位置注入」时立即生效（1.72.1）。
+   *
+   * 以前设置只写偏好，保活里只在连接那一刻读一次：把开关关掉，定位订阅还在跑、
+   * 后台长时任务仍是 LOCATION，通知栏那句「正在运行定位任务」要等断开重连才
+   * 消失——用户 2026-11-15 的疑问就是从这条通知来的（他没开「定位记录」，
+   * 开的其实是默认开启的「位置注入」）。现在拨动开关就起停定位源，并按新状态
+   * 重算长时任务：关掉后后台通知会变回「正在运行蓝牙相关任务」。
+   *
+   * 返回 `false` 表示这次没起来（定位权限被拒 / 系统定位关着），调用方（设置页）
+   * 据此把开关拨回去——开关停在「开」而什么定位都没跑，是最误导人的状态。
+   * 没连相机时只做前置检查（`BleGeoFeed.ensureReady()`，不订阅）：连接成功时
+   * `startBleKeepalive()` 会真正起定位源。
+   */
+  async setLocationInject(on: boolean): Promise<boolean> {
+    const feed = BleGeoFeed.getInstance();
+    if (!on) {
+      if (feed.isRunning()) {
+        feed.stop();
+        this.log.add('设置页关掉位置注入：定位源已停');
+      }
+      // 任务模式可能要从 LOCATION 换回 BLUETOOTH_INTERACTION（后台时才真的换）。
+      this.refreshBackgroundTaskMode();
+      return true;
+    }
+    // 没连相机：先当场把权限与系统定位问清楚（失败留在设置页），连接成功后由
+    // `startBleKeepalive()` 再真正起定位源。
+    if (this.bleLink === null) {
+      const notReady = await BleGeoFeed.getInstance().ensureReady();
+      if (!BleInjectStore.getInstance().locationInject) {
+        // 查权限期间用户又把开关关掉了：按「已关」处理，不要弹失败提示。
+        return true;
+      }
+      if (notReady !== '') {
+        this.log.add(`位置注入未启用: ${notReady}`);
+        return false;
+      }
+      return true;
+    }
+    if (feed.isRunning()) {
+      // 已经在跑（例如「定位记录」开着，位置借的是它那份）：只重算任务模式。
+      this.refreshBackgroundTaskMode();
+      return true;
+    }
+    const ok = await feed.start();
+    if (!BleInjectStore.getInstance().locationInject) {
+      // 起定位的途中用户又把开关关掉了：别留下一个没人认领的定位源
+      // （否则通知栏还会挂着「正在运行定位任务」，而设置页显示「关」）。
+      feed.stop();
+      this.refreshBackgroundTaskMode();
+      return true;
+    }
+    if (ok) this.refreshBackgroundTaskMode();
+    return ok;
+  }
+
   /** 应用进入后台时强制把待写缓存落盘。 */
   async flushPersistence(): Promise<void> {
     try {
@@ -1212,17 +1268,32 @@ export class CameraService {
     }
   }
 
+  /**
+   * 长时任务类型的中文名，只用于日志。
+   *
+   * 以前只有数据传输一种，释放时统一写「后台传输长时任务已取消」；后来有了
+   * 蓝牙 / 定位两种，日志里就出现「取消传输任务」其实取消的是定位任务（1.72.1
+   * 修）。排查后台通知问题时，这三条日志是唯一能对上的线索。
+   */
+  private taskModeName(mode: backgroundTaskManager.BackgroundMode): string {
+    if (mode === backgroundTaskManager.BackgroundMode.DATA_TRANSFER) return '数据传输';
+    if (mode === backgroundTaskManager.BackgroundMode.LOCATION) return '定位';
+    if (mode === backgroundTaskManager.BackgroundMode.BLUETOOTH_INTERACTION) return '蓝牙';
+    return '后台';
+  }
+
   /** 真正释放系统长时任务；先翻 `transferTaskOn`，防止并发 stop 同一任务。 */
   private async stopTransferTask(): Promise<void> {
     if (!this.transferTaskOn || this.context === null) {
       return;
     }
+    const mode = this.transferTaskMode;
     this.transferTaskOn = false;
     try {
       await backgroundTaskManager.stopBackgroundRunning(this.context);
-      this.log.add('后台传输长时任务已取消');
+      this.log.add(`后台${this.taskModeName(mode)}长时任务已取消`);
     } catch (err) {
-      this.log.add(`后台传输长时任务取消失败: ${(err as BusinessError).message}`);
+      this.log.add(`后台${this.taskModeName(mode)}长时任务取消失败: ${(err as BusinessError).message}`);
     }
     this.stopNoticeTimer();
     await TransferNotice.cancel();
@@ -2583,7 +2654,9 @@ export class CameraService {
       this.geoReadbackDone = false;
       const injectPrefs = BleInjectStore.getInstance();
       const offsetMinutes = -new Date().getTimezoneOffset();
-      const writeTime = injectPrefs.clockSync;
+      // 两个开关**每拍重新读**（1.72.1）：设置页拨掉「位置注入」，下一拍就不再
+      // 写 0x2007，并且会补一条 valid=0 让相机丢掉旧位置；拨掉「对时」同理。
+      // 以前只在连接那一刻读一次，关掉开关要断开重连才生效。
       const inject = injectPrefs.locationInject;
       if (inject) {
         BleGeoFeed.getInstance().start().then((ok: boolean) => {
@@ -2599,9 +2672,10 @@ export class CameraService {
         this.bleLink.startKeepalive({
           intervalMs: BLE_KEEPALIVE_MS,
           offsetMinutes: offsetMinutes,
-          writeTime: writeTime,
+          wantTime: (): boolean => BleInjectStore.getInstance().clockSync,
           fixProvider: (): BleGeoFix | null =>
-            inject ? BleGeoFeed.getInstance().lastFix() : null,
+            BleInjectStore.getInstance().locationInject
+              ? BleGeoFeed.getInstance().lastFix() : null,
           onLog: (message: string) => { this.log.add(message); },
           onGeoWritten: () => {
             if (this.geoReadbackDone) return;
@@ -2610,12 +2684,13 @@ export class CameraService {
           }
         });
         this.log.add(`BLE 保活已启动（${BLE_KEEPALIVE_MS / 1000}s 一拍，`
-          + `对时${writeTime ? '开' : '关'}，位置注入${inject ? '开' : '关'}）`);
+          + `对时${injectPrefs.clockSync ? '开' : '关'}，位置注入${inject ? '开' : '关'}）`);
       } catch (err) {
         this.log.add(`BLE 保活启动失败: ${(err as Error).message}`);
       }
       // 对时到底成没成：写完之后读回相机自己的 0x2006，结论写进日志。
-      if (writeTime) {
+      // 开关现在是每拍读的，这里只决定这次连接要不要做一轮诊断（改开关不影响它）。
+      if (injectPrefs.clockSync) {
         setTimeout(() => { this.probeCameraLss(); }, 4000);
       }
     };
