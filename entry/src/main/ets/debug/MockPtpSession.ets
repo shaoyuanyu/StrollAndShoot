@@ -40,6 +40,22 @@ export class MockPtpSession implements PtpTransport {
     return MockPtpDevice.deviceInfo();
   }
 
+  /**
+   * 模拟 `0x1015 GetDevicePropValue`：只实现电量属性 0x5001。
+   *
+   * 虚拟相机的 DeviceInfo 里本来就有 87%，这里返回同一个值，保证模拟器上
+   * 走「PTP 属性读电量」这条新路径时看到的结果与连接时一致。
+   */
+  async getDevicePropValue(propertyCode: number): Promise<Uint8Array | null> {
+    if (!this.open) return null;
+    await delay(20);
+    if (propertyCode === 0x5001) {
+      const level = MockPtpDevice.deviceInfo().batteryLevel ?? 87;
+      return new Uint8Array([level & 0xFF]);
+    }
+    return null;
+  }
+
   async getStorageIDs(): Promise<number[]> {
     if (!this.open) return [];
     await delay(60);

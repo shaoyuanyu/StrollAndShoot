@@ -52,6 +52,11 @@ export class PtpScheduler implements PtpTransport {
     return this.enqueue(priority, () => this.inner.getDeviceInfo());
   }
 
+  getDevicePropValue(propertyCode: number,
+    priority: PtpPriority = PtpPriority.FOREGROUND): Promise<Uint8Array | null> {
+    return this.enqueue(priority, () => this.inner.getDevicePropValue(propertyCode, priority));
+  }
+
   getStorageIDs(priority: PtpPriority = PtpPriority.SCAN): Promise<number[]> {
     return this.enqueue(priority, () => this.inner.getStorageIDs());
   }

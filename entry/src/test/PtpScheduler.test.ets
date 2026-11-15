@@ -27,6 +27,11 @@ class FakeTransport implements PtpTransport {
     return null;
   }
 
+  async getDevicePropValue(_propertyCode: number,
+    _priority?: PtpPriority): Promise<Uint8Array | null> {
+    return null;
+  }
+
   async getStorageIDs(_priority?: PtpPriority): Promise<number[]> {
     return [];
   }

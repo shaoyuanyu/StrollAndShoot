@@ -723,6 +723,8 @@ export class CameraService {
   private propListProbed: boolean = false;
   /** 相机自报支持的操作码，用来判断 GetObjectPropList(0x9805) 值不值得试。 */
   private deviceOps: number[] = [];
+  /** 相机自报支持的设备属性（0x5001 = BatteryLevel）；Wi-Fi 电量从这里读。 */
+  private deviceProps: number[] = [];
   /**
    * 缩略图 JPEG 自带的 EXIF 方向是否可信：
    * `null` = 还在验证，`0` = 不可信（继续读原图），`1` = 可信（省掉 GetPartialObject）。
@@ -2431,6 +2433,8 @@ export class CameraService {
                                    epoch: number): Promise<boolean> {
     // 新会话重新探一次分块能力；上一台相机不支持不代表这一台也不支持。
     this.wifiPartialUnsupported = false;
+    this.deviceOps = [];
+    this.deviceProps = [];
     if (this.connected) {
       await this.disconnect();
       if (!this.epochCurrent(epoch)) return false;
@@ -2483,7 +2487,14 @@ export class CameraService {
       this.deviceSerialNumber = deviceInfo.serialNumber;
       this.deviceVersion = deviceInfo.deviceVersion;
       this.deviceOps = deviceInfo.operationsSupported ?? [];
+      this.deviceProps = deviceInfo.devicePropertiesSupported ?? [];
+      this.log.add(`Wi-Fi PTP 支持属性 ${this.deviceProps.length} 个` +
+        `${this.deviceProps.includes(0x5001) ? '（含 BatteryLevel）' : '（无 BatteryLevel）'}`);
       this.applyDeviceInfoBattery(deviceInfo, 'Wi-Fi');
+      // Z50II 的 DeviceInfo 尾字节是 0；SnapBridge 走 0x1015/0x5001，这里补一次。
+      if (this.ptpBatteryPercent < 0) {
+        await this.readPtpBatteryProperty('Wi-Fi');
+      }
       this.cameraIdentity = this.buildWifiCameraIdentity(deviceInfo, target);
       this.cameraName = deviceInfo.model || deviceInfo.manufacturer || target;
       this.log.add(`Wi-Fi DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" ` +
@@ -5225,6 +5236,46 @@ export class CameraService {
   }
 
   /**
+   * 读标准 PTP 设备属性 `BatteryLevel`（0x5001）。
+   *
+   * 反编译 SnapBridge 2.14.3 的 `GetBatteryLevelAction`：它先检查
+   * `GetDevicePropValue`（0x1015）和属性 0x5001 都在 DeviceInfo 的支持列表里，
+   * 然后发 `GetDevicePropValue(0x5001)`，返回 1 字节百分比。Z50II 的
+   * DeviceInfo 尾字节给 0，但属性读得到，所以 Wi-Fi 下补这条。
+   *
+   * 只在相机明确声明支持时发；未声明就不盲试，避免 0x200A 超时拖慢连接。
+   */
+  private async readPtpBatteryProperty(source: string): Promise<void> {
+    if (!this.connected) return;
+    if (!this.deviceOps.includes(0x1015)) {
+      this.log.add(`${source} 电量: 不支持 GetDevicePropValue(0x1015)`);
+      return;
+    }
+    if (!this.deviceProps.includes(0x5001)) {
+      this.log.add(`${source} 电量: 未声明 BatteryLevel(0x5001)`);
+      return;
+    }
+    try {
+      const raw = await this.session.getDevicePropValue(0x5001, PtpPriority.FOREGROUND);
+      if (raw === null || raw.length === 0) {
+        this.log.add(`${source} 电量: 0x5001 无数据`);
+        return;
+      }
+      const pct = raw[0];
+      if (pct > 100) {
+        this.log.add(`${source} 电量: 0x5001 超出范围（${pct}）`);
+        return;
+      }
+      this.ptpBatteryPercent = pct;
+      this.log.add(`${source} 电量: ${pct}%（0x5001）`);
+    } catch (err) {
+      this.log.add(`${source} 电量: 0x5001 读取失败 — ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * 页面展示用的电量：蓝牙待机读 GATT，PTP 会话读 DeviceInfo，都没有就是 -1。
+  /**
    * 页面展示用的电量：蓝牙待机读 GATT，PTP 会话读 DeviceInfo，都没有就是 -1。
    *
    * 标题栏的状态胶囊与下拉刷新的结果都走这两个方法，页面不要自己拼来源。
@@ -5293,6 +5344,9 @@ export class CameraService {
       }
       if (info !== null) {
         this.applyDeviceInfoBattery(info, '刷新');
+        if (this.ptpBatteryPercent < 0 && this.wireless) {
+          await this.readPtpBatteryProperty('刷新');
+        }
         this.log.add(`[刷新] PTP 会话有响应（${Date.now() - startedAt}ms，`
           + `电量 ${this.ptpBatteryPercent}）`);
         this.statusRefreshVersion++;
@@ -5436,8 +5490,11 @@ export class CameraService {
       if (deviceInfo) {
         this.log.add(`PTP DeviceInfo: manu="${deviceInfo.manufacturer}" model="${deviceInfo.model}" serial="${deviceInfo.serialNumber}" ver="${deviceInfo.deviceVersion}"`);
         this.deviceOps = deviceInfo.operationsSupported ?? [];
+        this.deviceProps = deviceInfo.devicePropertiesSupported ?? [];
         this.log.add(`PTP 支持操作 ${this.deviceOps.length} 个` +
           `${this.deviceOps.includes(0x9805) ? '（含 GetObjectPropList）' : '（无 GetObjectPropList）'}`);
+        this.log.add(`PTP 支持属性 ${this.deviceProps.length} 个` +
+          `${this.deviceProps.includes(0x5001) ? '（含 BatteryLevel）' : '（无 BatteryLevel）'}`);
         this.cameraIdentity = this.buildCameraIdentity(deviceInfo, cameras[0]);
         this.cameraName = deviceInfo.model || deviceInfo.manufacturer || this.cameraName;
       } else {
@@ -7149,6 +7206,7 @@ export class CameraService {
    */
   private resetSessionCapabilities(): void {
     this.deviceOps = [];
+    this.deviceProps = [];
     this.propListProbed = false;
     this.thumbExifTrust = null;
     this.thumbExifSamples = 0;

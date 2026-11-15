@@ -6,6 +6,7 @@ import { WifiPtpLink, type PtpIpResult } from './WifiPtpLink';
 
 /** PTP 操作码（标准 PTP + MTP 扩展）。 */
 const OP_GET_DEVICE_INFO = 0x1001;
+const OP_GET_DEVICE_PROP_VALUE = 0x1015;
 const OP_OPEN_SESSION = 0x1002;
 const OP_CLOSE_SESSION = 0x1003;
 const OP_GET_STORAGE_IDS = 0x1004;
@@ -158,6 +159,25 @@ export class WifiPtpSession implements PtpTransport {
       return ptpParseDeviceInfo(r.data);
     } catch (err) {
       this.log(`GetDeviceInfo 失败: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * PTP `0x1015 GetDevicePropValue`。
+   *
+   * 电量属性 `0x5001` 返回 1 字节百分比；SnapBridge 也是走这条（反编译
+   * `GetBatteryLevelAction`：operation 0x1015 + property 0x5001）。
+   */
+  async getDevicePropValue(propertyCode: number,
+    _priority?: PtpPriority): Promise<Uint8Array | null> {
+    if (!this.open) return null;
+    try {
+      const r = await this.exec(OP_GET_DEVICE_PROP_VALUE, [propertyCode], true,
+        'GetDevicePropValue');
+      return r.code === RESPONSE_OK ? r.data : null;
+    } catch (err) {
+      this.log(`GetDevicePropValue(0x${propertyCode.toString(16)}) 失败: ${(err as Error).message}`);
       return null;
     }
   }

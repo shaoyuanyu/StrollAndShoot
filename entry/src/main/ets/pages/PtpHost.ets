@@ -275,6 +275,13 @@ export interface PtpTransport {
   readonly sessionConflict?: boolean;
   connect(endpoint: PtpEndpoint, priority?: PtpPriority): Promise<boolean>;
   getDeviceInfo(priority?: PtpPriority): Promise<DeviceInfo | null>;
+  /**
+   * PTP `0x1015 GetDevicePropValue`。
+   *
+   * 返回相机给原始字节，由调用方按属性类型解析。USB 侧暂时没有对应的 NAPI
+   * builder，返回 null；Wi-Fi 与模拟相机会实现（电量属性 0x5001 从这里读）。
+   */
+  getDevicePropValue(propertyCode: number, priority?: PtpPriority): Promise<Uint8Array | null>;
   getStorageIDs(priority?: PtpPriority): Promise<number[]>;
   getObjectHandles(storageId: number, parent?: number, formatCode?: number,
     priority?: PtpPriority): Promise<number[]>;
@@ -437,6 +444,13 @@ export class PtpSession implements PtpTransport {
       log(`GetDeviceInfo failed: ${(err as Error).message}`);
       return null;
     }
+  }
+
+  async getDevicePropValue(_propertyCode: number,
+    _priority?: PtpPriority): Promise<Uint8Array | null> {
+    // USB 的 NAPI 只导出了 DeviceInfo 等有限命令；0x1015 还没接 builder。
+    // Wi-Fi 走 `WifiPtpSession` 实现，电量也能读；USB 仍退到 DeviceInfo 尾字节。
+    return null;
   }
 
   async getStorageIDs(_priority?: PtpPriority): Promise<number[]> {

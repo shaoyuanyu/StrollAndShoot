@@ -577,8 +577,8 @@ AP / STA 的空闲、搜索、首配、配对失败、已配对、交接、已�
 |---|---|---|---|
 | 蓝牙待机 | GATT 链路在、配对落定 | `de00/0x2a19` 重读 | `de00/0x2001` 枚举（唤醒 / 沉睡） |
 | USB | 重取 PTP `GetDeviceInfo`：有响应就在 | `GetDeviceInfo` 尾部 `BatteryLevel`（相机不给就是未知） | PTP 没有电源枚举；会话有响应就按 **唤醒** 显示 |
-| Wi-Fi AP / STA | 同上（PTP/IP） | 同上 | 同上 |
-| 蓝牙浏览（借相机热点） | 同上 | 同上 | 同上 |
+| Wi-Fi AP / STA | 同上（PTP/IP） | 先看 `GetDeviceInfo` 尾字节；为 0 再读 `0x1015/0x5001`（1.76.0，SnapBridge 同款） | 同上 |
+| 蓝牙浏览（借相机热点） | 同上 | 同上（Wi-Fi 会话同样补 0x5001） | 同上 |
 
 - **读失败 = 断开**：PTP 的 `GetDeviceInfo` 失败就判定会话已经断了（相机睡着了不会
   应答），写 `lastScanError` / `wirelessFailed` 并 `connected = false`，页面进失败态；
@@ -1116,13 +1116,14 @@ Row 用 `VerticalAlign.Center`：只有 `headline()` 时，点、文字、按钮
 
 - **蓝牙待机**（`blePaired()`、没有浏览会话、没有进行中的事）：GATT 读到的电量与
   唤醒状态；
-- **USB / Wi-Fi AP / STA / 蓝牙浏览**（1.73.0）：一条能应答的 PTP 会话。电量取
-  `GetDeviceInfo` 尾部的 `BatteryLevel`，唤醒按「会话有响应」显示成唤醒（PTP 没有
-  电源枚举）；读不到电量时那一格写「未知」，不拿 0 当 0%。
+- **USB / Wi-Fi AP / STA / 蓝牙浏览**（1.73.0）：一条能应答的 PTP 会话。电量先取
+  `GetDeviceInfo` 尾部的 `BatteryLevel`；Wi-Fi 下若为 0 且相机声明支持，再读标准
+  属性 `0x1015/0x5001`（1.76.0，SnapBridge 也是这条）。唤醒按「会话有响应」显示成
+  唤醒（PTP 没有电源枚举）；都读不到时那一格写「未知」，不拿 0 当 0%。
 
 | 格子 | 值 | 图标（`sys.symbol`） | 来源 |
 |---|---|---|---|
-| 电量 | `82%` / 未知 | `battery_100percent` … `battery_5percent` 按档位取；读不到用空心 `battery`；≤20% 转 `status_error` 红 | 蓝牙 `de00/0x2a19`；PTP `GetDeviceInfo` 尾部字节 |
+| 电量 | `82%` / 未知 | `battery_100percent` … `battery_5percent` 按档位取；读不到用空心 `battery`；≤20% 转 `status_error` 红 | 蓝牙 `de00/0x2a19`；PTP `GetDeviceInfo` 尾部字节，Wi-Fi 再读 `0x5001` |
 | 唤醒 | **唤醒 / 沉睡 / 未知** | 唤醒 `bolt_fill`、沉睡 `moon_z_fill`（转 `status_error` 红）、未知 `questionmark_circle` | 蓝牙 `de00/0x2001` 枚举；PTP 会话有响应即唤醒 |
 
 - **唤醒只给两个状态**（1.72.5，用户要求）：不写「已唤醒 / 未唤醒」这种「已/未」

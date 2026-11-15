@@ -826,7 +826,7 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
 | 模式 | 连接判定 | 电量 | 唤醒 |
 |---|---|---|---|
 | 蓝牙待机 | GATT 链路在、配对落定 | `de00/0x2a19` 重读 | `de00/0x2001` 枚举 |
-| USB / Wi-Fi AP / STA / 蓝牙浏览 | PTP `GetDeviceInfo` 有响应 | DeviceInfo 尾部 `BatteryLevel` | 没有电源枚举；有响应即按唤醒 |
+| USB / Wi-Fi AP / STA / 蓝牙浏览 | PTP `GetDeviceInfo` 有响应 | Wi-Fi：DeviceInfo 尾部 `BatteryLevel`，为 0 时再读 `0x1015/0x5001`；USB 仍只看 DeviceInfo | 没有电源枚举；有响应即按唤醒 |
 
 - **电量从哪来**：PTP 1.1 的 `GetDeviceInfo` 数据集最后一个字节就是 `BatteryLevel`
   （0–100）。`ptp_engine.cpp` 的 `parseDeviceInfo` 现在把它读出来，经 napi 交给
@@ -834,11 +834,18 @@ JS 主线程被一起拖住，系统判 `THREAD_BLOCK_3S/6S` 把进程杀了（h
   不少机型不填这一格，把满电显示成 0% 比显示「未知」更糟。原始值写进日志
   （`USB 电量: 87%（DeviceInfo）` / `USB 电量: DeviceInfo 未给（原始值 0）`），
   换机身/固件时看这一行就能判断。
-- **Z50II 是否给这个值还没定**：1.73.0 上线后第一次 USB/Wi-Fi 连接看日志即可。
-  如果它只认 Nikon 厂家的 `0xD0B9 MultiBatteryInfo`（ptp.h 里有），下一步再补一条
-  `GetDevicePropValue`；`devicePropertiesSupported` 已经交出来了，可以先看它自报的
-  属性表里有没有 `0x5001`，避免盲试（参考 `GetObjectPropList` 的教训：未列入的操作
-  发过去会等 10 秒超时，还拖累后续事务）。
+- **Z50II 的 DeviceInfo 给 0，但 SnapBridge 用 PTP 属性读电量（1.76.0 逆向）**：
+  反编译 SnapBridge 2.14.3.3000 的 `GetBatteryLevelAction`，它先检查
+  `GetDevicePropValue`（`0x1015`）在 operations、`BatteryLevel`（`0x5001`）在
+  device properties 里，然后发 `GetDevicePropValue(0x5001)`；命令类 `b2.m()` 返回
+  十进制 20481（`0x5001`），`r2` 的 opcode 是 4117（`0x1015`），响应取第一个字节
+  当百分比。电量 100% 时它再读 `0xD101 ExternalDC-IN` 判断是否接交流电。
+  所以现在 Wi-Fi 连接和下拉刷新在 DeviceInfo 电量读不到时，会按同样条件补一次
+  `getDevicePropValue(0x5001)`；成功就写 `ptpBatteryPercent`，失败保留未知。
+  **只有相机明确声明支持才发**，不盲试（未列入的属性/操作可能等 10 秒超时）。
+- **USB 暂未接**：USB 的 NAPI 只导出了 DeviceInfo 等有限命令，没有
+  `0x1015` builder；USB 电量仍只看 DeviceInfo 尾字节。要补需要加 native
+  `buildGetDevicePropValue`。Wi-Fi 不需要，直接走 `WifiPtpSession`。
 - **会话就是「醒着」的证据**：PTP 没有 `0x2001` 那种电源枚举。相机睡着/关机时
   `GetDeviceInfo` 不会应答，所以刷新把它按「连接断开」处理：写 `lastScanError`
   （Wi-Fi 写 `wirelessFailed`）、`connected = false`，页面进失败态，点「重试」走正常
