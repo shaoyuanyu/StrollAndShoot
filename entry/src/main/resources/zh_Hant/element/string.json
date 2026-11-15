@@ -438,7 +438,7 @@
     },
     {
       "name": "camera_remote_menu_hint",
-      "value": "方向鍵與確定鍵直接作用在相機選單上，相機螢幕會同步顯示。"
+      "value": "方向鍵與確定鍵直接作用在相機選單上，相機螢幕會同步顯示。相機不接受「開啟選單」時，按機身上的 MENU 鍵也行。"
     },
     {
       "name": "camera_remote_menu_open",

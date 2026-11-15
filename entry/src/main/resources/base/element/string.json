@@ -438,7 +438,7 @@
     },
     {
       "name": "camera_remote_menu_hint",
-      "value": "方向键与确定键直接作用在相机菜单上，相机屏幕会同步显示。"
+      "value": "方向键与确定键直接作用在相机菜单上，相机屏幕会同步显示。相机不接受「打开菜单」时，按机身上的 MENU 键也行。"
     },
     {
       "name": "camera_remote_menu_open",

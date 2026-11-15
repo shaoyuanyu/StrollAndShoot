@@ -438,7 +438,7 @@
     },
     {
       "name": "camera_remote_menu_hint",
-      "value": "Keys act on the camera menu directly; the camera screen shows the same thing."
+      "value": "Keys act on the camera menu directly; the camera screen shows the same thing. If the camera rejects “Open camera menu”, pressing MENU on the camera also works."
     },
     {
       "name": "camera_remote_menu_open",
