@@ -159,7 +159,7 @@ const REFLECTION_BOX = REFLECTION_HEIGHT + REFLECTION_GROW_MAX;
 const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
 
 /*
- * 顶边下拉刷新（1.65.0，第二轮；指示器形态 1.73.2）。
+ * 顶边下拉刷新（1.65.0，第二轮；指示器形态 1.73.3）。
  *
  * **手势与下拉编排一行不改**：初始位置继续下拉时 `currentOffset()` 变负，
  * `pullDown` 跟着长，卡面走 1/3、卡内抽屉开 2/3、立牌倒影被拉长——全是既有行为。
@@ -176,12 +176,12 @@ const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
  * 这样「回弹」和「进入刷新」是同一条动画，不会出现「先弹回原位、再冒出一个转圈
  * 把卡面挤下去」的两段。
  *
- * **下拉阶段不转圈**（1.73.2，用户反馈「还没拉到 80%，图标已经和拉到之后一样是
- * 深色的，容易被误导」）：手指还在拉的时候，指示器是一条**跟着下拉量长出来的
- * 弧**（官方 `Progress` 的 Ring），颜色 `text_tertiary`；拉到阈值才绕成一整圈、
- * 同时转成 `text_primary`。于是「还差一点」与「松手就刷新」在**形状**（有没有
- * 缺口）和**深浅**上各有一档区别，不用读文字也分得出来。真正进入刷新（手指抬起、
- * 阈值已到）才换成系统 `LoadingProgress` 转圈。
+ * **下拉阶段不转圈，改成相机图标填色**（1.73.3，用户设计）：手指还在拉的时候，
+ * 指示器是底部页签那枚描边相机（`sys.symbol.camera`），一枚实心相机
+ * （`refresh_camera.svg`）从下往上盖住它；填充高度 = `pullDown / 刷新阈值`，
+ * 所以**填满的那一刻就是松手会刷新的那一刻**。实心层平时是 `text_primary`，
+ * 到阈值转成 `primary`（蓝）——「没填满 / 可以松手」在填充量和颜色上各有一档
+ * 区别。真正进入刷新（手指抬起、阈值已到）才换成系统 `LoadingProgress` 转圈。
  */
 const REFRESH_TRIGGER_RATIO = 0.8;
 /** 触发刷新所需的下拉量（vp）= 最大下拉的 80%。 */
@@ -211,14 +211,25 @@ const REFRESH_ANIM_MS = 260;
  */
 const REFRESH_ICON = 27;
 /**
- * 下拉阶段进度环的外径（vp）与线宽（1.73.2）。
+ * 下拉阶段相机图标的尺寸（vp，1.73.3）。
  *
- * `Progress` 的 Ring 画在盒子内，外径就是 20：与转圈视觉上的 18 只差 2vp、圆心
- * 重合，松手换成 `LoadingProgress` 时看不出跳变。线宽 2.5 在 20 的环上不糊、
- * 也不至于细到断墨。
+ * 与底部页签同一枚 `sys.symbol.camera`（24vp）：下拉时先把这枚描边图标当底，
+ * 再用 `refresh_camera.svg` 的实心相机从下往上盖。24 塞进 27 的盒子正好，
+ * 和松手后的转圈（视觉 18）也只差 6vp。
  */
-const REFRESH_RING = 20;
-const REFRESH_RING_STROKE = 2.5;
+const REFRESH_CAMERA = 24;
+/**
+ * 实心相机在 24×24 画布里的墨迹范围（vp）。
+ *
+ * 实心层画的是**描边相机的内腔**（不是把整个符号盖掉）：机身 x=2.85..21.15、
+ * y=7.41..19.45，顶部再多一个梯形把取景器的内腔一起填上。它比
+ * `sys.symbol.camera` 的描边内缘略大一点，填色时与描边之间不会漏出一条白缝；
+ * 相机的外轮廓始终留在上面。填充高度必须按**内腔**算（见
+ * `refreshFillClipH()`），按整个盒子算会让图标在 80% 之前就填满。
+ */
+const REFRESH_CAMERA_INK_TOP = 3.6;
+const REFRESH_CAMERA_INK_BOTTOM = 19.45;
+const REFRESH_CAMERA_INK_HEIGHT = REFRESH_CAMERA_INK_BOTTOM - REFRESH_CAMERA_INK_TOP;
 /** 指示器底边与卡面上沿的间距（vp）：图标永远贴在卡面正上方、与卡面同速移动。 */
 const REFRESH_ICON_GAP = 4;
 
@@ -413,17 +424,12 @@ export struct CameraPage {
    *
    * - `refreshing`：刷新中（由 `onTopTouch()` 置真，读完相机状态后置假）；
    * - `refreshFade`：刷新结束那一下的淡出（1→0），让指示器不是硬消失。
-   * 下拉进度不再单独存一份：进度环的弧长直接读 `pullDown`、与阈值
-   * `REFRESH_THRESHOLD_VP` 比（1.73.2）。刷新时卡面与抽屉**回原位**，所以也不
+   * 下拉进度不再单独存一份：填充高度直接读 `pullDown`、与阈值
+   * `REFRESH_THRESHOLD_VP` 比（1.73.3）。刷新时卡面与抽屉**回原位**，所以也不
    * 需要「撑开一行」的位移量。
    */
   @Local refreshing: boolean = false;
   @Local refreshFade: number = 1;
-  /** 下拉进度环的固定样式：对象只建一次，滚动帧里不重新分配。 */
-  private refreshRingStyle: RingStyleOptions = {
-    strokeWidth: REFRESH_RING_STROKE,
-    enableSmoothEffect: false
-  };
 
   /**
    * 模式选择器的锁定反馈（1.64.0 第二轮）。
@@ -3213,24 +3219,47 @@ export struct CameraPage {
   }
 
   /**
-   * 是否已经拉到刷新阈值（1.73.2）。
+   * 是否已经拉到刷新阈值（1.73.2 / 1.73.3）。
    *
-   * 到了就画满一圈、颜色转深——这是「松手就会刷新」的唯一视觉信号，判定口径必须
-   * 和 `onTopTouch()` 完全一致（都拿 `pullDown` 比 `REFRESH_THRESHOLD_VP`），
-   * 否则会出现「看起来已经拉满、松手却没刷新」。
+   * 到了实心相机就填满、颜色从 `text_primary` 转 `primary`——这是「松手就会
+   * 刷新」的信号，判定口径必须和 `onTopTouch()` 完全一致（都拿 `pullDown` 比
+   * `REFRESH_THRESHOLD_VP`），否则会出现「看起来已经填满、松手却没刷新」。
    */
   private refreshArmed(): boolean {
     return this.pullDown >= REFRESH_THRESHOLD_VP;
   }
 
   /**
-   * 下拉刷新指示器：下拉阶段是**进度环**，刷新阶段是系统 `LoadingProgress`。
+   * 下拉填充比例（0..1）：填充到 100% 正好是刷新阈值。
    *
-   * 1.73.2 之前两个阶段都是转圈：手指还没拉到阈值它就在转、颜色也已经是
-   * `text_secondary`，与「松手就能刷新」看起来没有区别（用户反馈）。现在下拉
-   * 阶段换成官方 `Progress` 的 Ring：弧长直接取 `pullDown / REFRESH_THRESHOLD_VP`，
-   * 未到阈值是 `text_tertiary`，到了才画满并转成 `text_primary`；只有真正进入
-   * 刷新才换成转圈。`enableSmoothEffect: false` 让弧长贴着手指走，不额外做平滑。
+   * 相机图标的实心层从下往上长，长满的那一刻就是「松手会刷新」。不按最大下拉
+   * （144vp）算：否则拉到 80% 时图标只填了 80%，看起来永远「还差一点」。
+   */
+  private refreshFillRatio(): number {
+    const p = this.pullDown / REFRESH_THRESHOLD_VP;
+    return Math.max(0, Math.min(1, p));
+  }
+
+  /**
+   * 实心相机裁剪盒的高度（vp）：填充前沿以下的部分才显示。
+   *
+   * 填充前沿在 24 画布里的 y = 墨迹底 − 比例 × 墨迹高；裁剪盒贴底、高 = 24 − y。
+   * **必须扣掉 SVG 的留白**：内腔从 3.6 开始、到 19.45 结束，如果直接用
+   * `比例 × 24`，比例约 0.85 时整枚图标就被盖完了，80% 阈值还没到。
+   */
+  private refreshFillClipH(): number {
+    const front = REFRESH_CAMERA_INK_BOTTOM - this.refreshFillRatio() * REFRESH_CAMERA_INK_HEIGHT;
+    return REFRESH_CAMERA - front;
+  }
+
+  /**
+   * 下拉刷新指示器：下拉阶段是**相机图标从下往上填色**，刷新阶段是系统
+   * `LoadingProgress`。
+   *
+   * 1.73.3 起按用户的设计：底部页签那枚描边相机（`sys.symbol.camera`）当底，
+   * 一枚实心相机（`refresh_camera.svg`）盖在上面、只露出填充前沿以下的部分，
+   * 前沿随 `pullDown / 阈值` 上升；填满时实心相机转 `primary`。底图是矢量符号、
+   * 实心层是 SVG，两层都用官方 `Image` / `SymbolGlyph`，没有自绘。
    *
    * 位置、显隐、尺寸仍由外层容器算：官方的 `Refresh` 容器会把整页下移，会改掉
    * 本页既有的下拉编排（卡面 1/3、卡内抽屉 2/3、倒影拉长），所以容器不用。
@@ -3245,15 +3274,29 @@ export struct CameraPage {
           .height(REFRESH_ICON)
           .color($r('app.color.text_secondary'))
       } else {
-        Progress({ value: this.pullDown, total: REFRESH_THRESHOLD_VP, type: ProgressType.Ring })
-          .width(REFRESH_RING)
-          .height(REFRESH_RING)
-          .color(this.refreshArmed() ? $r('app.color.text_primary') : $r('app.color.text_tertiary'))
-          // **不画轨道**（1.73.2）：轨道会把整个圆先描出来，没拉满时也像「已经是个
-          // 完整的环」，正是这次要消掉的误导。留空之后缺口就是还差的那一截，
-          // 拉满时环才闭合——形状本身给了第二档信号。
-          .backgroundColor(Color.Transparent)
-          .style(this.refreshRingStyle)
+        Stack({ alignContent: Alignment.Bottom }) {
+          // 底：页签那枚描边相机；没被实心层盖到的上半截就是它。到了阈值连
+          // 描边一起转蓝，整枚图标变成一个完整的「可以松手」状态。
+          SymbolGlyph($r('sys.symbol.camera'))
+            .fontSize(REFRESH_CAMERA)
+            .fontColor([this.refreshArmed()
+              ? $r('app.color.primary') : $r('app.color.text_tertiary')])
+          // 实心相机：裁剪盒贴底，只露出「填充前沿」以下的一截
+          Stack({ alignContent: Alignment.Bottom }) {
+            Image($r('app.media.refresh_camera'))
+              .width(REFRESH_CAMERA)
+              .height(REFRESH_CAMERA)
+              .objectFit(ImageFit.Contain)
+              // SVG 的 fillColor 只影响 SVG；底下的描边符号颜色由 fontColor 管
+              .fillColor(this.refreshArmed()
+                ? $r('app.color.primary') : $r('app.color.text_primary'))
+          }
+          .width(REFRESH_CAMERA)
+          .height(this.refreshFillClipH())
+          .clip(true)
+        }
+        .width(REFRESH_CAMERA)
+        .height(REFRESH_CAMERA)
       }
     }
     .width(REFRESH_ICON)
