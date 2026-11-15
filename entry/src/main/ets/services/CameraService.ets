@@ -444,6 +444,16 @@ export class CameraService {
    */
   @Trace bleAsleep: boolean = false;
   @Trace bleScanning: boolean = false;
+  /**
+   * 正在按设备号查找已配对相机（用户点了「连接相机」/ 冷启动自动连的扫描段）。
+   *
+   * 和 `bleScanning`（扫出来给用户挑一台）不是一回事：这里找的是**已配对**的那台，
+   * 相机每轮广播换随机地址，直连旧地址失败后只能按尼康 deviceId 重扫。
+   * 页面据此显示「正在查找相机…」并禁用主操作——1.72.4 之前这段没有任何界面反馈，
+   * 按钮一直可点，用户连点几下就会叠出好几轮 6 秒扫描（2026-11-15 真机日志：
+   * 两秒内 15 次「按模式搜索」，每次各起一个扫描）。
+   */
+  @Trace bleFinding: boolean = false;
   /** BLE 连接进行中（bond + GATT 最长几十秒，UI 必须给反馈）。 */
   @Trace bleConnecting: boolean = false;
   /**
@@ -539,6 +549,10 @@ export class CameraService {
    * 连了三次，每次都白等 10 秒）。连上 / 换相机 / 重新配对都会清掉。
    */
   private bleAddressStale: boolean = false;
+  /** 用户点的「连接相机」正在跑：挡住重复点击（不参与渲染，界面状态看 `bleFinding`）。 */
+  private bleUserSearching: boolean = false;
+  /** 在途的按 deviceId 扫描：同一时刻只允许一个 BleScanner 在跑，新的先停旧的。 */
+  private activeDeviceScan: BleScanner | null = null;
   /**
    * 遥控请求的串行队列（1.71.0）。
    *
@@ -3270,6 +3284,12 @@ export class CameraService {
    */
   async autoConnectBle(silent: boolean = true, quiet: boolean = false): Promise<boolean> {
     if (this.bleConnected || this.bleConnecting) return this.bleConnected;
+    // 已经有一轮在按设备号找相机：不叠加（每轮都是一个 6 秒扫描）。用户点的
+    // 那次由 `searchByMode` 挡在外面，这里是冷启动 / 重连等多条路的兜底。
+    if (this.bleFinding) {
+      this.log.add('已在查找相机，跳过这次重复的自动连接');
+      return this.bleConnected;
+    }
     const epoch = this.linkEpoch;
     this.adoptSavedBleIdentity();
     const store = BleIdentityStore.getInstance();
@@ -3294,7 +3314,17 @@ export class CameraService {
     // 相机每轮广播都换随机地址，上次存的地址可能已经失效；按尼康 deviceId
     // 重扫一次（休眠相机的广播没有名字，只能靠厂商数据认）。
     this.log.add('BLE 直连未成，按设备号重扫相机');
-    const devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
+    const scanStartedAt = Date.now();
+    let devices: BleCameraDevice[] = [];
+    // 扫描段在界面上要看得见：`bleFinding` 让状态头显示「正在查找相机…」、
+    // 主操作变成「搜索中」并禁用。没有它，这 6 秒里按钮一直可点。
+    this.bleFinding = true;
+    try {
+      devices = await this.scanForNikonDeviceId(store.identityDevice, 6000);
+    } finally {
+      this.bleFinding = false;
+    }
+    this.log.add(`按设备号扫描结束：命中 ${devices.length} 台（${Date.now() - scanStartedAt}ms）`);
     if (this.bleConnected) return true;
     if (!this.epochCurrent(epoch)) return false;
     for (const dev of devices) {
@@ -3357,6 +3387,17 @@ export class CameraService {
   /** 按尼康 deviceId 扫一段时间的相机（会自己停）。 */
   private async scanForNikonDeviceId(nikonDeviceId: number,
                                      durationMs: number): Promise<BleCameraDevice[]> {
+    // **同一时刻只允许一个扫描器**（1.72.4）：冷启动、用户点击、退出无线的等待
+    // 循环都会走到这里，叠加时射频与 `startScan/stopScan` 的同步调用一起排队，
+    // 界面就卡。新的一轮先把在途那轮停掉（它自己的 Promise 照常 resolve）。
+    if (this.activeDeviceScan !== null) {
+      try {
+        this.activeDeviceScan.stop();
+      } catch (_e) {
+        // 已经停了
+      }
+      this.activeDeviceScan = null;
+    }
     return new Promise<BleCameraDevice[]>((resolve: (v: BleCameraDevice[]) => void) => {
       const found: BleCameraDevice[] = [];
       const scanner = new BleScanner(
@@ -3364,9 +3405,11 @@ export class CameraService {
         (msg: string) => this.log.add(msg),
         nikonDeviceId,
         true);
+      this.activeDeviceScan = scanner;
       scanner.start();
       setTimeout(() => {
         scanner.stop();
+        if (this.activeDeviceScan === scanner) this.activeDeviceScan = null;
         resolve(found);
       }, durationMs);
     });
@@ -3727,12 +3770,29 @@ export class CameraService {
       case CameraLinkMode.USB:
         await this.scanForCamera(false, true);
         break;
-      case CameraLinkMode.BLE:
-        // 用户按的按钮，失败要说出来
-        if (!await this.autoConnectBle(false)) {
-          if (this.epochCurrent(epoch)) await this.scanBleCameras();
+      case CameraLinkMode.BLE: {
+        // **重复点击不能各起一轮**（1.72.4）：一轮自动连接里包含 10 秒直连超时与
+        // 6 秒按设备号扫描，期间按钮原本还停在「连接相机」可点状态，连点几下就会
+        // 叠出好几个扫描器抢射频、把 JS 线程拖住——用户看到的就是「卡了好几秒」。
+        // 这里直接丢掉重复请求；冷启动/重连在跑时也不插队。
+        if (this.bleUserSearching || this.bleFinding || this.bleConnecting) {
+          this.log.add('连接请求进行中，忽略这次点击');
+          return;
+        }
+        this.bleUserSearching = true;
+        const startedAt = Date.now();
+        try {
+          // 用户按的按钮，失败要说出来
+          if (!await this.autoConnectBle(false)) {
+            if (this.epochCurrent(epoch)) await this.scanBleCameras();
+          }
+        } finally {
+          this.bleUserSearching = false;
+          // 整轮用时进日志：卡顿类的反馈没有这个数就只能猜「哪一段慢」。
+          this.log.add(`连接流程结束：用时 ${Date.now() - startedAt}ms`);
         }
         break;
+      }
       case CameraLinkMode.AP:
       case CameraLinkMode.STA:
         await this.searchWireless();

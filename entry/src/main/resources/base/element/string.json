@@ -189,6 +189,10 @@
       "value": "正在搜索蓝牙相机…"
     },
     {
+      "name": "camera_ble_finding",
+      "value": "正在查找相机…"
+    },
+    {
       "name": "camera_ble_connecting",
       "value": "正在连接蓝牙相机…"
     },

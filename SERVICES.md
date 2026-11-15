@@ -1244,6 +1244,36 @@ AppLog 确认是默认开启的「位置注入」：蓝牙待机连着时 `BleGe
 现在按 `taskModeName()` 写「后台定位 / 蓝牙 / 数据传输长时任务已取消」——排查
 后台通知时这三条日志是唯一能对上的线索。
 
+**连接按钮的重复点击：别让一轮连接叠成好几轮扫描（1.72.4）**
+
+用户 2026-11-15 反馈「点「连接相机」卡了好几秒」。真机 AppLog（22:07）里看到
+**两秒内 15 次「按模式搜索：1」**，每次都完整走一遍
+「直连（旧地址，跳过）→ 按 deviceId 扫 6 秒 → 失败 → Wi-Fi 兜底」：
+
+- `searchByMode()` 的 BLE 分支没有重入保护，`autoConnectBle()` 的入口只挡
+  `bleConnecting`（GATT 建链那一小段），**6 秒扫描段既没有界面状态也不挡点击**；
+- 扫描段界面停在「连接相机」可点状态，用户以为没点上，连点几下就叠出好几个
+  `BleScanner`：各起一个 `BLEDeviceFind`、各自 6 秒后停，射频与
+  `startScan/stopScan` 的同步调用一起排队，JS 线程被拖住；
+- 冷启动的静默自动连（`MainScreen` 800ms 后 `autoConnectBle(true, true)`）与用户
+  点击还会同时跑：日志里 22:07:26 的点击正好压在静默扫描 22:07:24–30 上。
+
+修法（三处）：
+
+| 件 | 做法 |
+|---|---|
+| `CameraService.searchByMode()` | BLE 分支加重入闸：`bleUserSearching / bleFinding / bleConnecting` 任一为真就记一条「忽略这次点击」直接返回；整轮结束写 `连接流程结束：用时 Xms` |
+| `CameraService.autoConnectBle()` | 扫 deviceId 那段前后置 `bleFinding`（@Trace）；入口再挡一次 `bleFinding`，兜住冷启动 / 重连等多条路 |
+| `CameraService.scanForNikonDeviceId()` | `activeDeviceScan` 记在途扫描器，新的一轮先 `stop()` 旧的——同一时刻只允许一个 `BleScanner` |
+
+页面侧：`CameraPage.phase()` 把 `bleFinding` 并入 `Searching`，`headline()` 在
+`bleScanning` 之外多一条 `camera_ble_finding`（「正在查找相机…」），候选列表在
+`bleFinding` 期间隐藏。于是这 6 秒里主操作是「搜索中」且禁用，用户没机会连点。
+
+真机验收：日志里应只出现**一轮**「按模式搜索」，随后是
+`按设备号扫描结束：命中 N 台（Xms）` 与 `连接流程结束：用时 Xms`；两秒多轮的
+情况不再出现。若仍报卡顿，这两个耗时数是下一步定位的起点。
+
 **主线程禁区：会同步等系统服务的接口（1.66.16 汇总）**
 
 HarmonyOS 有一批 napi 是**同步**的：调用发生在 JS 线程上，内部一次 binder

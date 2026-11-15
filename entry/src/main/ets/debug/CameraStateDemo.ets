@@ -97,6 +97,12 @@ export class CameraStateDemo {
         s.bleConnected = true;
         s.bleCameraName = CameraStateDemo.BLE_NAME;
         break;
+      case 'ble_finding':
+        // 按设备号查找已配对相机（直连旧地址失败后的 6 秒扫描，1.72.4）：
+        // 状态头「正在查找相机…」，主操作变「搜索中」并禁用，不摆候选列表。
+        s.linkMode = CameraLinkMode.BLE;
+        s.bleFinding = true;
+        break;
       case 'ble_connected':
         s.linkMode = CameraLinkMode.BLE;
         CameraStateDemo.pairedBle(s);

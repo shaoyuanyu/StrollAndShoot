@@ -505,6 +505,8 @@ export struct CameraPage {
    */
   private bleListVisible(): boolean {
     if (this.blePaired() || this.bleBrowsing()) return false;
+    // 正在按设备号找已配对相机：这不是「挑一台」，别把旧列表摆出来。
+    if (this.svc.bleFinding) return false;
     if (this.svc.bleConnecting || this.svc.bleReconnecting) return false;
     return true;
   }
@@ -617,7 +619,8 @@ export struct CameraPage {
     // 手填 IP 的 `connectWifi()`：没有这个标记，页面会一直停在「未连接」，
     // 用户按了键盘「前往」也看不到反应（`wifiAutoConnecting` 只管自动链路）。
     if (this.svc.wifiConnecting) return CameraPhase.Connecting;
-    if (this.svc.scanning || this.svc.bleScanning || this.svc.wifiScanning) {
+    if (this.svc.scanning || this.svc.bleScanning || this.svc.wifiScanning
+      || this.svc.bleFinding) {
       return CameraPhase.Searching;
     }
     if (this.svc.apJoining || this.svc.wifiAutoConnecting || this.svc.wifiReconnecting) {
@@ -696,7 +699,11 @@ export struct CameraPage {
         return this.svc.statusText !== ''
           ? this.svc.statusText : $r('app.string.camera_status_searching');
       }
-      if (m === CameraLinkMode.BLE) return $r('app.string.camera_ble_scanning');
+      if (m === CameraLinkMode.BLE) {
+        // 找的是**已配对**的那台（按设备号重扫），不是让用户挑一台新相机。
+        return this.svc.bleScanning
+          ? $r('app.string.camera_ble_scanning') : $r('app.string.camera_ble_finding');
+      }
       return this.svc.bleScanning
         ? $r('app.string.camera_status_pair_searching') : $r('app.string.camera_wifi_scanning');
     }
