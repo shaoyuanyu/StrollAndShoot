@@ -12,6 +12,7 @@ import cameraStandeeTest from './CameraStandee.test';
 import blePayloadsTest from './BlePayloads.test';
 import downloadResumeTest from './DownloadResume.test';
 import nikonWifiLiveViewTest from './NikonWifiLiveView.test';
+import nikonWifiLiveViewFlowTest from './NikonWifiLiveViewFlow.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -28,4 +29,5 @@ export default function testsuite() {
   blePayloadsTest();
   downloadResumeTest();
   nikonWifiLiveViewTest();
+  nikonWifiLiveViewFlowTest();
 }

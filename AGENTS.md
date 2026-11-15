@@ -181,7 +181,7 @@ hvigorw test -p module=entry -p coverage=true
 - 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`，末尾一行是 `Tests run / Failure / Error / Pass`。
 - `entry/src/mock/Libentry.mock.ets` 是模板生成的，曾经编译不过（三处无类型对象字面量，`arkts-no-untyped-obj-literals`），已改为先声明 `interface` 再返回。改动 mock 的返回值时必须保持这一点。
 - Instrument Test 需要设备，且 `ohosTest` 的 HAP 要签名，本机模拟器装不了签名的包。
-- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 77 个用例）；`entry/src/ohosTest` 仍是模板用例。
+- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 78 个用例）；`entry/src/ohosTest` 仍是模板用例。
 
 ### macOS
 
