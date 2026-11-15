@@ -10,8 +10,6 @@
  * - **警示只给图标**：数字与文字保持主/次级文本色，红色只表示「这一格要看一眼」
  *   （电量低于两成、相机未唤醒 / 已停止），不是错误。
  */
-import { L10n } from './L10n';
-
 export class BleStatus {
   /** 电量文案：`82%`；读不到（-1）用「未知」。 */
   static batteryText(percent: number): ResourceStr {
@@ -51,23 +49,6 @@ export class BleStatus {
     if (percent >= 15) return $r('sys.symbol.battery_20percent');
     if (percent >= 10) return $r('sys.symbol.battery_10percent');
     return $r('sys.symbol.battery_5percent');
-  }
-
-  /** 电量的纯文本（toast / 日志用）：`82%` 或「未知」。 */
-  static batteryLabel(percent: number): string {
-    return percent >= 0 ? `${percent}%` : L10n.tr('common_unknown');
-  }
-
-  /**
-   * 唤醒状态的纯文本（toast / 日志用）。
-   *
-   * 与 `powerText()` 是同一套映射：那边返回资源给 UI，这边返回字符串给需要拼接
-   * 的 toast。两处都改的时候别只改一边。
-   */
-  static powerLabel(state: number): string {
-    if (state === 3 || state === 1) return L10n.tr('camera_power_valid_wake');
-    if (state === 2 || state === 0) return L10n.tr('camera_power_invalid_wake');
-    return L10n.tr('common_unknown');
   }
 
   /** 电量低于两成：图标转警示色。 */

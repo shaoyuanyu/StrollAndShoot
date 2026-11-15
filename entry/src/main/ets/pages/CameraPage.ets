@@ -10,8 +10,6 @@ import { ColorMetrics, LengthMetrics, SegmentButtonV2Items, TabSegmentButtonV2, 
 import type { BleCameraDevice } from '../services/BleScanner';
 import { cameraStandeeAspect, cameraStandeeMedia } from '../utils/CameraStandee';
 import { Haptics } from '../utils/Haptics';
-import { L10n } from '../utils/L10n';
-import { BleStatus } from '../utils/BleStatus';
 import { WindowUtils } from '../utils/WindowUtils';
 import { GlassEffect } from '../utils/GlassEffect';
 /**
@@ -3124,7 +3122,9 @@ export struct CameraPage {
     // 真正读一次相机状态（1.73.0）：蓝牙重读 GATT，PTP 重取 DeviceInfo，
     // 未连接则只给结论。指示器至少转 REFRESH_MIN_MS，读完再淡出。
     this.svc.refreshCameraStatus().then((report: CameraStatusReport) => {
-      this.toast(this.refreshSummary(report));
+      // 成功不弹 toast：标题栏胶囊会自己闪一下（监听 `statusRefreshVersion`），
+      // 数据变化就在原地确认。只有「没连上 / 没响应」才需要一句话解释原因。
+      if (!report.connected) this.toast(this.refreshFailure(report));
     }).catch((err: Error) => {
       this.svc.getLog().add(`[刷新] 失败: ${err.message}`);
     }).finally(() => {
@@ -3134,18 +3134,14 @@ export struct CameraPage {
   }
 
   /**
-   * 刷新结论：成功给「已连接 · 电量 82% · 唤醒」，没连上 / 没响应给具体原因。
+   * 刷新失败时的结论：没连上 / 没响应。
    *
-   * 电量与唤醒的数值同时已经写进服务字段，标题栏的状态胶囊会一起更新——toast
-   * 只是一次性确认，不必让用户去标题栏找。
+   * 成功不走这里——那时标题栏胶囊自己会闪一下（`TitleStatusCapsule` 监听
+   * `CameraService.statusRefreshVersion`），原地告诉用户「数据更新了」，
+   * 比在屏幕底部弹一条 toast 更安静，也不会挡住页面。
    */
-  private refreshSummary(report: CameraStatusReport): ResourceStr {
-    if (!report.connected) {
-      return report.error !== '' ? report.error : $r('app.string.camera_refresh_off');
-    }
-    return L10n.tr('camera_refresh_ok',
-      BleStatus.batteryLabel(report.battery),
-      BleStatus.powerLabel(report.power));
+  private refreshFailure(report: CameraStatusReport): ResourceStr {
+    return report.error !== '' ? report.error : $r('app.string.camera_refresh_off');
   }
 
   /** 刷新动作结束：指示器淡出，其余已在原位。 */

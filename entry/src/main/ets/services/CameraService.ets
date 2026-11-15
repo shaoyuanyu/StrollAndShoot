@@ -728,6 +728,13 @@ export class CameraService {
    * 换机身/固件时看 `电量: DeviceInfo 未给（原始值 N）` 这一行即可判断。
    */
   @Trace ptpBatteryPercent: number = -1;
+  /**
+   * 下拉刷新成功一次 +1（1.73.1）。
+   *
+   * 标题栏的状态胶囊监听它来做「数据已更新」的原地提示（轻微放大 + 数值闪一下
+   * 主色再落回），替代以前每次成功都弹一条 toast。失败仍然用 toast 说明原因。
+   */
+  @Trace statusRefreshVersion: number = 0;
   @Trace usbVidPid: string = '';
   @Trace usbSerialNumber: string = '';
   /** Thumbnail disk cache manager. */
@@ -4882,6 +4889,8 @@ export class CameraService {
       await this.refreshBleInfo();
       this.log.add(`[刷新] 蓝牙状态已重读（${Date.now() - startedAt}ms，`
         + `电量 ${this.bleBatteryPercent}，唤醒 ${this.blePowerState}）`);
+      // 数据已更新：让标题栏胶囊原地提示一下（页面不再弹成功 toast）。
+      this.statusRefreshVersion++;
       return {
         connected: true,
         battery: this.bleBatteryPercent,
@@ -4901,6 +4910,7 @@ export class CameraService {
         this.applyDeviceInfoBattery(info, '刷新');
         this.log.add(`[刷新] PTP 会话有响应（${Date.now() - startedAt}ms，`
           + `电量 ${this.ptpBatteryPercent}）`);
+        this.statusRefreshVersion++;
         return {
           connected: true,
           battery: this.ptpBatteryPercent,

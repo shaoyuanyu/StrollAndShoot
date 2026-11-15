@@ -934,7 +934,9 @@ export struct MainScreen {
             batteryWarn: BleStatus.batteryLow(this.svc.cameraBatteryPercent()),
             powerSymbol: BleStatus.powerSymbol(this.svc.cameraPowerState()),
             powerText: BleStatus.powerText(this.svc.cameraPowerState()),
-            powerWarn: BleStatus.powerWarn(this.svc.cameraPowerState())
+            powerWarn: BleStatus.powerWarn(this.svc.cameraPowerState()),
+            // 下拉刷新成功一次 +1：胶囊据此在原地闪一下，替代成功 toast。
+            refreshVersion: this.svc.statusRefreshVersion
           })
         }
         .flexShrink(0)
@@ -1342,6 +1344,48 @@ struct TitleStatusCapsule {
   @Param powerSymbol: Resource = $r('sys.symbol.bolt_fill');
   @Param powerText: ResourceStr = '';
   @Param powerWarn: boolean = false;
+  /**
+   * 下拉刷新成功的次数（`CameraService.statusRefreshVersion`）。
+   *
+   * 每次 +1 就在**原地**闪一下：数值短暂变主色、胶囊轻微放大，然后落回常态。
+   * 这是「数据已更新」的确认——比成功 toast 安静，也不挡页面；失败才弹 toast。
+   */
+  @Param refreshVersion: number = 0;
+  /** 数值是否正处在「刚更新」的高亮里。 */
+  @Local hot: boolean = false;
+  /** 胶囊的放大倍数：闪一下时 1 → 1.05 → 1。 */
+  @Local pop: number = 1;
+
+  @Monitor('refreshVersion')
+  onRefreshVersion(): void {
+    // 三段关键帧：亮起 + 轻微放大（140ms）→ 保持（220ms）→ 落回常态（420ms）。
+    // 整段约 780ms，与刷新指示器（最短 700ms）基本同步，看起来是「转圈结束、数据已更新」。
+    // 不用「先设起点、再 animateTo 到终点」：同一帧里设的起点可能来不及渲染，
+    // 看起来像根本没动（1.73.1）。
+    this.getUIContext().keyframeAnimateTo({ iterations: 1 }, [
+      {
+        duration: 140,
+        curve: Curve.EaseOut,
+        event: () => {
+          this.hot = true;
+          this.pop = 1.05;
+        }
+      },
+      {
+        duration: 220,
+        curve: Curve.Linear,
+        event: () => {}
+      },
+      {
+        duration: 420,
+        curve: Curve.EaseInOut,
+        event: () => {
+          this.hot = false;
+          this.pop = 1;
+        }
+      }
+    ]);
+  }
 
   build() {
     Row() {
@@ -1352,7 +1396,8 @@ struct TitleStatusCapsule {
           .flexShrink(0)
         Text(this.batteryText)
           .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.text_primary'))
+          // 刷新成功的一瞬间转主色再落回：颜色动画由 keyframeAnimateTo 负责。
+          .fontColor(this.hot ? $r('app.color.primary') : $r('app.color.text_primary'))
           .maxLines(1)
       }
       .height('100%')
@@ -1371,7 +1416,7 @@ struct TitleStatusCapsule {
           .flexShrink(0)
         Text(this.powerText)
           .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.text_primary'))
+          .fontColor(this.hot ? $r('app.color.primary') : $r('app.color.text_primary'))
           .maxLines(1)
       }
       .height('100%')
@@ -1380,6 +1425,8 @@ struct TitleStatusCapsule {
     .height(26)
     .alignItems(VerticalAlign.Center)
     .borderRadius(pillRadius(26))
+    // 原地提示：只缩放渲染层，不触发重新布局（标题栏里位置不会跟着跳）。
+    .scale({ x: this.pop, y: this.pop })
     // 材质自己会跟着背后的内容变深变浅：相机页往上滚、深色立牌压到标题栏下方时，
     // 玻璃会变成深色，而浅色模式下文字是深色——「深字压深玻璃」直接看不清
     // （2026-11-15 模拟器实测）。官方的 `colorInvert` 自动反色只在「系统颜色资源

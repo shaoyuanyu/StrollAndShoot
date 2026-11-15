@@ -565,8 +565,10 @@ AP / STA 的空闲、搜索、首配、配对失败、已配对、交接、已�
 5. **松手后真的去读一次相机状态**（1.73.0）：`beginRefresh()` 调
    `CameraService.refreshCameraStatus()`，读完 `endRefresh()` 把 `refreshFade` 从 1
    收到 0；指示器至少转 `REFRESH_MIN_MS`（700ms），读得快也不会一闪而过。卡面与抽屉
-   早已在原位，不需要再动。读完弹一句 toast：
-   「已连接 · 电量 82% · 唤醒」/「相机未连接」/「相机没有响应（可能已关机或休眠）」。
+   早已在原位，不需要再动。
+   **成功不弹 toast**（1.73.1）：标题栏的状态胶囊监听 `svc.statusRefreshVersion`，
+   收到一次就原地闪一下——两格数值转主色、胶囊放大到 1.05 再落回（约 780ms），
+   和指示器收尾基本同步。只有「未连接 / 没有响应」才弹 toast 说明原因。
    `@Event onRefresh` 已删掉——页面自己就有服务单例，再绕一层没有意义。
 
 **四种模式各读什么**（1.73.0）：
@@ -1117,6 +1119,10 @@ Row 用 `VerticalAlign.Center`：只有 `headline()` 时，点、文字、按钮
   变深，浅色模式的深色文字就成了「深字压深玻璃」（模拟器实测）。`materialColor`
   给材质混一层主题玻璃色（浅色 55% 白 / 深色 55% 黑），两种背景都能读。
 - **不是可点控件**：`interactive: false`，按下去没有状态变化，开了反而让人以为能点。
+- **刷新成功原地闪一下**（1.73.1）：胶囊监听 `CameraService.statusRefreshVersion`
+  的 `@Monitor`，用 `keyframeAnimateTo` 跑三段（140ms 亮起并放大到 1.05 → 220ms
+  保持 → 420ms 落回），数值文字在闪的过程中是主色。不用「先设起点再 animateTo」：
+  同一帧里设的起点可能来不及渲染，看起来像没动。成功不再弹 toast，失败才弹。
 - **读失败就写「未知」**：`bleBatteryPercent = -1` / `blePowerState = -1` /
   `bleFirmware = ''`，不保留上一台相机的旧值（换相机、断开、冷启动都会整组复位）。
 - **固件版本降到抽屉最底那一行灰字**（`camera_firmware_footer`，12fp

@@ -1869,10 +1869,6 @@
       "value": "Couldn't enable location injection: check location permission and the system location switch."
     },
     {
-      "name": "camera_refresh_ok",
-      "value": "Connected · Battery %1$s · %2$s"
-    },
-    {
       "name": "camera_refresh_off",
       "value": "Camera not connected"
     },
