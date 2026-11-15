@@ -3221,8 +3221,8 @@ export struct CameraPage {
   /**
    * 是否已经拉到刷新阈值（1.73.2 / 1.73.3）。
    *
-   * 到了实心相机就填满、颜色从 `text_primary` 转 `primary`——这是「松手就会
-   * 刷新」的信号，判定口径必须和 `onTopTouch()` 完全一致（都拿 `pullDown` 比
+   * 到了实心相机就填满、填充转 45% 主色，描边与镜头圈转实心主色——这是
+   * 「松手就会刷新」的信号，判定口径必须和 `onTopTouch()` 完全一致（都拿 `pullDown` 比
    * `REFRESH_THRESHOLD_VP`），否则会出现「看起来已经填满、松手却没刷新」。
    */
   private refreshArmed(): boolean {
@@ -3258,7 +3258,7 @@ export struct CameraPage {
    *
    * 1.73.3 起按用户的设计：底部页签那枚描边相机（`sys.symbol.camera`）当底，
    * 一枚实心相机（`refresh_camera.svg`）盖在上面、只露出填充前沿以下的部分，
-   * 前沿随 `pullDown / 阈值` 上升；填满时实心相机转 `primary`。底图是矢量符号、
+   * 前沿随 `pullDown / 阈值` 上升；填满时填充转 45% 主色、描边与镜头圈转实心主色。底图是矢量符号、
    * 实心层是 SVG，两层都用官方 `Image` / `SymbolGlyph`，没有自绘。
    *
    * 位置、显隐、尺寸仍由外层容器算：官方的 `Refresh` 容器会把整页下移，会改掉
@@ -3280,8 +3280,12 @@ export struct CameraPage {
           SymbolGlyph($r('sys.symbol.camera'))
             .fontSize(REFRESH_CAMERA)
             .fontColor([this.refreshArmed()
-              ? $r('app.color.primary') : $r('app.color.text_tertiary')])
-          // 实心相机：裁剪盒贴底，只露出「填充前沿」以下的一截
+              ? $r('app.color.primary') : $r('app.color.text_primary')])
+          // 实心相机：裁剪盒贴底，只露出「填充前沿」以下的一截。填充用
+          // `text_secondary`（中性灰）而不是 `text_primary`：黑色/白色填充会把
+          // 压在它上面的镜头圈吞掉；灰底上一个 `text_primary` 的圈才看得见。
+          // 到阈值不整枚刷成实心蓝，而是让填充变成 45% 的主色（一层淡蓝），
+          // 描边与镜头圈另转实心蓝——轮廓和镜头环都还看得见，不会糊成一块。
           Stack({ alignContent: Alignment.Bottom }) {
             Image($r('app.media.refresh_camera'))
               .width(REFRESH_CAMERA)
@@ -3289,11 +3293,19 @@ export struct CameraPage {
               .objectFit(ImageFit.Contain)
               // SVG 的 fillColor 只影响 SVG；底下的描边符号颜色由 fontColor 管
               .fillColor(this.refreshArmed()
-                ? $r('app.color.primary') : $r('app.color.text_primary'))
+                ? $r('app.color.primary') : $r('app.color.text_secondary'))
+              .opacity(this.refreshArmed() ? 0.45 : 1)
           }
           .width(REFRESH_CAMERA)
           .height(this.refreshFillClipH())
           .clip(true)
+          // 镜头圈单独一层压在最上面：填充从它后面涨过去，镜头环始终完整
+          Image($r('app.media.refresh_camera_lens'))
+            .width(REFRESH_CAMERA)
+            .height(REFRESH_CAMERA)
+            .objectFit(ImageFit.Contain)
+            .fillColor(this.refreshArmed()
+              ? $r('app.color.primary') : $r('app.color.text_primary'))
         }
         .width(REFRESH_CAMERA)
         .height(REFRESH_CAMERA)
