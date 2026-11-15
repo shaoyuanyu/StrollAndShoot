@@ -19,6 +19,7 @@ const PROPS: number[] = [NIKON_PROP_LIVEVIEW_SELECTOR];
 interface RecordedOp {
   opcode: number;
   params: number[];
+  data: Uint8Array | null;
 }
 
 class FakeLiveTransport implements PtpTransport {
@@ -48,8 +49,8 @@ class FakeLiveTransport implements PtpTransport {
   }
 
   async rawCommand(opcode: number, params: number[], _expectData: boolean,
-    _dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
-    this.ops.push({ opcode: opcode, params: params });
+    dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    this.ops.push({ opcode: opcode, params: params, data: dataOut ?? null });
     return { code: 0x2001, params: [], data: null };
   }
 
@@ -62,6 +63,10 @@ class FakeLiveTransport implements PtpTransport {
       if (op.opcode === opcode) return op;
     }
     return null;
+  }
+
+  findAll(opcode: number): RecordedOp[] {
+    return this.ops.filter((x: RecordedOp) => x.opcode === opcode);
   }
 
   async getStorageIDs(_priority?: PtpPriority): Promise<number[]> {
@@ -142,6 +147,10 @@ export default function nikonWifiLiveViewFlowTest() {
       const movie = await live.setMovieMode(true);
       expect(movie).assertTrue();
       expect(live.movieMode).assertTrue();
+      const selectorSet = fake.findAll(NIKON_OP_SET_DEVICE_PROP_VALUE);
+      expect(selectorSet.length >= 1).assertTrue();
+      expect(selectorSet[selectorSet.length - 1].params[0]).assertEqual(NIKON_PROP_LIVEVIEW_SELECTOR);
+      expect(selectorSet[selectorSet.length - 1].data?.[0]).assertEqual(1);
       const rec = await live.startMovie();
       expect(rec).assertTrue();
       expect(live.movieRecording).assertTrue();
@@ -151,6 +160,8 @@ export default function nikonWifiLiveViewFlowTest() {
       const back = await live.setMovieMode(false);
       expect(back).assertTrue();
       expect(live.movieMode).assertFalse();
+      const selectorBack = fake.findAll(NIKON_OP_SET_DEVICE_PROP_VALUE);
+      expect(selectorBack[selectorBack.length - 1].data?.[0]).assertEqual(0);
 
       await live.stop();
       expect(live.active).assertFalse();
