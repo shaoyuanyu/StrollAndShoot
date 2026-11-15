@@ -294,7 +294,7 @@ export interface PtpTransport {
    * USB 与模拟相机没有对应的 NAPI builder，返回 null。调用方必须容忍 null。
    */
   rawCommand(opcode: number, params: number[], expectData: boolean,
-    priority?: PtpPriority): Promise<PtpRawResult | null>;
+    dataOut?: Uint8Array, priority?: PtpPriority): Promise<PtpRawResult | null>;
   getStorageIDs(priority?: PtpPriority): Promise<number[]>;
   getObjectHandles(storageId: number, parent?: number, formatCode?: number,
     priority?: PtpPriority): Promise<number[]>;
@@ -460,7 +460,7 @@ export class PtpSession implements PtpTransport {
   }
 
   async rawCommand(_opcode: number, _params: number[], _expectData: boolean,
-    _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    _dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
     // USB 的 NAPI 只导出了 DeviceInfo 等有限命令；尼康遥控命令目前只在
     // Wi-Fi PTP/IP 上实现。USB 侧如需遥控，要先补 C++ builder。
     return null;

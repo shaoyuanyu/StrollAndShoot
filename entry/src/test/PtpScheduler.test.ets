@@ -33,7 +33,7 @@ class FakeTransport implements PtpTransport {
   }
 
   async rawCommand(_opcode: number, _params: number[], _expectData: boolean,
-    _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    _dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
     return null;
   }
 

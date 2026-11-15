@@ -58,8 +58,10 @@ export class PtpScheduler implements PtpTransport {
   }
 
   rawCommand(opcode: number, params: number[], expectData: boolean,
+    dataOut?: Uint8Array,
     priority: PtpPriority = PtpPriority.FOREGROUND): Promise<PtpRawResult | null> {
-    return this.enqueue(priority, () => this.inner.rawCommand(opcode, params, expectData, priority));
+    return this.enqueue(priority,
+      () => this.inner.rawCommand(opcode, params, expectData, dataOut, priority));
   }
 
   getStorageIDs(priority: PtpPriority = PtpPriority.SCAN): Promise<number[]> {

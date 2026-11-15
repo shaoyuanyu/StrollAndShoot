@@ -92,9 +92,12 @@ export struct WifiRemotePage {
     const live = this.live;
     if (live === null) return $r('app.string.camera_wifi_remote_not_connected');
     if (live.error !== '') return live.error;
+    if (live.movieRecording) return $r('app.string.camera_wifi_remote_recording');
     if (live.shooting) return $r('app.string.camera_wifi_remote_shooting');
     if (live.focusing) return $r('app.string.camera_wifi_remote_focusing');
-    if (live.starting) return $r('app.string.camera_wifi_remote_connecting');
+    if (live.starting || live.movieSwitching) {
+      return $r('app.string.camera_wifi_remote_connecting');
+    }
     if (!live.active) {
       return $r('app.string.camera_wifi_remote_not_live');
     }
@@ -110,7 +113,13 @@ export struct WifiRemotePage {
   }
 
   private canShoot(): boolean {
-    return this.live !== null && this.live.active && !this.live.shooting;
+    return this.live !== null && this.live.active && !this.live.shooting
+      && !this.live.starting && !this.live.movieSwitching;
+  }
+
+  private canSwitchMode(): boolean {
+    return this.live !== null && this.live.active && this.live.supportsMovie
+      && !this.live.starting && !this.live.movieSwitching && !this.live.movieRecording;
   }
 
   private canAf(): boolean {
@@ -126,7 +135,23 @@ export struct WifiRemotePage {
   private onShutter(): void {
     if (!this.canShoot()) return;
     Haptics.tap();
+    if (this.live !== null && this.live.movieMode) {
+      const op = this.live.movieRecording
+        ? this.live.stopMovie() : this.live.startMovie();
+      op.catch((_e: Error) => {
+        // 错误已写进 live.error
+      });
+      return;
+    }
     this.live?.capture().catch((_e: Error) => {
+      // 错误已写进 live.error
+    });
+  }
+
+  private switchMode(movie: boolean): void {
+    if (!this.canSwitchMode() || this.live === null) return;
+    Haptics.tap();
+    this.live.setMovieMode(movie).catch((_e: Error) => {
       // 错误已写进 live.error
     });
   }
@@ -321,8 +346,15 @@ export struct WifiRemotePage {
           .width(64)
           .height(64)
           .borderRadius(32)
-          .backgroundColor($r('app.color.text_on_dark'))
-        if (this.live !== null && this.live.shooting) {
+          .backgroundColor(this.live !== null && this.live.movieMode
+            ? $r('app.color.button_danger') : $r('app.color.text_on_dark'))
+        if (this.live !== null && this.live.movieRecording) {
+          Row()
+            .width(18)
+            .height(18)
+            .borderRadius(3)
+            .backgroundColor($r('app.color.text_on_dark'))
+        } else if (this.live !== null && this.live.shooting) {
           LoadingProgress()
             .width(24).height(24)
             .color($r('app.color.bg_page'))
@@ -344,6 +376,36 @@ export struct WifiRemotePage {
   @Builder
   BottomBar() {
     Column({ space: 10 }) {
+      if (this.live !== null && this.live.supportsMovie) {
+        Row({ space: 2 }) {
+          Button($r('app.string.camera_wifi_remote_photo_mode'))
+            .height(30)
+            .padding({ left: 14, right: 14 })
+            .fontSize(FontSize.Caption)
+            .fontColor(this.live.movieMode
+              ? $r('app.color.viewer_text_on_dark_70') : Color.Black)
+            .backgroundColor(this.live.movieMode
+              ? Color.Transparent : $r('app.color.text_on_dark'))
+            .borderRadius(15)
+            .enabled(this.canSwitchMode())
+            .onClick(() => { this.switchMode(false); })
+          Button($r('app.string.camera_wifi_remote_movie_mode'))
+            .height(30)
+            .padding({ left: 14, right: 14 })
+            .fontSize(FontSize.Caption)
+            .fontColor(this.live.movieMode
+              ? Color.Black : $r('app.color.viewer_text_on_dark_70'))
+            .backgroundColor(this.live.movieMode
+              ? $r('app.color.text_on_dark') : Color.Transparent)
+            .borderRadius(15)
+            .enabled(this.canSwitchMode())
+            .onClick(() => { this.switchMode(true); })
+        }
+        .padding(2)
+        .backgroundColor($r('app.color.viewer_glass_button'))
+        .borderRadius(17)
+      }
+
       Row({ space: 24 }) {
         RoundControlButton({
           label: $r('app.string.camera_wifi_remote_af'),

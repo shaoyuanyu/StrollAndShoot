@@ -2512,7 +2512,7 @@ export class CameraService {
     this.log.add(`无线连接建立: ${target}:${port}，身份 ${this.cameraIdentity}`);
     // 一个 Wi-Fi 会话对应一个实时取景控制器；设备操作表决定页面显示哪些按钮。
     this.wifiLiveView = new NikonWifiLiveView(this.session, this.deviceOps,
-      (msg: string) => { this.log.add(msg); });
+      (msg: string) => { this.log.add(msg); }, this.deviceProps);
     // 地址落盘：下次冷启动 / 断线重连先试这个地址，不用每次都扫一遍网段。
     WifiLinkStore.getInstance().save(target, port, this.cameraName);
     this.wifiAutoReconnectArmed = true;
@@ -7147,7 +7147,7 @@ export class CameraService {
     if (!this.connected || !this.wireless) return null;
     if (this.wifiLiveView === null) {
       this.wifiLiveView = new NikonWifiLiveView(this.session, this.deviceOps,
-        (msg: string) => { this.log.add(msg); });
+        (msg: string) => { this.log.add(msg); }, this.deviceProps);
     }
     return this.wifiLiveView;
   }

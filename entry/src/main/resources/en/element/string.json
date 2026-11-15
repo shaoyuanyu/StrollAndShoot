@@ -1729,6 +1729,34 @@
       "value": "Live view"
     },
     {
+      "name": "camera_wifi_remote_photo_mode",
+      "value": "Photo"
+    },
+    {
+      "name": "camera_wifi_remote_movie_mode",
+      "value": "Video"
+    },
+    {
+      "name": "camera_wifi_remote_movie_unsupported",
+      "value": "This camera does not support Wi-Fi movie recording"
+    },
+    {
+      "name": "camera_wifi_remote_movie_switch_failed",
+      "value": "Could not switch to movie mode"
+    },
+    {
+      "name": "camera_wifi_remote_movie_failed",
+      "value": "Movie operation failed"
+    },
+    {
+      "name": "camera_wifi_remote_recording",
+      "value": "Recording…"
+    },
+    {
+      "name": "camera_wifi_remote_movie_stopped",
+      "value": "Recording stopped"
+    },
+    {
       "name": "camera_wifi_remote_restart",
       "value": "Restart live view"
     },

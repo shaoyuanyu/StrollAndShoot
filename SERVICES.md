@@ -381,7 +381,7 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
 
-### Wi-Fi STA 实时取景与遥控（1.78.1）
+### Wi-Fi STA 实时取景与遥控（1.79.0）
 
 Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP/IP 做实时取景和
 静止图像遥控。协议从 SnapBridge 2.14.3 的 `ptpclient/actions/liveview`、
@@ -400,6 +400,9 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `AfDrive` | `0x90C1` | 无参数 |
 | `ChangeAfArea` | `0x9205` | `[x, y]`，实时取景像素坐标 |
 | `ZoomControlOperation` | `0x9016` | `[wideSteps, teleSteps]`，SnapBridge 用 `[1,0]` / `[0,1]` |
+| `SetDevicePropValue` | `0x1016` | 参数=属性码，数据段=新值；用于写 `0xD1A6` |
+| `StartMovieRecInCard` | `0x920A` | 无参数 |
+| `EndMovieRec` | `0x920B` | 无参数 |
 
 相关属性（`0x1015 GetDevicePropValue`）：
 
@@ -408,7 +411,7 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `RemoteCaptureProhibitionCondition` | `0xD0BD` | 非 0 不允许遥控拍摄 |
 | `LiveViewStatus` | `0xD1A2` | 1 = 实时取景已启动 |
 | `LiveViewProhibitionCondition` | `0xD1A4` | 非 0 不允许取景；bit31 是「拍摄中」标志，忽略 |
-| `LiveViewSelector` | `0xD1A6` | 0 = 静止图像，1 = 录像（本阶段未写） |
+| `LiveViewSelector` | `0xD1A6` | 0 = 静止图像，1 = 录像；写它走 `0x1016` 数据阶段 |
 
 **实现分层**
 
@@ -449,9 +452,13 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 - 实时取景控制器随 Wi-Fi 会话创建，`CameraService.wifiLiveView` 持有；
   断开时先 `stop()` 再 `CloseSession`。
 
-**本阶段未做**：录像（`0x920A/0x920B` 与 `LiveViewSelector` 的
-`SetDevicePropValue` 数据阶段）、曝光参数、驱动模式、白平衡。真机验证待做；
-当前只过了构建、lint 与 JPEG 头解析单测。
+**录像**：`setMovieMode()` 先停取景，写 `0x1016 [0xD1A6] + 1B 数据`，再重新
+启动取景；`startMovie()/stopMovie()` 发 `0x920A/0x920B`。停止取景时如果还在
+录像，会先补 `0x920B`。`WifiPtpLink` 为此增加了数据阶段：CmdRequest 的
+DataOut=2，随后 `StartData(9) + EndData(12)`（SnapBridge `u7` 同款）。
+
+**仍未做**：曝光参数、驱动模式、白平衡。真机验证待做；当前只过了构建、lint、
+JPEG 头解析与假 PTP 传输的命令序列单测。
 
 **BLE：扫描、GATT 与两段式首配（1.38.x）**
 

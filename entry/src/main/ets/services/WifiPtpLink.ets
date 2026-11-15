@@ -86,6 +86,14 @@ function u32le(v: number): Uint8Array {
   return out;
 }
 
+function u64le(v: number): Uint8Array {
+  const out = new Uint8Array(8);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, v >>> 0, true);
+  view.setUint32(4, Math.floor(v / 0x100000000) >>> 0, true);
+  return out;
+}
+
 function concat(parts: Uint8Array[]): Uint8Array {
   let total = 0;
   for (const p of parts) total += p.length;
@@ -389,13 +397,14 @@ export class WifiPtpLink {
 
   /** 发一条 PTP 命令并等响应（可选数据段）。`timeoutMs` 留给实时取景帧用。 */
   async transaction(opcode: number, params: number[], expectData: boolean,
-                    timeoutMs: number = TRANSACTION_TIMEOUT_MS): Promise<PtpIpResult> {
+                    timeoutMs: number = TRANSACTION_TIMEOUT_MS,
+                    dataOut?: Uint8Array): Promise<PtpIpResult> {
     const command = this.command;
     if (!command) throw new Error('PTP/IP 未连接');
     if (this.pending) throw new Error('PTP/IP 上一笔事务尚未结束');
 
     const transId = this.nextTransId();
-    const parts: Uint8Array[] = [u32le(1), u16le(opcode), u32le(transId)];
+    const parts: Uint8Array[] = [u32le(dataOut ? 2 : 1), u16le(opcode), u32le(transId)];
     for (const p of params) parts.push(u32le(p));
     const payload = concat(parts);
 
@@ -416,7 +425,16 @@ export class WifiPtpLink {
         reject: reject,
         timer: timer
       };
-      command.send(PKT_CMD_REQUEST, payload).catch((err: Error) => {
+      const send = async (): Promise<void> => {
+        await command.send(PKT_CMD_REQUEST, payload);
+        if (dataOut) {
+          // SnapBridge 的小数据写只发 StartData + EndData，不拆 Data 帧。
+          await command.send(PKT_START_DATA,
+            concat([u32le(transId), u64le(dataOut.length)]));
+          await command.send(PKT_END_DATA, concat([u32le(transId), dataOut]));
+        }
+      };
+      send().catch((err: Error) => {
         this.rejectPending(`发送失败: ${err.message}`);
       });
     });

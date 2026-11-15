@@ -27,6 +27,7 @@ import { L10n } from '../utils/L10n';
 import { PtpPriority, type PtpTransport, type PtpRawResult } from '../pages/PtpHost';
 
 /** 尼康 PTP 操作码。 */
+export const NIKON_OP_SET_DEVICE_PROP_VALUE = 0x1016;
 export const NIKON_OP_ZOOM = 0x9016;
 export const NIKON_OP_DEVICE_READY = 0x90C8;
 export const NIKON_OP_AF_DRIVE = 0x90C1;
@@ -36,12 +37,15 @@ export const NIKON_OP_END_LIVEVIEW = 0x9202;
 export const NIKON_OP_GET_LIVEVIEW_IMAGE = 0x9203;
 export const NIKON_OP_CHANGE_AF_AREA = 0x9205;
 export const NIKON_OP_CAPTURE = 0x9207;
+export const NIKON_OP_START_MOVIE = 0x920A;
+export const NIKON_OP_END_MOVIE = 0x920B;
 export const NIKON_OP_GET_LIVEVIEW_IMAGE_EX = 0x9428;
 
 /** 尼康设备属性。 */
 export const NIKON_PROP_REMOTE_CAPTURE_PROHIBITION = 0xD0BD;
 export const NIKON_PROP_LIVEVIEW_STATUS = 0xD1A2;
 export const NIKON_PROP_LIVEVIEW_PROHIBITION = 0xD1A4;
+export const NIKON_PROP_LIVEVIEW_SELECTOR = 0xD1A6;
 
 const RESPONSE_OK = 0x2001;
 const RESPONSE_OPERATION_NOT_SUPPORTED = 0x2005;
@@ -126,10 +130,15 @@ export class NikonWifiLiveView {
   @Trace focusing: boolean = false;
   @Trace zooming: boolean = false;
   @Trace fps: number = 0;
+  /** 实时取景选择器：false = 照片，true = 视频。 */
+  @Trace movieMode: boolean = false;
+  @Trace movieRecording: boolean = false;
+  @Trace movieSwitching: boolean = false;
   /** 最近一次对焦命令是否成功（只代表相机接受了命令，不代表合焦）。 */
   @Trace lastFocusOk: boolean = false;
 
   readonly supportsLiveView: boolean;
+  readonly supportsMovie: boolean;
   readonly supportsCapture: boolean;
   readonly supportsAf: boolean;
   readonly supportsAfArea: boolean;
@@ -149,7 +158,7 @@ export class NikonWifiLiveView {
   private fpsFrames: number = 0;
 
   constructor(transport: PtpTransport, deviceOps: number[],
-              log: (msg: string) => void) {
+              log: (msg: string) => void, deviceProps: number[] = []) {
     this.transport = transport;
     this.log = log;
     // 旧包或虚拟相机可能没有 operationsSupported；空列表时乐观尝试，失败再报错。
@@ -163,6 +172,9 @@ export class NikonWifiLiveView {
     this.supportsAf = !known || deviceOps.includes(NIKON_OP_AF_DRIVE);
     this.supportsAfArea = !known || deviceOps.includes(NIKON_OP_CHANGE_AF_AREA);
     this.supportsZoom = !known || deviceOps.includes(NIKON_OP_ZOOM);
+    this.supportsMovie = (!known || (deviceOps.includes(NIKON_OP_START_MOVIE)
+      && deviceOps.includes(NIKON_OP_END_MOVIE)))
+      && (deviceProps.length === 0 || deviceProps.includes(NIKON_PROP_LIVEVIEW_SELECTOR));
     this.useEx = deviceOps.includes(NIKON_OP_GET_LIVEVIEW_IMAGE_EX);
   }
 
@@ -208,6 +220,13 @@ export class NikonWifiLiveView {
       const status = await this.transport.getDevicePropValue(NIKON_PROP_LIVEVIEW_STATUS,
         PtpPriority.FOREGROUND);
       if (seq !== this.startSeq) return false;
+      // 相机可能停在上次的照片/视频选择器上；读回来让页面按钮与相机一致。
+      const selector = await this.transport.getDevicePropValue(NIKON_PROP_LIVEVIEW_SELECTOR,
+        PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq) return false;
+      if (selector !== null && selector.length > 0) {
+        this.movieMode = selector[0] === 1;
+      }
       const already = status !== null && status.length > 0 && status[0] === 1;
       if (!already) {
         const ok = await this.startLiveViewWithRetry(seq);
@@ -250,6 +269,10 @@ export class NikonWifiLiveView {
     this.paused = false;
     this.loopToken++;
     this.failStreak = 0;
+    if (this.movieRecording) {
+      await this.raw(NIKON_OP_END_MOVIE, [], false);
+      this.movieRecording = false;
+    }
     const wasStarted = this.liveViewStarted;
     this.liveViewStarted = false;
     if (wasStarted) {
@@ -376,6 +399,83 @@ export class NikonWifiLiveView {
       return ready;
     } finally {
       this.focusing = false;
+      this.resumeLoop();
+    }
+  }
+
+  /**
+   * 切换实时取景选择器（照片 / 视频）。
+   *
+   * 相机侧的 `0xD1A6` 决定取景与快门语义；切换时先把当前实时取景停掉，
+   * 写 0x1016（数据段 1 字节），再按需重新 start。这样不会在取景中途
+   * 把相机切到另一套模式，导致 StartMovieRec 被拒。
+   */
+  async setMovieMode(on: boolean): Promise<boolean> {
+    if (!this.supportsMovie) {
+      this.error = L10n.tr('camera_wifi_remote_movie_unsupported');
+      return false;
+    }
+    if (this.movieMode === on) return true;
+    if (this.movieSwitching) return false;
+    this.movieSwitching = true;
+    const wasActive = this.active;
+    try {
+      if (wasActive) await this.stop();
+      this.error = '';
+      this.lastAction = '';
+      const r = await this.raw(NIKON_OP_SET_DEVICE_PROP_VALUE,
+        [NIKON_PROP_LIVEVIEW_SELECTOR], false, new Uint8Array([on ? 1 : 0]));
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = r === null ? L10n.tr('camera_wifi_remote_movie_switch_failed')
+          : this.errorText(r.code);
+        return false;
+      }
+      this.movieMode = on;
+      this.log(`实时取景: 选择器 → ${on ? '视频' : '照片'}`);
+      if (wasActive) return await this.start();
+      return true;
+    } finally {
+      this.movieSwitching = false;
+    }
+  }
+
+  /** 开始录像（相机侧 0x920A）。 */
+  async startMovie(): Promise<boolean> {
+    if (!this.active || !this.movieMode || this.movieRecording) return false;
+    this.error = '';
+    await this.pauseLoop();
+    try {
+      const r = await this.raw(NIKON_OP_START_MOVIE, [], false);
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = r === null ? L10n.tr('camera_wifi_remote_movie_failed')
+          : this.errorText(r.code);
+        return false;
+      }
+      this.movieRecording = true;
+      this.lastAction = L10n.tr('camera_wifi_remote_recording');
+      this.log('实时取景: 开始录像');
+      return true;
+    } finally {
+      this.resumeLoop();
+    }
+  }
+
+  /** 停止录像（相机侧 0x920B）。 */
+  async stopMovie(): Promise<boolean> {
+    if (!this.movieRecording) return true;
+    await this.pauseLoop();
+    try {
+      const r = await this.raw(NIKON_OP_END_MOVIE, [], false);
+      this.movieRecording = false;
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = r === null ? L10n.tr('camera_wifi_remote_movie_failed')
+          : this.errorText(r.code);
+        return false;
+      }
+      this.lastAction = L10n.tr('camera_wifi_remote_movie_stopped');
+      this.log('实时取景: 录像结束');
+      return true;
+    } finally {
       this.resumeLoop();
     }
   }
@@ -592,8 +692,8 @@ export class NikonWifiLiveView {
   }
 
   private async raw(opcode: number, params: number[],
-                    expectData: boolean): Promise<PtpRawResult | null> {
-    return this.transport.rawCommand(opcode, params, expectData, PtpPriority.FOREGROUND);
+                    expectData: boolean, dataOut?: Uint8Array): Promise<PtpRawResult | null> {
+    return this.transport.rawCommand(opcode, params, expectData, dataOut, PtpPriority.FOREGROUND);
   }
 
   private async cleanupMode(): Promise<void> {

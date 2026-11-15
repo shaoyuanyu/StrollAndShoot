@@ -4,13 +4,17 @@ import { PtpPriority, type DeviceInfo, type ObjectInfo, type ObjectPropList,
 import { NikonWifiLiveView, NIKON_OP_AF_DRIVE, NIKON_OP_CAPTURE,
   NIKON_OP_CHANGE_AF_AREA, NIKON_OP_CHANGE_CAMERA_MODE, NIKON_OP_DEVICE_READY,
   NIKON_OP_END_LIVEVIEW, NIKON_OP_GET_LIVEVIEW_IMAGE, NIKON_OP_GET_LIVEVIEW_IMAGE_EX,
-  NIKON_OP_START_LIVEVIEW, NIKON_OP_ZOOM } from '../main/ets/services/NikonWifiLiveView';
+  NIKON_OP_SET_DEVICE_PROP_VALUE, NIKON_OP_START_LIVEVIEW, NIKON_OP_START_MOVIE,
+  NIKON_OP_END_MOVIE, NIKON_OP_ZOOM, NIKON_PROP_LIVEVIEW_SELECTOR }
+  from '../main/ets/services/NikonWifiLiveView';
 
 const OPS: number[] = [
   NIKON_OP_CHANGE_CAMERA_MODE, NIKON_OP_START_LIVEVIEW, NIKON_OP_END_LIVEVIEW,
   NIKON_OP_GET_LIVEVIEW_IMAGE, NIKON_OP_GET_LIVEVIEW_IMAGE_EX, NIKON_OP_DEVICE_READY,
-  NIKON_OP_CAPTURE, NIKON_OP_AF_DRIVE, NIKON_OP_CHANGE_AF_AREA, NIKON_OP_ZOOM
+  NIKON_OP_CAPTURE, NIKON_OP_AF_DRIVE, NIKON_OP_CHANGE_AF_AREA, NIKON_OP_ZOOM,
+  NIKON_OP_SET_DEVICE_PROP_VALUE, NIKON_OP_START_MOVIE, NIKON_OP_END_MOVIE
 ];
+const PROPS: number[] = [NIKON_PROP_LIVEVIEW_SELECTOR];
 
 interface RecordedOp {
   opcode: number;
@@ -44,7 +48,7 @@ class FakeLiveTransport implements PtpTransport {
   }
 
   async rawCommand(opcode: number, params: number[], _expectData: boolean,
-    _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    _dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
     this.ops.push({ opcode: opcode, params: params });
     return { code: 0x2001, params: [], data: null };
   }
@@ -103,7 +107,7 @@ export default function nikonWifiLiveViewFlowTest() {
   describe('NikonWifiLiveView flow', () => {
     it('启动 / 拍摄 / 对焦 / 变焦 / 停止走正确的 PTP 操作码', 0, async () => {
       const fake = new FakeLiveTransport();
-      const live = new NikonWifiLiveView(fake, OPS, (_m: string) => {});
+      const live = new NikonWifiLiveView(fake, OPS, (_m: string) => {}, PROPS);
       const started = await live.start();
       expect(started).assertTrue();
       expect(fake.has(NIKON_OP_CHANGE_CAMERA_MODE)).assertTrue();
@@ -134,6 +138,19 @@ export default function nikonWifiLiveViewFlowTest() {
       expect(zoom !== null).assertTrue();
       expect(zoom?.params[0]).assertEqual(0);
       expect(zoom?.params[1]).assertEqual(1);
+
+      const movie = await live.setMovieMode(true);
+      expect(movie).assertTrue();
+      expect(live.movieMode).assertTrue();
+      const rec = await live.startMovie();
+      expect(rec).assertTrue();
+      expect(live.movieRecording).assertTrue();
+      const stoppedRec = await live.stopMovie();
+      expect(stoppedRec).assertTrue();
+      expect(live.movieRecording).assertFalse();
+      const back = await live.setMovieMode(false);
+      expect(back).assertTrue();
+      expect(live.movieMode).assertFalse();
 
       await live.stop();
       expect(live.active).assertFalse();

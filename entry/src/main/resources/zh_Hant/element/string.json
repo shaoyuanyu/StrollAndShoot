@@ -1729,6 +1729,34 @@
       "value": "即時取景"
     },
     {
+      "name": "camera_wifi_remote_photo_mode",
+      "value": "照片"
+    },
+    {
+      "name": "camera_wifi_remote_movie_mode",
+      "value": "影片"
+    },
+    {
+      "name": "camera_wifi_remote_movie_unsupported",
+      "value": "這台相機不支援 Wi-Fi 錄影"
+    },
+    {
+      "name": "camera_wifi_remote_movie_switch_failed",
+      "value": "切換錄影模式失敗"
+    },
+    {
+      "name": "camera_wifi_remote_movie_failed",
+      "value": "錄影操作失敗"
+    },
+    {
+      "name": "camera_wifi_remote_recording",
+      "value": "錄影中…"
+    },
+    {
+      "name": "camera_wifi_remote_movie_stopped",
+      "value": "錄影已停止"
+    },
+    {
       "name": "camera_wifi_remote_restart",
       "value": "重新啟動即時取景"
     },

@@ -189,12 +189,12 @@ export class WifiPtpSession implements PtpTransport {
    * 实时取景每帧都会走这里，不能在失败时抛异常——否则页面会被一条断链刷屏。
    */
   async rawCommand(opcode: number, params: number[], expectData: boolean,
-    _priority?: PtpPriority): Promise<PtpRawResult | null> {
+    dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
     if (!this.open) return null;
     try {
       const frame = opcode === 0x9203 || opcode === 0x9428;
       const r = await this.exec(opcode, params, expectData,
-        `NikonOp(0x${opcode.toString(16)})`, frame ? 3000 : undefined);
+        `NikonOp(0x${opcode.toString(16)})`, frame ? 3000 : undefined, dataOut);
       return { code: r.code, params: r.params, data: r.data };
     } catch (err) {
       this.log(`NikonOp(0x${opcode.toString(16)}) 失败: ${(err as Error).message}`);
@@ -368,7 +368,7 @@ export class WifiPtpSession implements PtpTransport {
   }
 
   private async exec(opcode: number, params: number[], expectData: boolean,
-    name: string, timeoutMs?: number): Promise<PtpIpResult> {
+    name: string, timeoutMs?: number, dataOut?: Uint8Array): Promise<PtpIpResult> {
     const link = this.link;
     if (!link) {
       throw new PtpError(name, PTP_ERR_NOT_OPEN);
@@ -377,7 +377,7 @@ export class WifiPtpSession implements PtpTransport {
       throw new PtpError(name, PTP_ERR_USB, 'PTP/IP 链路已断开');
     }
     try {
-      return await link.transaction(opcode, params, expectData, timeoutMs);
+      return await link.transaction(opcode, params, expectData, timeoutMs, dataOut);
     } catch (err) {
       const msg = (err as Error).message;
       this.log(`${name} 失败: ${msg}`);
