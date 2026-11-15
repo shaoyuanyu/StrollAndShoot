@@ -127,7 +127,18 @@ export struct MainScreen {
     SavedCameraStore.getInstance();
     this.svc.initLinkMode();
     this.svc.initCameraModel();
-    if (this.svc.linkMode !== CameraLinkMode.USB) {
+    // STA 冷启动不要先碰 BLE：相机在 Wi-Fi 模式时蓝牙是关的，直连必然等满
+    // 10 秒再扫 6 秒（2026-11-16 01:14 日志：19 秒里 16 秒花在这里）。直接试
+    // 上次成功的 Wi-Fi 地址，通常 0.5 秒握手、2 秒出照片。
+    // AP / 蓝牙仍走 BLE：前者要靠蓝牙唤醒并交接热点，后者本来就是 BLE 待机。
+    if (this.svc.linkMode === CameraLinkMode.STA) {
+      setTimeout(() => {
+        this.svc.autoLinkWifi('cold-start-sta', false).catch((_e: Error) => {
+          // 冷启动的无线接续失败只进日志，不打扰页面
+        });
+      }, 300);
+    } else if (this.svc.linkMode === CameraLinkMode.BLE
+      || this.svc.linkMode === CameraLinkMode.AP) {
       // 第二个参数是「安静模式」：这一次连接不是用户点的，成不了就回到未连接，
       // 不把「连接失败」摆到屏幕上。
       setTimeout(() => { this.svc.autoConnectBle(true, true); }, 800);

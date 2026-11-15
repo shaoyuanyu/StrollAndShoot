@@ -4255,6 +4255,15 @@ export class CameraService {
     // 主要操作就是「自动搜索并连接」：先试记住的地址，再 mDNS / 网段发现，
     // 命中一台就直接连，不像 AP 那样停下来让用户从列表里挑（STA 的相机
     // 本来就在手机的网络里，用户点「搜索相机」要的是连上，不是一张列表）。
+    // **先试记住的 Wi-Fi 地址**：相机醒着时它 1 秒就回；BLE 在 Wi-Fi 模式下
+    // 必然 10 秒超时。日志 01:14 就是因为先 BLE 才让冷启动等了 16 秒。
+    const linkStore = WifiLinkStore.getInstance();
+    if (linkStore.hasHost()) {
+      if (await this.autoLinkWifi('search-sta-saved', false)) {
+        return;
+      }
+      if (!this.epochCurrent(epoch)) return;
+    }
     if (paired) {
       // STA 里的 BLE 只是「顺手唤醒」，不是必需链路：相机已经在 Wi-Fi 模式时
       // BLE 本来就不会广播，连不上是预期内的。这里必须静默、且不要排
@@ -6436,6 +6445,12 @@ export class CameraService {
     // Load all cached thumbnails from disk
     const cacheLoads: Promise<void>[] = [];
     for (const entry of entries) {
+      // 已经挂在画廊里的缩略图不要重新读盘、重解码：断线重连 / 回前台会再跑
+      // 一次快速扫描，以前这里把 1412 张全部重载一遍，日志里要 25–53 秒。
+      if (this.thumbnailPixelMapMap.has(entry.handle)
+        && this.thumbnailLoadedSet.has(entry.handle)) {
+        continue;
+      }
       const key = `${entry.filename}::${entry.size}`;
       const modDate = entry.modificationDate || '';
       const cached = this.thumbCache.findCached(key, modDate);

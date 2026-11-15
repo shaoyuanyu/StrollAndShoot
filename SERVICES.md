@@ -1672,6 +1672,24 @@ opcode；0x9435 是应用模式，不是无线），所以「回蓝牙」只能�
 变，先直连能把冷启动压到一两秒；直连失败才扫。连上之后 `finishAutoLink()`
 直接 `scanForCamera()`，让「蓝牙连上 → 无线连上 → 相册出来」是一条连续的链路。
 
+*STA 冷启动与重连的耗时（2026-11-16 真机日志）*
+
+- **冷启动 19 秒，其中 16 秒是蓝牙**：1:14:11 App 启动 → 1:14:12 BLE 直连 →
+  1:14:22 超时 → 1:14:22–28 按设备号扫 6 秒 → 1:14:28 才连 Wi-Fi。Wi-Fi
+  PTP/IP 握手只用了约 0.5 秒，缓存快照 2 秒。**STA 冷启动现在直接试记住的
+  Wi-Fi 地址，不再先走 BLE**；AP / 蓝牙模式才保留 `autoConnectBle()`。
+- **用户点「搜索相机」也先试记住的 Wi-Fi 地址**（`search-sta-saved`），失败后
+  才静默蓝牙唤醒，再走完整 mDNS / 网段发现。相机醒着时省掉 10 秒 BLE 超时。
+- **重连重载 1412 张缩略图**：1:09–1:12 每次断链重连后 `缓存快照` 要 25–53 秒。
+  `deployCacheSnapshot()` 现在跳过已经挂在 `thumbnailPixelMapMap` +
+  `thumbnailLoadedSet` 里的图，重连只补缺的；首屏仍按原逻辑加载。
+- **后台每 ~90 秒掉一次链**：日志 1:07:12 起应用在后台，心跳停止；1:08:48、
+  1:10:21、1:11:42、1:12:56 各断一次，自动重连后又全量扫。这次修了重扫的
+  缩略图重载，但**后台自动重连仍未关闭**；如果要省电，下一步应在
+  `onWifiBroken()` 里判 `!appForeground`，回前台再重建。
+- 同一份日志确认电量属性可用：`PTP 支持属性 21 个（含 BatteryLevel）`、
+  `Wi-Fi 电量: 100%（0x5001）`，之前的判断成立。
+
 *地址持久化：`services/WifiLinkStore.ets`*
 
 `PersistenceV2.globalConnect()`，key `wifi_link`，存 `host / port / cameraName`。
