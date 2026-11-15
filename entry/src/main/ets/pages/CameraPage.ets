@@ -539,17 +539,6 @@ export struct CameraPage {
   }
 
   /**
-   * 蓝牙待机时是否显示「相机状态」这组只读信息（1.69.0）。
-   *
-   * 只在这一刻显示：待机链路在、配对落定、没有正在进行的事。临时浏览
-   * （`bleBrowsing()`）时相机的设备信息由 PTP 那一组行负责，不重复。
-   */
-  private bleInfoVisible(): boolean {
-    return this.svc.linkMode === CameraLinkMode.BLE
-      && this.blePaired() && !this.bleBrowsing() && !this.inProgress();
-  }
-
-  /**
    * 相机在不在「能干活」的状态（1.71.2）。
    *
    * 蓝牙子系统在相机电源关着时照样接受连接、照样能握手，`0x2001` 因此会读到
@@ -562,70 +551,15 @@ export struct CameraPage {
     return state === -1 || state === 1 || state === 3;
   }
 
-  private bleBatteryText(): ResourceStr {
-    return this.svc.bleBatteryPercent >= 0
-      ? `${this.svc.bleBatteryPercent}%`
-      : $r('app.string.common_unknown');
-  }
-
-  private blePowerText(): ResourceStr {
-    const state = this.svc.blePowerState;
-    if (state === 3) return $r('app.string.camera_power_valid_wake');
-    if (state === 1) return $r('app.string.camera_power_wake_wait');
-    if (state === 2) return $r('app.string.camera_power_invalid_wake');
-    if (state === 0) return $r('app.string.camera_power_stop');
-    return $r('app.string.common_unknown');
-  }
-
   /**
-   * 电量图标：按档位取系统符号（1.72.0）。
+   * 蓝牙待机、配对落定、没有进行中的事：GATT 读到的相机状态可信（1.69.0）。
    *
-   * `sys.symbol.*` 是编译期资源，名字不能拼——只能逐个字面量返回，所以这里是一串
-   * 阈值判断。读不到（-1）用空心 `battery`，不带任何数字，和「未知」那两个字一起
-   * 说明这一格没读到。
+   * 判据只有一份，在 `CameraService.bleStandbyLive()`：标题栏右侧的状态胶囊与
+   * 这里共用它，页面里不再另写一套（1.72.3）。现在页面只剩「固件脚注」用它——
+   * 电量与唤醒已经搬到标题栏。
    */
-  private batterySymbol(): Resource {
-    const pct = this.svc.bleBatteryPercent;
-    if (pct < 0) return $r('sys.symbol.battery');
-    if (pct >= 95) return $r('sys.symbol.battery_100percent');
-    if (pct >= 85) return $r('sys.symbol.battery_90percent');
-    if (pct >= 75) return $r('sys.symbol.battery_80percent');
-    if (pct >= 65) return $r('sys.symbol.battery_70percent');
-    if (pct >= 55) return $r('sys.symbol.battery_60percent');
-    if (pct >= 45) return $r('sys.symbol.battery_50percent');
-    if (pct >= 35) return $r('sys.symbol.battery_40percent');
-    if (pct >= 25) return $r('sys.symbol.battery_30percent');
-    if (pct >= 15) return $r('sys.symbol.battery_20percent');
-    if (pct >= 10) return $r('sys.symbol.battery_10percent');
-    return $r('sys.symbol.battery_5percent');
-  }
-
-  /** 电量低于两成时图标转成警示色——只是一眼提醒，不另起一句文案。 */
-  private batteryLow(): boolean {
-    const pct = this.svc.bleBatteryPercent;
-    return pct >= 0 && pct <= 20;
-  }
-
-  /**
-   * 唤醒状态图标（1.72.0）。
-   *
-   * `0x2001` 的四个枚举各有对应的形态：已唤醒 = 实心闪电、唤醒中 = 空心闪电、
-   * 未唤醒 = 月亮、已停止 = 电源键；读不到用问号。相机没开机时链路照样能连上，
-   * 这一格是页面上最先给出结论的地方（下面还有一句「相机没有开机」的说明）。
-   */
-  private powerSymbol(): Resource {
-    const state = this.svc.blePowerState;
-    if (state === 3) return $r('sys.symbol.bolt_fill');
-    if (state === 1) return $r('sys.symbol.bolt');
-    if (state === 2) return $r('sys.symbol.moon_z_fill');
-    if (state === 0) return $r('sys.symbol.power');
-    return $r('sys.symbol.questionmark_circle');
-  }
-
-  /** 未唤醒 / 已停止算警示；「唤醒中」是过渡态、「未知」是没读到，都不上红。 */
-  private powerWarn(): boolean {
-    const state = this.svc.blePowerState;
-    return state === 0 || state === 2;
+  private bleInfoVisible(): boolean {
+    return this.svc.bleStandbyLive();
   }
 
   /**
@@ -1793,8 +1727,7 @@ export struct CameraPage {
   }
 
   /**
-   * 状态头：进度点 + 一句状态 +（蓝牙待机时）电量与唤醒两颗胶囊 + 一行说明 +
-   *（已连接时）照片数 + 主操作胶囊。
+   * 状态头：进度点 + 一句状态 + 一行说明 +（已连接时）照片数 + 主操作胶囊。
    *
    * 主操作永远是「当前这一步」：未连接是「搜索 / 配对 / 连接」，进行中禁用，
    * 已连接变中性底的「断开连接」。它也是页面上**唯一**的断开入口——同一张卡里
@@ -1810,18 +1743,10 @@ export struct CameraPage {
    * + 主色「重试」，两行合计仍在一颗胶囊的高度里，抽屉里不再另起红字。
    * 标题仍是主文本色——和「配对失败」「没能连上相机」一致，红色只给状态点。
    *
-   * **电量与唤醒状态收进状态头**（1.72.0）：它们以前是状态块里的三行
-   * 「标签 → 值」（电量 / 唤醒状态 / 固件版本），排在两个操作入口下面，看上去
-   * 和功能入口是同一种东西。现在只剩两个「图标 + 值」的小胶囊；固件版本降到
-   * 抽屉最底那一行灰字。状态头因此同时回答两件事：链路到哪一步了、相机本体
-   * 什么状态——不用再往下滚一屏找。
-   *
-   * **胶囊和「已连接」同一行**（1.72.2）：1.72.0/1.72.1 把它们放在标题下面、
-   * 左缩进 18 另起一行，实际效果像挂在状态头底下的一条注释，还把状态头撑高了一档
-   * （用户 2026-11-15 反馈「效果很差」）。现在它们是标题的**后缀**，贴着文案排
-   * 在同一行，状态头回到一颗主操作胶囊的高度；只有「已连接」这种一句话的标题
-   * 会出现胶囊（`bleInfoVisible()` 只在蓝牙待机配对落定时为真），不会和两行标题
-   * 抢宽度。
+   * **电量与唤醒不在这里**（1.72.3）：它们描述的是相机本体，和「已连接」是两层
+   * 信息，塞进状态头怎么摆都像挂件（1.72.0 另起一行、1.72.2 贴在同一行，用户都
+   * 否了）。现在只在标题栏右侧以两颗玻璃胶囊出现（`MainScreen.TitleStatusPill`），
+   * 状态头回到「一句状态 + 一颗主操作」的最小形态。
    */
   @Builder
   StatusHeader() {
@@ -1839,39 +1764,20 @@ export struct CameraPage {
           .flexShrink(0)
       }
       Column({ space: this.scanFailed() ? 2 : 3 }) {
-        // 标题 + 相机状态胶囊：胶囊是标题的后缀，`flexShrink(1)` 让标题在
-        // 极窄屏上先让位（正常只有「已连接」两个字，永远排得下）。
-        Row({ space: 8 }) {
-          Text(this.headline())
-            .fontSize(this.scanFailed() || this.compactHeadline()
-              ? FontSize.Section : FontSize.CardTitle)
-            .fontWeight(FontWeight.Medium)
-            // 状态头第一行永远是主文本色（红色只留给点）：失败态靠红灯 + 文案本身，
-            // 不给标题上红色——同一个页面里「配对失败」黑、「相机拒绝访问存储」红，
-            // 会被当成两种不同严重级别（1.65.2 统一）。
-            .fontColor(this.compactHeadline()
-              ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
-            .flexShrink(1)
-            .maxLines(this.scanFailed() ? 1 : 2)
-            // 结论必须一行放得下（13fp 下最长的一条是「相机没有可用存储（请插入存储卡）」），
-            // 万一某个语言更长，宁可截断也不要让状态头长高、把两行节奏破掉。
-            .textOverflow({ overflow: this.scanFailed() ? TextOverflow.Ellipsis : TextOverflow.Clip })
-          if (this.bleInfoVisible()) {
-            CameraStatusChip({
-              symbol: this.batterySymbol(),
-              text: this.bleBatteryText(),
-              warn: this.batteryLow()
-            })
-            CameraStatusChip({
-              symbol: this.powerSymbol(),
-              text: this.blePowerText(),
-              warn: this.powerWarn()
-            })
-          }
-        }
-        .width('100%')
-        .alignItems(VerticalAlign.Center)
-
+        Text(this.headline())
+          .fontSize(this.scanFailed() || this.compactHeadline()
+            ? FontSize.Section : FontSize.CardTitle)
+          .fontWeight(FontWeight.Medium)
+          // 状态头第一行永远是主文本色（红色只留给点）：失败态靠红灯 + 文案本身，
+          // 不给标题上红色——同一个页面里「配对失败」黑、「相机拒绝访问存储」红，
+          // 会被当成两种不同严重级别（1.65.2 统一）。
+          .fontColor(this.compactHeadline()
+            ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
+          .width('100%')
+          .maxLines(this.scanFailed() ? 1 : 2)
+          // 结论必须一行放得下（13fp 下最长的一条是「相机没有可用存储（请插入存储卡）」），
+          // 万一某个语言更长，宁可截断也不要让状态头长高、把两行节奏破掉。
+          .textOverflow({ overflow: this.scanFailed() ? TextOverflow.Ellipsis : TextOverflow.Clip })
         if (this.scanFailed() && this.scanErrorHint() !== '') {
           Text(this.scanErrorHint())
             .fontSize(FontSize.Micro)
@@ -3375,39 +3281,6 @@ struct CameraInfoRow {
     .width('100%')
     .height(INFO_ROW_HEIGHT)
     .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
-  }
-}
-
-/**
- * 相机状态小胶囊：一个系统图标 + 一段值（1.72.0）。
- *
- * 用在状态头里、紧跟「已连接」后面的电量 / 唤醒状态。以前它们是「电量 82%」这种两列行，和功能
- * 入口同一种排版；换成图标之后一行两个胶囊，扫一眼就知道相机有没有电、醒没醒。
- * 底色用 `filter_chip_bg`（中性淡灰）而不是主色淡底：照片数那颗胶囊已经是主色，
- * 两颗主色胶囊并排会把状态头拽成一块蓝。`warn` 只把图标换成警示色，文字不变红——
- * 这一格说的是读数，不是错误。
- */
-@ComponentV2
-struct CameraStatusChip {
-  @Param symbol: Resource = $r('sys.symbol.battery');
-  @Param text: ResourceStr = '';
-  @Param warn: boolean = false;
-
-  build() {
-    Row({ space: 5 }) {
-      SymbolGlyph(this.symbol)
-        .fontSize(14)
-        .fontColor([this.warn ? $r('app.color.status_error') : $r('app.color.text_secondary')])
-        .flexShrink(0)
-      Text(this.text)
-        .fontSize(FontSize.Caption)
-        .fontColor($r('app.color.text_secondary'))
-        .maxLines(1)
-    }
-    .height(26)
-    .padding({ left: 9, right: 10 })
-    .backgroundColor($r('app.color.filter_chip_bg'))
-    .borderRadius(pillRadius(26))
   }
 }
 

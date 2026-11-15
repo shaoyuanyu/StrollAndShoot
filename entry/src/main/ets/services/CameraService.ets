@@ -1009,6 +1009,29 @@ export class CameraService {
   }
 
   /**
+   * 蓝牙待机、配对落定、没有进行中的动作——相机本体状态（电量 / 唤醒 / 固件）
+   * 此刻是可信的（1.72.3）。
+   *
+   * 相机页标题栏右侧的两个状态胶囊就靠它出现/隐藏。判据只写这一份：页面里再抄
+   * 一套 `bleConnected && !bleConnecting && ...` 很容易和这里漂移，出现「页面说
+   * 有电量、标题栏却不显示」这种自相矛盾。
+   *
+   * - `!connected`：临时浏览（蓝牙模式借相机热点）时 PTP 会话在跑、GATT 已经让位，
+   *   电量是上一轮的数；此时不显示；
+   * - 连接/重连/扫描/交接/断开/切模式进行中都不显示：读数是半截的，先让状态头
+   *   把「正在做什么」说完。
+   */
+  bleStandbyLive(): boolean {
+    return this.linkMode === CameraLinkMode.BLE
+      && this.bleConnected && this.bleSerial !== ''
+      && !this.connected
+      && !this.bleConnecting && !this.bleReconnecting
+      && !this.bleScanning && !this.scanning && !this.wifiScanning
+      && !this.apJoining && !this.wifiAutoConnecting && !this.wifiConnecting
+      && !this.disconnecting && this.switchingTo < 0;
+  }
+
+  /**
    * 重新算一次长时任务的模式（1.66.17）。
    *
    * `syncBackgroundTask()` 在「要不要保活」没变时会直接返回；但模式本身还可能变

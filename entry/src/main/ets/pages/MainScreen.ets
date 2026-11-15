@@ -26,6 +26,7 @@ import { getExt } from '../utils/PhotoGroupUtil';
 import { CardShadow, ControlHeight, FontSize, IconSize, Radius, pillRadius } from '../utils/UiTokens';
 import { L10n } from '../utils/L10n';
 import { GlassEffect } from '../utils/GlassEffect';
+import { BleStatus } from '../utils/BleStatus';
 
 @Builder
 export function MainScreenBuilder() {
@@ -838,6 +839,18 @@ export struct MainScreen {
   }
 
   /**
+   * 标题栏右侧要不要画相机状态胶囊（1.72.3）。
+   *
+   * 只在相机页、且蓝牙待机配对落定、没有进行中的动作时出现：换到画廊 / 设置页时
+   * 电量不属于那一页的信息；浏览（借相机热点）与连接中读数都是半截的，先让状态
+   * 头把「正在做什么」说完。判据在 `CameraService.bleStandbyLive()`，相机页的
+   * 固件脚注共用同一份。
+   */
+  private cameraStatusVisible(): boolean {
+    return this.visualTab === 1 && this.svc.bleStandbyLive();
+  }
+
+  /**
    * 大标题的字体族。
    *
    * 认出机型时标题就是型号本身（`Z 50II`），用**衬线**排——像机身铭牌/品牌字标，
@@ -888,7 +901,10 @@ export struct MainScreen {
       }
       // 相机页没有右侧操作，标题组不再吃掉整行宽度，下拉按钮才能紧跟在
       // 型号 + 序列号后面；其他页仍占满，供筛选/多选按钮靠右。
+      // `flexShrink(1)`：右侧再放状态胶囊后，长机型名（如 COOLPIX P1100）先让位，
+      // 由标题自己的省略号收尾，不能把胶囊挤掉。
       .layoutWeight(this.visualTab === 1 ? 0 : 1)
+      .flexShrink(1)
       .alignItems(VerticalAlign.Bottom)
       .onAreaChange((_old: Area, now: Area) => {
         const w = Number(now.width);
@@ -902,6 +918,26 @@ export struct MainScreen {
 
       if (this.visualTab === 1) {
         this.CameraMenuButton()
+      }
+
+      // 相机状态（电量 / 唤醒）靠右，只在蓝牙待机、配对落定时出现（1.72.3）。
+      // 标题栏是沉浸光感真正生效的两处区域之一，两颗胶囊直接用系统材质，
+      // 和旁边的大标题一样浮在相机图上；相机页内容区里不再重复这一块。
+      if (this.cameraStatusVisible()) {
+        Blank()
+        Row({ space: 6 }) {
+          TitleStatusPill({
+            symbol: BleStatus.batterySymbol(this.svc.bleBatteryPercent),
+            text: BleStatus.batteryText(this.svc.bleBatteryPercent),
+            warn: BleStatus.batteryLow(this.svc.bleBatteryPercent)
+          })
+          TitleStatusPill({
+            symbol: BleStatus.powerSymbol(this.svc.blePowerState),
+            text: BleStatus.powerText(this.svc.blePowerState),
+            warn: BleStatus.powerWarn(this.svc.blePowerState)
+          })
+        }
+        .flexShrink(0)
       }
 
       if (this.visualTab === 0 && this.svc.photos.length > 0) {
@@ -1290,5 +1326,47 @@ export struct MainScreen {
     .onDisAppear(() => {
       CustomTransition.getInstance().unRegisterNavParam(this.pageId);
     })
+  }
+}
+
+/**
+ * 标题栏右侧的相机状态胶囊（1.72.3）：一个系统图标 + 一段值。
+ *
+ * 用沉浸光感（`systemMaterial`）：标题栏是它生效的两处区域之一，材质随深浅色
+ * 与设备算力自适应。不是可点控件，`interactive` 关掉——按下去没有状态变化，
+ * 开了只会让人以为能点。`warn` 只把图标换成警示色，文字保持主文本色：这一格
+ * 说的是读数，不是错误。
+ */
+@ComponentV2
+struct TitleStatusPill {
+  @Param symbol: Resource = $r('sys.symbol.battery');
+  @Param text: ResourceStr = '';
+  @Param warn: boolean = false;
+
+  build() {
+    Row({ space: 4 }) {
+      SymbolGlyph(this.symbol)
+        .fontSize(13)
+        .fontColor([this.warn ? $r('app.color.status_error') : $r('app.color.text_secondary')])
+        .flexShrink(0)
+      Text(this.text)
+        .fontSize(FontSize.Caption)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+    }
+    .height(26)
+    .padding({ left: 8, right: 10 })
+    .borderRadius(pillRadius(26))
+    // 材质自己会跟着背后的内容变深变浅：相机页往上滚、深色立牌压到标题栏下方时，
+    // 玻璃会变成深色，而浅色模式下文字是深色——「深字压深玻璃」直接看不清
+    // （2026-11-15 模拟器实测）。官方的 `colorInvert` 自动反色只在「系统颜色资源
+    // + 高/中算力」下生效，低算力设备与自定义色不参与，不能指望它兜底。
+    // 这里用官方 `materialColor` 给材质混一层主题玻璃色（浅色 55% 白 / 深色 55%
+    // 黑），材质随背景变化、可读性由主题色保证，两种背景都是同一套文字色。
+    .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+      materialColor: $r('app.color.glass_bg'),
+      interactive: false
+    })))
   }
 }
