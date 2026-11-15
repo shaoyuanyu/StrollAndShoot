@@ -4245,7 +4245,12 @@ export class CameraService {
     // 命中一台就直接连，不像 AP 那样停下来让用户从列表里挑（STA 的相机
     // 本来就在手机的网络里，用户点「搜索相机」要的是连上，不是一张列表）。
     if (paired) {
-      if (await this.connectBle(store.deviceId, store.cameraName, false)) {
+      // STA 里的 BLE 只是「顺手唤醒」，不是必需链路：相机已经在 Wi-Fi 模式时
+      // BLE 本来就不会广播，连不上是预期内的。这里必须静默、且不要排
+      // 「等相机回来」的循环，否则 Wi-Fi 即将连上时会先弹一句
+      // 「蓝牙连接相机失败」，还会在后台空转 BLE 扫描（2026-11-16 12:43:09
+      // 真机日志：BLE 超时 → 扫描失败 → 切网络发现成功，用户只看到前一句）。
+      if (await this.connectBle(store.deviceId, store.cameraName, false, true, false)) {
         // BLE 握手期间切了模式：这次唤醒属于上一模式，不能继续连无线。
         if (!this.epochCurrent(epoch)) return;
         if (!await this.autoLinkWifi('search-sta')) {
@@ -4255,7 +4260,7 @@ export class CameraService {
       }
       // 蓝牙没连上不是终点；但切了模式就没有「改为网络发现」这一步了。
       if (!this.epochCurrent(epoch)) return;
-      this.log.add('STA: 蓝牙待机没连上，改为网络发现');
+      this.log.add('STA: 蓝牙唤醒未成，改为网络发现（不提示蓝牙失败）');
     }
     if (!await this.autoLinkWifi('search-sta')) {
       if (this.epochCurrent(epoch)) this.failStaAutoLink();

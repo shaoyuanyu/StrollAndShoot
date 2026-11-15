@@ -1656,6 +1656,10 @@ opcode；0x9435 是应用模式，不是无线），所以「回蓝牙」只能�
   一步「先借蓝牙唤醒相机」。STA 不需要配对就能用，这是两种模式在入口上最直观的
   区别；自动发现失败时用 `failWireless(wifiHint || camera_status_wifi_not_found)`
   留下结论，页面显示「没能连上相机 + 原因 + 重试」。
+- STA 的「借蓝牙唤醒」是**尽力而为**：`connectBle(..., silent=true, armWatch=false)`。
+  相机已经在 Wi-Fi 模式时 BLE 本来就不广播，失败不是错误；不能走
+  `reportScanFailure`，否则 Wi-Fi 即将连上时会先弹「蓝牙连接相机失败」，还会排
+  一轮无用的 BLE 等待循环（1.74.1 修，真机日志 2026-11-16 12:43:09）。
 
 `autoLinkWifi()` 的顺序刻意是「记得的地址 → mDNS/网段扫描」：相机地址几乎不
 变，先直连能把冷启动压到一两秒；直连失败才扫。连上之后 `finishAutoLink()`
