@@ -248,10 +248,11 @@ const DOWNLOAD_WIFI_RECONNECT_WAIT_MS = 20000;
 /**
  * Wi-Fi 分块大小。
  *
- * PTP/IP 单笔事务 30 秒超时，2 MB 在 100 KB/s 的弱网下约 20 秒，留出余量；
- * USB 不走这条分块（USB 的 `getObject` 自己按端点能力分块，再多切反而慢）。
+ * PTP/IP 单笔事务 30 秒超时，1 MB 在 100 KB/s 的弱网下约 10 秒，留出
+ * 三倍余量；有些机型对单笔 GetPartialObject 的上限也只有 1 MB。USB 不走
+ * 这条分块（USB 的 `getObject` 自己按端点能力分块，再多切反而慢）。
  */
-const DOWNLOAD_WIFI_CHUNK_BYTES = 2 * 1024 * 1024;
+const DOWNLOAD_WIFI_CHUNK_BYTES = 1024 * 1024;
 /**
  * 未完成分片的保留时间。
  *
@@ -1799,6 +1800,9 @@ export class CameraService {
           await this.fetchFullPhoto(photo, partPath);
         }
         await this.finalizePart(partPath, localPath, photo, strictSize);
+        if (attempt > 0) {
+          this.log.add(`下载重试成功: ${photo.filename}（第 ${attempt + 1} 次）`);
+        }
         return;
       } catch (err) {
         lastError = err as Error;
@@ -1855,7 +1859,7 @@ export class CameraService {
   }
 
   /**
-   * Wi-Fi 真机：按 2 MB 分块写到 `.part`，每块后按文件实际长度推进 offset。
+   * Wi-Fi 真机：按 1 MB 分块写到 `.part`，每块后按文件实际长度推进 offset。
    *
    * 第一块就空（相机不支持 `GetPartialObject`，或刚好断链）时退回整包；
    * 后续块空则抛错，由外层重试并从已写入长度续传。
