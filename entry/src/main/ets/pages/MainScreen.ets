@@ -925,16 +925,14 @@ export struct MainScreen {
       // 和旁边的大标题一样浮在相机图上；相机页内容区里不再重复这一块。
       if (this.cameraStatusVisible()) {
         Blank()
-        Row({ space: 6 }) {
-          TitleStatusPill({
-            symbol: BleStatus.batterySymbol(this.svc.bleBatteryPercent),
-            text: BleStatus.batteryText(this.svc.bleBatteryPercent),
-            warn: BleStatus.batteryLow(this.svc.bleBatteryPercent)
-          })
-          TitleStatusPill({
-            symbol: BleStatus.powerSymbol(this.svc.blePowerState),
-            text: BleStatus.powerText(this.svc.blePowerState),
-            warn: BleStatus.powerWarn(this.svc.blePowerState)
+        Row() {
+          TitleStatusCapsule({
+            batterySymbol: BleStatus.batterySymbol(this.svc.bleBatteryPercent),
+            batteryText: BleStatus.batteryText(this.svc.bleBatteryPercent),
+            batteryWarn: BleStatus.batteryLow(this.svc.bleBatteryPercent),
+            powerSymbol: BleStatus.powerSymbol(this.svc.blePowerState),
+            powerText: BleStatus.powerText(this.svc.blePowerState),
+            powerWarn: BleStatus.powerWarn(this.svc.blePowerState)
           })
         }
         .flexShrink(0)
@@ -1330,32 +1328,61 @@ export struct MainScreen {
 }
 
 /**
- * 标题栏右侧的相机状态胶囊（1.72.3）：一个系统图标 + 一段值。
+ * 标题栏右侧的相机状态：**一颗双拼玻璃胶囊**，左电量、右唤醒（1.72.5）。
+ *
+ * 以前是两颗独立胶囊（1.72.3），用户觉得并排两颗有点杂；合成一颗之后右侧只剩
+ * 一个控件，两格之间用一根 12vp 竖线分开，仍然是「一眼两个读数」。
  *
  * 用沉浸光感（`systemMaterial`）：标题栏是它生效的两处区域之一，材质随深浅色
  * 与设备算力自适应。不是可点控件，`interactive` 关掉——按下去没有状态变化，
- * 开了只会让人以为能点。`warn` 只把图标换成警示色，文字保持主文本色：这一格
- * 说的是读数，不是错误。
+ * 开了只会让人以为能点。`batteryWarn` / `powerWarn` 只把图标换成警示色，
+ * 文字保持主文本色：这两格说的是读数，不是错误。
  */
 @ComponentV2
-struct TitleStatusPill {
-  @Param symbol: Resource = $r('sys.symbol.battery');
-  @Param text: ResourceStr = '';
-  @Param warn: boolean = false;
+struct TitleStatusCapsule {
+  @Param batterySymbol: Resource = $r('sys.symbol.battery');
+  @Param batteryText: ResourceStr = '';
+  @Param batteryWarn: boolean = false;
+  @Param powerSymbol: Resource = $r('sys.symbol.bolt_fill');
+  @Param powerText: ResourceStr = '';
+  @Param powerWarn: boolean = false;
 
   build() {
-    Row({ space: 4 }) {
-      SymbolGlyph(this.symbol)
-        .fontSize(13)
-        .fontColor([this.warn ? $r('app.color.status_error') : $r('app.color.text_secondary')])
-        .flexShrink(0)
-      Text(this.text)
-        .fontSize(FontSize.Caption)
-        .fontColor($r('app.color.text_primary'))
-        .maxLines(1)
+    Row() {
+      Row({ space: 4 }) {
+        SymbolGlyph(this.batterySymbol)
+          .fontSize(13)
+          .fontColor([this.batteryWarn ? $r('app.color.status_error') : $r('app.color.text_secondary')])
+          .flexShrink(0)
+        Text(this.batteryText)
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+      }
+      .height('100%')
+      .padding({ left: 9, right: 8 })
+
+      // 双拼的分隔：一根 12vp 的竖线，比留白更明确地把「电量 | 唤醒」分成两格。
+      Divider()
+        .vertical(true)
+        .height(12)
+        .color($r('app.color.divider'))
+
+      Row({ space: 4 }) {
+        SymbolGlyph(this.powerSymbol)
+          .fontSize(13)
+          .fontColor([this.powerWarn ? $r('app.color.status_error') : $r('app.color.text_secondary')])
+          .flexShrink(0)
+        Text(this.powerText)
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+      }
+      .height('100%')
+      .padding({ left: 8, right: 10 })
     }
     .height(26)
-    .padding({ left: 8, right: 10 })
+    .alignItems(VerticalAlign.Center)
     .borderRadius(pillRadius(26))
     // 材质自己会跟着背后的内容变深变浅：相机页往上滚、深色立牌压到标题栏下方时，
     // 玻璃会变成深色，而浅色模式下文字是深色——「深字压深玻璃」直接看不清

@@ -582,19 +582,11 @@
     },
     {
       "name": "camera_power_valid_wake",
-      "value": "已喚醒"
-    },
-    {
-      "name": "camera_power_wake_wait",
-      "value": "喚醒中"
+      "value": "喚醒"
     },
     {
       "name": "camera_power_invalid_wake",
-      "value": "未喚醒"
-    },
-    {
-      "name": "camera_power_stop",
-      "value": "已停止"
+      "value": "沉睡"
     },
     {
       "name": "camera_info_usb_id",

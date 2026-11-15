@@ -16,12 +16,17 @@ export class BleStatus {
     return percent >= 0 ? `${percent}%` : $r('app.string.common_unknown');
   }
 
-  /** 唤醒状态文案（`0x2001` 枚举，-1 = 未读到）。 */
+  /**
+   * 唤醒状态文案（`0x2001` 枚举，-1 = 未读到）。
+   *
+   * **只给用户两个状态**：唤醒 / 沉睡（用户 2026-11-15；不要「已唤醒 / 未唤醒」这种
+   * 「已/未」前缀）。底层四个枚举折叠进来：`3 valid_wake` 与 `1 wake_wait` 都是
+   * 醒着（后者是过渡态），`2 invalid_wake` 与 `0 stop` 都是睡着（相机没开机也走
+   * 这一档）；读不到才是「未知」。
+   */
   static powerText(state: number): ResourceStr {
-    if (state === 3) return $r('app.string.camera_power_valid_wake');
-    if (state === 1) return $r('app.string.camera_power_wake_wait');
-    if (state === 2) return $r('app.string.camera_power_invalid_wake');
-    if (state === 0) return $r('app.string.camera_power_stop');
+    if (state === 3 || state === 1) return $r('app.string.camera_power_valid_wake');
+    if (state === 2 || state === 0) return $r('app.string.camera_power_invalid_wake');
     return $r('app.string.common_unknown');
   }
 
@@ -51,19 +56,14 @@ export class BleStatus {
     return percent >= 0 && percent <= 20;
   }
 
-  /**
-   * 唤醒状态图标：已唤醒 = 实心闪电、唤醒中 = 空心闪电、未唤醒 = 月亮、
-   * 已停止 = 电源键；读不到用问号。
-   */
+  /** 唤醒状态图标：唤醒 = 闪电、沉睡 = 月亮；读不到用问号。 */
   static powerSymbol(state: number): Resource {
-    if (state === 3) return $r('sys.symbol.bolt_fill');
-    if (state === 1) return $r('sys.symbol.bolt');
-    if (state === 2) return $r('sys.symbol.moon_z_fill');
-    if (state === 0) return $r('sys.symbol.power');
+    if (state === 3 || state === 1) return $r('sys.symbol.bolt_fill');
+    if (state === 2 || state === 0) return $r('sys.symbol.moon_z_fill');
     return $r('sys.symbol.questionmark_circle');
   }
 
-  /** 未唤醒 / 已停止算警示；「唤醒中」是过渡态、「未知」是没读到，都不上红。 */
+  /** 沉睡算警示（遥控、拍照都用不了）；唤醒与「未知」不上红。 */
   static powerWarn(state: number): boolean {
     return state === 0 || state === 2;
   }

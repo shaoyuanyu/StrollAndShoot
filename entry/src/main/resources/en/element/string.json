@@ -585,16 +585,8 @@
       "value": "Awake"
     },
     {
-      "name": "camera_power_wake_wait",
-      "value": "Waking Up"
-    },
-    {
       "name": "camera_power_invalid_wake",
       "value": "Asleep"
-    },
-    {
-      "name": "camera_power_stop",
-      "value": "Stopped"
     },
     {
       "name": "camera_info_usb_id",
