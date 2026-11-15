@@ -193,14 +193,6 @@
       "value": "正在連線藍牙相機…"
     },
     {
-      "name": "camera_ble_paired",
-      "value": "已配對 · 序號 %1$s"
-    },
-    {
-      "name": "camera_ble_connected_name",
-      "value": "已連線 · %1$s"
-    },
-    {
       "name": "camera_ble_browse_photos",
       "value": "瀏覽與下載照片"
     },
@@ -581,16 +573,8 @@
       "value": "序號"
     },
     {
-      "name": "camera_info_firmware",
-      "value": "韌體版本"
-    },
-    {
-      "name": "camera_info_battery",
-      "value": "電量"
-    },
-    {
-      "name": "camera_info_power",
-      "value": "喚醒狀態"
+      "name": "camera_firmware_footer",
+      "value": "韌體版本 %1$s"
     },
     {
       "name": "camera_power_valid_wake",
@@ -1707,10 +1691,6 @@
     {
       "name": "camera_group_actions",
       "value": "操作"
-    },
-    {
-      "name": "camera_group_ble_status",
-      "value": "相機狀態"
     },
     {
       "name": "settings_mock_model",

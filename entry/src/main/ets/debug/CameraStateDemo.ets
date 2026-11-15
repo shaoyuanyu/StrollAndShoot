@@ -124,6 +124,19 @@ export class CameraStateDemo {
         s.wifiHost = CameraStateDemo.AP_HOST;
         CameraStateDemo.connectedDevice(s, true);
         break;
+      case 'ble_low_battery':
+        // 电量低于两成：状态头里电池图标换警示色（数字仍是主文本色）。
+        s.linkMode = CameraLinkMode.BLE;
+        CameraStateDemo.pairedBle(s);
+        s.bleBatteryPercent = 12;
+        break;
+      case 'ble_camera_off':
+        // 相机没开机：蓝牙链路照样连得上，但 `0x2001` 是「未唤醒」——状态头
+        // 第二个胶囊转警示色，遥控入口消失、「操作」组只剩浏览照片。
+        s.linkMode = CameraLinkMode.BLE;
+        CameraStateDemo.pairedBle(s);
+        s.blePowerState = 2;
+        break;
       case 'ble_returning':
         // 浏览结束、正等相机回落蓝牙（约 40 秒）：状态头回到「已配对」，
         // 详情行说相机正在切回蓝牙。
@@ -283,6 +296,12 @@ export class CameraStateDemo {
     s.bleCameraName = '';
     s.bleReconnecting = false;
     s.bleRecovering = false;
+    // 相机只读状态（1.72.0 起显示成状态头里的两个图标胶囊）：预演之间必须清掉，
+    // 否则上一个 case 的电量/唤醒会留在下一张截图里。
+    s.bleBatteryPercent = -1;
+    s.blePowerState = -1;
+    s.bleFirmware = '';
+    s.bleCableAttached = false;
     s.lastScanError = '';
     s.scanStatsText = '';
     s.scanPhaseText = '';
@@ -312,12 +331,17 @@ export class CameraStateDemo {
     s.statusText = L10n.tr('camera_status_connected');
   }
 
-  /** BLE 配对落定：链路在、序列号在。 */
+  /** BLE 配对落定：链路在、序列号在，并给一份读得到的相机只读状态。 */
   private static pairedBle(s: CameraService): void {
     s.bleConnected = true;
     s.bleSerial = CameraStateDemo.SERIAL;
     s.bleCameraName = CameraStateDemo.BLE_NAME;
     s.cameraModel = CameraStateDemo.CAM_MODEL;
+    // 真机上这三样来自 GATT（0x2A19 / 0x2001 / 0x180A）；预演给一组固定值，
+    // 让状态头里两个图标胶囊有东西可显示。
+    s.bleBatteryPercent = 82;
+    s.blePowerState = 3;
+    s.bleFirmware = '1.04';
   }
 
   private static bleDevices(): BleCameraDevice[] {

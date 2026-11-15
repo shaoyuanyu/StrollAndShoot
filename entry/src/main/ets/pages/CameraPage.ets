@@ -254,6 +254,16 @@ const PANEL_SHADOW_HEIGHT = 24;
  * 补缝条和抽屉白面的接缝会露出 1~2px 的深色竖线，比漏色还显眼）。
  */
 const CARD_SIDE_MARGIN = 4;
+
+/**
+ * 设备信息行的高度（1.72.0）。
+ *
+ * 这些行**只能看、不能点**，所以不需要 56 的触控行高。44 让「设备信息」整组
+ * 比上面的操作行矮一档、密一点：同样的字号下，紧一点的是「数据」，松一点、
+ * 带副标题和箭头的是「能点的操作」——不用读文字，密度就先分出两类。
+ */
+const INFO_ROW_HEIGHT = 44;
+
 /**
  * 立牌面板的左右缩进（vp）：**抽屉通栏、面板缩进**，两者不再同宽。
  *
@@ -500,6 +510,19 @@ export struct CameraPage {
   }
 
   /**
+   * 蓝牙待机的两个功能入口（遥控拍摄 / 浏览与下载照片）在不在（1.72.0）。
+   *
+   * 条件是原来两行各自的判据的并集：浏览会话进行中、或正在搜索/连接/交接时整组
+   * 收起（那时的进度与结论由状态头说）；其余在「已配对」或「配对过、当前空闲」
+   * 时都要给入口。单独抽出来是为了让「操作」这组小标题和两行入口同进同退——
+   * 只有标题没有行、或只有行没有标题，都像是漏渲染。
+   */
+  private bleActionsVisible(): boolean {
+    if (this.bleBrowsing() || this.inProgress()) return false;
+    return this.blePaired() || (this.bleKnown() && this.phase() === CameraPhase.Idle);
+  }
+
+  /**
    * 这台相机以前配对过（身份已落盘）。
    *
    * 与 `blePaired()` 不是一回事：断开之后链路没了，但相机那边还记着这台手机，
@@ -554,10 +577,68 @@ export struct CameraPage {
     return $r('app.string.common_unknown');
   }
 
-  private bleFirmwareText(): ResourceStr {
-    return this.svc.bleFirmware !== ''
-      ? this.svc.bleFirmware
-      : $r('app.string.common_unknown');
+  /**
+   * 电量图标：按档位取系统符号（1.72.0）。
+   *
+   * `sys.symbol.*` 是编译期资源，名字不能拼——只能逐个字面量返回，所以这里是一串
+   * 阈值判断。读不到（-1）用空心 `battery`，不带任何数字，和「未知」那两个字一起
+   * 说明这一格没读到。
+   */
+  private batterySymbol(): Resource {
+    const pct = this.svc.bleBatteryPercent;
+    if (pct < 0) return $r('sys.symbol.battery');
+    if (pct >= 95) return $r('sys.symbol.battery_100percent');
+    if (pct >= 85) return $r('sys.symbol.battery_90percent');
+    if (pct >= 75) return $r('sys.symbol.battery_80percent');
+    if (pct >= 65) return $r('sys.symbol.battery_70percent');
+    if (pct >= 55) return $r('sys.symbol.battery_60percent');
+    if (pct >= 45) return $r('sys.symbol.battery_50percent');
+    if (pct >= 35) return $r('sys.symbol.battery_40percent');
+    if (pct >= 25) return $r('sys.symbol.battery_30percent');
+    if (pct >= 15) return $r('sys.symbol.battery_20percent');
+    if (pct >= 10) return $r('sys.symbol.battery_10percent');
+    return $r('sys.symbol.battery_5percent');
+  }
+
+  /** 电量低于两成时图标转成警示色——只是一眼提醒，不另起一句文案。 */
+  private batteryLow(): boolean {
+    const pct = this.svc.bleBatteryPercent;
+    return pct >= 0 && pct <= 20;
+  }
+
+  /**
+   * 唤醒状态图标（1.72.0）。
+   *
+   * `0x2001` 的四个枚举各有对应的形态：已唤醒 = 实心闪电、唤醒中 = 空心闪电、
+   * 未唤醒 = 月亮、已停止 = 电源键；读不到用问号。相机没开机时链路照样能连上，
+   * 这一格是页面上最先给出结论的地方（下面还有一句「相机没有开机」的说明）。
+   */
+  private powerSymbol(): Resource {
+    const state = this.svc.blePowerState;
+    if (state === 3) return $r('sys.symbol.bolt_fill');
+    if (state === 1) return $r('sys.symbol.bolt');
+    if (state === 2) return $r('sys.symbol.moon_z_fill');
+    if (state === 0) return $r('sys.symbol.power');
+    return $r('sys.symbol.questionmark_circle');
+  }
+
+  /** 未唤醒 / 已停止算警示；「唤醒中」是过渡态、「未知」是没读到，都不上红。 */
+  private powerWarn(): boolean {
+    const state = this.svc.blePowerState;
+    return state === 0 || state === 2;
+  }
+
+  /**
+   * 抽屉最底那行灰字要显示的固件版本（1.72.0）；空串表示不画。
+   *
+   * 蓝牙待机读 GATT 的标准设备信息（`0x180A/0x2A26`），有 PTP 会话时用
+   * `deviceVersion`——两边都有值时只可能是其中之一在渲染，不会打架。
+   * 读不到就整行不画：一行「固件版本 未知」落在页脚没有任何用处。
+   */
+  private firmwareFooter(): string {
+    if (this.svc.connected) return this.svc.deviceVersion;
+    if (this.bleInfoVisible()) return this.svc.bleFirmware;
+    return '';
   }
 
   /**
@@ -651,14 +732,13 @@ export struct CameraPage {
     }
     if (phase === CameraPhase.Connected) {
       if (this.scanFailed()) return this.scanErrorTitle();
-      if (m === CameraLinkMode.BLE) {
-        // 临时浏览（1.67.0）：这时蓝牙已经让位给 Wi-Fi，再说「已连接 · 蓝牙」
-        // 会让人以为待机链路还在。
-        if (this.bleBrowsing()) return $r('app.string.camera_ble_browsing');
-        return this.svc.bleCameraName !== ''
-          ? $r('app.string.camera_ble_connected_name', this.svc.bleCameraName)
-          : $r('app.string.camera_ble_paired', this.svc.bleSerial);
+      // 临时浏览（1.67.0）：这时蓝牙已经让位给 Wi-Fi，再说「已连接 · 蓝牙」
+      // 会让人以为待机链路还在。
+      if (m === CameraLinkMode.BLE && this.bleBrowsing()) {
+        return $r('app.string.camera_ble_browsing');
       }
+      // 只写「已连接」（1.72.0）：型号与序列号已经在标题栏（大标题 + 铭牌角标），
+      // 状态头再拼一遍就是同一句话里重复同一台相机（用户 2026-11-15 的反馈）。
       return $r('app.string.camera_status_connected');
     }
     if (phase === CameraPhase.Pairing) return $r('app.string.camera_status_pairing_wait');
@@ -1713,7 +1793,8 @@ export struct CameraPage {
   }
 
   /**
-   * 状态头：进度点 + 一句状态 + 一行说明 +（已连接时）照片数 + 主操作胶囊。
+   * 状态头：进度点 + 一句状态 + 一行说明 +（蓝牙待机时）相机状态图标 +
+   *（已连接时）照片数 + 主操作胶囊。
    *
    * 主操作永远是「当前这一步」：未连接是「搜索 / 配对 / 连接」，进行中禁用，
    * 已连接变中性底的「断开连接」。它也是页面上**唯一**的断开入口——同一张卡里
@@ -1728,85 +1809,114 @@ export struct CameraPage {
    * **读卡失败也走同一个两行节奏**（1.65.1）：红灯 + 结论（13fp）+「下一步」（10fp）
    * + 主色「重试」，两行合计仍在一颗胶囊的高度里，抽屉里不再另起红字。
    * 标题仍是主文本色——和「配对失败」「没能连上相机」一致，红色只给状态点。
+   *
+   * **电量与唤醒状态收进状态头**（1.72.0）：它们以前是状态块里的三行
+   * 「标签 → 值」（电量 / 唤醒状态 / 固件版本），排在两个操作入口下面，看上去
+   * 和功能入口是同一种东西。现在只剩两个「图标 + 值」的小胶囊，紧贴在状态文案
+   * 下面（与文案同一条竖线），固件版本降到抽屉最底那一行灰字。状态头因此同时
+   * 回答两件事：链路到哪一步了、相机本体什么状态——不用再往滚一屏找。
    */
   @Builder
   StatusHeader() {
-    Row({ space: 10 }) {
-      if (this.inProgress()) {
-        LoadingProgress()
-          .width(16).height(16)
-          .color($r('app.color.primary'))
-          .flexShrink(0)
-      } else {
-        Row()
-          .width(8).height(8)
-          .borderRadius(pillRadius(8))
-          .backgroundColor(this.dotColor())
-          .flexShrink(0)
-      }
-      Column({ space: this.scanFailed() ? 2 : 3 }) {
-        Text(this.headline())
-          .fontSize(this.scanFailed() || this.compactHeadline()
-            ? FontSize.Section : FontSize.CardTitle)
-          .fontWeight(FontWeight.Medium)
-          // 状态头第一行永远是主文本色（红色只留给点）：失败态靠红灯 + 文案本身，
-          // 不给标题上红色——同一个页面里「配对失败」黑、「相机拒绝访问存储」红，
-          // 会被当成两种不同严重级别（1.65.2 统一）。
-          .fontColor(this.compactHeadline()
-            ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
-          .width('100%')
-          .maxLines(this.scanFailed() ? 1 : 2)
-          // 结论必须一行放得下（13fp 下最长的一条是「相机没有可用存储（请插入存储卡）」），
-          // 万一某个语言更长，宁可截断也不要让状态头长高、把两行节奏破掉。
-          .textOverflow({ overflow: this.scanFailed() ? TextOverflow.Ellipsis : TextOverflow.Clip })
-        if (this.scanFailed() && this.scanErrorHint() !== '') {
-          Text(this.scanErrorHint())
-            .fontSize(FontSize.Micro)
-            .lineHeight(14)
-            .fontColor($r('app.color.text_secondary'))
+    Column({ space: 8 }) {
+      Row({ space: 10 }) {
+        if (this.inProgress()) {
+          LoadingProgress()
+            .width(16).height(16)
+            .color($r('app.color.primary'))
+            .flexShrink(0)
+        } else {
+          Row()
+            .width(8).height(8)
+            .borderRadius(pillRadius(8))
+            .backgroundColor(this.dotColor())
+            .flexShrink(0)
+        }
+        Column({ space: this.scanFailed() ? 2 : 3 }) {
+          Text(this.headline())
+            .fontSize(this.scanFailed() || this.compactHeadline()
+              ? FontSize.Section : FontSize.CardTitle)
+            .fontWeight(FontWeight.Medium)
+            // 状态头第一行永远是主文本色（红色只留给点）：失败态靠红灯 + 文案本身，
+            // 不给标题上红色——同一个页面里「配对失败」黑、「相机拒绝访问存储」红，
+            // 会被当成两种不同严重级别（1.65.2 统一）。
+            .fontColor(this.compactHeadline()
+              ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
             .width('100%')
-            .maxLines(2)
+            .maxLines(this.scanFailed() ? 1 : 2)
+            // 结论必须一行放得下（13fp 下最长的一条是「相机没有可用存储（请插入存储卡）」），
+            // 万一某个语言更长，宁可截断也不要让状态头长高、把两行节奏破掉。
+            .textOverflow({ overflow: this.scanFailed() ? TextOverflow.Ellipsis : TextOverflow.Clip })
+          if (this.scanFailed() && this.scanErrorHint() !== '') {
+            Text(this.scanErrorHint())
+              .fontSize(FontSize.Micro)
+              .lineHeight(14)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .maxLines(2)
+          }
+          if (this.detail() !== '') {
+            Text(this.detail())
+              .fontSize(FontSize.Caption)
+              .lineHeight(18)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .maxLines(3)
+          }
+          if (this.staIpLinkVisible()) {
+            this.StaManualIpLink()
+          }
         }
-        if (this.detail() !== '') {
-          Text(this.detail())
-            .fontSize(FontSize.Caption)
-            .lineHeight(18)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%')
-            .maxLines(3)
-        }
-        if (this.staIpLinkVisible()) {
-          this.StaManualIpLink()
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
 
-      // 读卡失败时不显示照片数：那一行是「上次扫描留下的旧数字」，挂在红灯旁边
-      // 读起来像「其实连得挺好」；而且它会挤窄文字列，把第二行提示顶成两行。
-      if (this.linked() && !this.scanFailed() && this.svc.photoCount > 0) {
-        Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.primary'))
-          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-          .backgroundColor($r('app.color.primary_soft'))
-          .borderRadius(Radius.Chip)
+        // 读卡失败时不显示照片数：那一行是「上次扫描留下的旧数字」，挂在红灯旁边
+        // 读起来像「其实连得挺好」；而且它会挤窄文字列，把第二行提示顶成两行。
+        if (this.linked() && !this.scanFailed() && this.svc.photoCount > 0) {
+          Text($r('app.plural.photo_count', this.svc.photoCount, this.svc.photoCount))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.primary'))
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .backgroundColor($r('app.color.primary_soft'))
+            .borderRadius(Radius.Chip)
+            .flexShrink(0)
+        }
+        Button(this.primaryActionLabel())
+          .height(36)
+          .padding({ left: 16, right: 16 })
+          .fontSize(FontSize.Body)
+          .fontWeight(FontWeight.Medium)
+          .borderRadius(pillRadius(36))
+          .backgroundColor(this.primaryActionFill())
+          .fontColor(this.primaryActionTextColor())
+          .enabled(!this.primaryActionDisabled())
           .flexShrink(0)
+          .onClick(() => { this.onPrimaryAction(); })
       }
-      Button(this.primaryActionLabel())
-        .height(36)
-        .padding({ left: 16, right: 16 })
-        .fontSize(FontSize.Body)
-        .fontWeight(FontWeight.Medium)
-        .borderRadius(pillRadius(36))
-        .backgroundColor(this.primaryActionFill())
-        .fontColor(this.primaryActionTextColor())
-        .enabled(!this.primaryActionDisabled())
-        .flexShrink(0)
-        .onClick(() => { this.onPrimaryAction(); })
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      // 相机本体的状态：只读、不占一行标题。左缩进 18 = 状态点 8 + 间距 10，
+      // 与状态文案同一条竖线，读起来是「状态头的一部分」而不是一个新分组。
+      if (this.bleInfoVisible()) {
+        Row({ space: 8 }) {
+          CameraStatusChip({
+            symbol: this.batterySymbol(),
+            text: this.bleBatteryText(),
+            warn: this.batteryLow()
+          })
+          CameraStatusChip({
+            symbol: this.powerSymbol(),
+            text: this.blePowerText(),
+            warn: this.powerWarn()
+          })
+        }
+        .width('100%')
+        .padding({ left: 18 })
+      }
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
+    .alignItems(HorizontalAlign.Start)
     .bindSheet($$this.ipSheetOpen, this.IpSheet(), this.ipSheetOptions())
   }
 
@@ -2125,37 +2235,10 @@ export struct CameraPage {
       // 已配对/已连接时列表必须消失：那是「搜索出来的候选」，不是当前相机。
       // （服务端连上之后也会把 `bleCameras` 清空，这里再兜一层。）
       if (this.bleListVisible()) this.BleCameraList()
-      // 待机连着、或断着但配对过：给一条去照片的入口（1.67.0）。
-      // 浏览会话已经在跑时不再显示——那时相机的操作行已经由 `connected` 那段
-      // 渲染出来了，同一条入口出现两次会让人猜点哪个。
-      // 进行中（搜索 / 连接 / 交接）时收起：交接的分步进度已经由状态头在说，
-      // 同一件事再挂一行置灰的入口会让人以为还要再点一次。
-      // 「等相机回蓝牙」期间**保留**入口：1.68.0 起这条路可以直接用缓存凭据
-      // 连回相机热点，不用等相机自己回落。
-      // 蓝牙遥控：只有「链路在 + 配对落定」才给入口——遥控是写 0x2021，
-      // 没链路的 Idle 状态进去也只能报错。
-      // 相机没开机时不给遥控入口：进去了也只会回「相机拒绝进入遥控」。
-      if (!this.bleBrowsing() && !this.inProgress() && this.blePaired() && this.bleAwake()) {
-        CameraActionRow({
-          label: $r('app.string.camera_remote_action'),
-          subtitle: $r('app.string.camera_remote_action_desc'),
-          last: false,
-          onTap: () => { this.onOpenBleRemote(); }
-        })
-      }
-      if (!this.bleBrowsing() && !this.inProgress()
-        && (this.blePaired() || (this.bleKnown() && this.phase() === CameraPhase.Idle))) {
-        CameraActionRow({
-          label: $r('app.string.camera_ble_browse_photos'),
-          subtitle: $r('app.string.camera_ble_browse_photos_desc'),
-          last: !this.bleInfoVisible(),
-          onTap: () => { this.onBrowsePhotos(); }
-        })
-      }
-      // 相机只读状态：电量 / 唤醒 / 固件，全部来自 GATT，不占 Wi-Fi（1.69.0）。
-      if (this.bleInfoVisible()) {
-        this.BleStatusBlock()
-      }
+
+      // **状态说明在操作之前**（1.72.0）：这几句都是「为什么现在少了一个入口」的
+      // 结论（相机没开机、插了数据线、等相机回蓝牙、首配被拒），属于状态，不属于
+      // 下面那组功能入口。以前它们夹在入口和只读信息之间，读起来像三条并列的操作。
       // 关机提示（1.71.2）：链路在、相机没开机——说清楚为什么没有遥控入口。
       if (this.blePaired() && !this.bleAwake()) {
         Text($r('app.string.camera_ble_power_off_hint'))
@@ -2186,39 +2269,39 @@ export struct CameraPage {
           .fontColor($r('app.color.status_error'))
           .width('100%')
       }
+
+      // **功能入口单独成组**（1.72.0）：以前这两行没有小标题，紧挨着下面「相机状态」
+      // 那组只读行，两种东西长得一样。现在标题 → 行 → 空行 →（已连接时）设备信息，
+      // 「能点的」和「只能看的」从标题就分得开。
+      if (this.bleActionsVisible()) {
+        this.GroupTitle($r('app.string.camera_group_actions'))
+        // 蓝牙遥控：只有「链路在 + 配对落定 + 相机醒着」才给入口——遥控是写
+        // 0x2021，没链路的 Idle 状态进去也只能报错；相机没开机时进去了也只会回
+        // 「相机拒绝进入遥控」。
+        if (this.blePaired() && this.bleAwake()) {
+          CameraActionRow({
+            label: $r('app.string.camera_remote_action'),
+            subtitle: $r('app.string.camera_remote_action_desc'),
+            last: false,
+            onTap: () => { this.onOpenBleRemote(); }
+          })
+        }
+        // 浏览与下载（1.67.0）：待机连着、或断着但配对过都给入口。浏览会话已经在跑
+        // 时整组不渲染——那时操作行由 `connected` 那段接管，同一条入口出现两次会
+        // 让人猜点哪个；交接进行中也收起（分步进度由状态头在说）。
+        // 「等相机回蓝牙」期间**保留**：1.68.0 起可以直接用缓存凭据连回相机热点。
+        CameraActionRow({
+          label: $r('app.string.camera_ble_browse_photos'),
+          subtitle: $r('app.string.camera_ble_browse_photos_desc'),
+          last: true,
+          onTap: () => { this.onBrowsePhotos(); }
+        })
+      }
     } else if (this.svc.linkMode === CameraLinkMode.AP) {
       this.ApControls()
     } else if (this.svc.linkMode === CameraLinkMode.STA) {
       this.StaControls()
     }
-  }
-
-  /**
-   * 蓝牙待机的相机只读状态（1.69.0）。
-   *
-   * 这三行只在 GATT 待机链路上有，不依赖 PTP、不占手机 Wi-Fi：电量读
-   * `0x2A19`、唤醒状态读 `0x2001`、固件版本读标准 `0x180A/0x2A26`。
-   * 读不到就写「未知」，不拿上一台相机的值顶替。
-   */
-  @Builder
-  BleStatusBlock() {
-    Column() {
-      this.GroupTitle($r('app.string.camera_group_ble_status'))
-      CameraInfoRow({
-        label: $r('app.string.camera_info_battery'),
-        value: this.bleBatteryText()
-      })
-      CameraInfoRow({
-        label: $r('app.string.camera_info_power'),
-        value: this.blePowerText()
-      })
-      CameraInfoRow({
-        label: $r('app.string.camera_info_firmware'),
-        value: this.bleFirmwareText(),
-        last: true
-      })
-    }
-    .width('100%')
   }
 
   /**
@@ -2469,6 +2552,12 @@ export struct CameraPage {
       // 四选一：不再配一句模式说明，模式差异交给下面的相机操作说明。
       this.ModePicker()
 
+      // 选择器下面补一条分隔线（1.72.0）：上面那条把「状态头」和模式选择器分开，
+      // 这条把模式选择器收成单独一条带子。以前只有已连接时才有下半条（它挂在
+      // 「操作 / 设备信息」那个块的开头），于是蓝牙待机时选择器是「开着口」的，
+      // 同一页两种画法。
+      Divider().color($r('app.color.divider'))
+
       this.ModeControls()
 
       // 连接引导：页面只留一句摘要，完整步骤和相机画面进系统半模态。
@@ -2478,14 +2567,29 @@ export struct CameraPage {
         this.GuideSummary()
       }
 
-      // 设备信息 / 操作：抽屉本身就是一张卡，这里是平铺的行 + 小标题，
-      // 不再套一层卡片（白卡压在白抽屉上只剩一道阴影，看不出层次）。
+      // **操作在前、信息在后**（1.72.0）：以前设备信息（9 行）压在操作上面，
+      // 连上相机后想「扫一下新照片」得先滚过一整屏只读数据，两种东西混在一条
+      // 竖线上，看不出哪块能点。现在顺序固定为「操作 → 设备信息」：能点的永远
+      // 在上面，只能看的永远在下面，和蓝牙待机那种「操作组 → 固件脚注」对齐。
+      // 抽屉本身就是一张卡，这里是平铺的行 + 小标题，不再套一层卡片
+      // （白卡压在白抽屉上只剩一道阴影，看不出层次）。
       if (this.svc.connected) {
-        Divider().color($r('app.color.divider'))
-        this.GroupTitle($r('app.string.camera_group_device'))
-        this.DeviceRows()
         this.GroupTitle($r('app.string.camera_group_actions'))
         this.ActionRows()
+        this.GroupTitle($r('app.string.camera_group_device'))
+        this.DeviceRows()
+      }
+
+      // **固件版本只做抽屉最底的一行灰字**（1.72.0，用户要求）：它是一次性
+      // 核对的信息，不该和设备信息那几行抢同一层级，也不值得单独占一个分组。
+      // 读不到就整行不画（`firmwareFooter()` 返回空串），不留一行「未知」。
+      if (this.firmwareFooter() !== '') {
+        Text($r('app.string.camera_firmware_footer', this.firmwareFooter()))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+          .textAlign(TextAlign.End)
+          .padding({ right: 4, top: 8 })
       }
 
       // 末尾留白：底部页签是**浮在内容上**的，滚到底时最后一行会被胶囊压住。
@@ -2839,7 +2943,17 @@ export struct CameraPage {
     .clip(true)
   }
 
-  /** 设备信息：平铺的行，抽屉本身就是它的卡片。 */
+  /**
+   * 设备信息：平铺的行，抽屉本身就是它的卡片。
+   *
+   * 两处收敛（1.72.0）：
+   * - **固件版本移走**：它现在只以脚注灰字（`firmwareFooter()`）出现在抽屉最底，
+   *   不再和品牌/型号这些「这台相机是谁」的信息并列；
+   * - **USB 两行按值渲染**：蓝牙 / Wi-Fi 会话里 `usbVidPid`、`usbSerialNumber`
+   *   都是空的，以前各占一行写「未知 / 无」，加起来是半屏什么都不回答的行。
+   *   只有真的走 USB（相机上报了描述符）时才出现——最后一行永远是「连接方式」，
+   *   所以分隔线收口不受这两行影响。
+   */
   @Builder
   DeviceRows() {
     Column() {
@@ -2854,9 +2968,12 @@ export struct CameraPage {
       CameraInfoRow({ label: $r('app.string.camera_info_brand'), value: this.svc.deviceManufacturer || $r('app.string.common_unknown') })
       CameraInfoRow({ label: $r('app.string.camera_info_model'), value: this.svc.cameraName || $r('app.string.common_unknown') })
       CameraInfoRow({ label: $r('app.string.camera_info_serial'), value: this.svc.deviceSerialNumber || $r('app.string.common_none') })
-      CameraInfoRow({ label: $r('app.string.camera_info_firmware'), value: this.svc.deviceVersion || $r('app.string.common_unknown') })
-      CameraInfoRow({ label: $r('app.string.camera_info_usb_id'), value: this.svc.usbVidPid || $r('app.string.common_unknown') })
-      CameraInfoRow({ label: $r('app.string.camera_info_usb_serial'), value: this.svc.usbSerialNumber || $r('app.string.common_none') })
+      if (this.svc.usbVidPid !== '') {
+        CameraInfoRow({ label: $r('app.string.camera_info_usb_id'), value: this.svc.usbVidPid })
+      }
+      if (this.svc.usbSerialNumber !== '') {
+        CameraInfoRow({ label: $r('app.string.camera_info_usb_serial'), value: this.svc.usbSerialNumber })
+      }
       CameraInfoRow({ label: $r('app.string.camera_info_cache_id'), value: this.svc.cameraIdentity || $r('app.string.common_none') })
       CameraInfoRow({ label: $r('app.string.camera_info_photo_count'), value: `${this.svc.photoCount}` })
       CameraInfoRow({
@@ -3230,7 +3347,7 @@ export struct CameraPage {
   }
 }
 
-/** 设备信息行。 */
+/** 设备信息行：只读的一行「标签 → 值」，不接点击。 */
 @ComponentV2
 struct CameraInfoRow {
   @Param label: ResourceStr = '';
@@ -3253,8 +3370,41 @@ struct CameraInfoRow {
         .margin({ left: 16 })
     }
     .width('100%')
-    .height(RowHeight.Single)
+    .height(INFO_ROW_HEIGHT)
     .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
+  }
+}
+
+/**
+ * 相机状态小胶囊：一个系统图标 + 一段值（1.72.0）。
+ *
+ * 用在状态头第二行的电量 / 唤醒状态。以前它们是「电量 82%」这种两列行，和功能
+ * 入口同一种排版；换成图标之后一行两个胶囊，扫一眼就知道相机有没有电、醒没醒。
+ * 底色用 `filter_chip_bg`（中性淡灰）而不是主色淡底：照片数那颗胶囊已经是主色，
+ * 两颗主色胶囊并排会把状态头拽成一块蓝。`warn` 只把图标换成警示色，文字不变红——
+ * 这一格说的是读数，不是错误。
+ */
+@ComponentV2
+struct CameraStatusChip {
+  @Param symbol: Resource = $r('sys.symbol.battery');
+  @Param text: ResourceStr = '';
+  @Param warn: boolean = false;
+
+  build() {
+    Row({ space: 5 }) {
+      SymbolGlyph(this.symbol)
+        .fontSize(14)
+        .fontColor([this.warn ? $r('app.color.status_error') : $r('app.color.text_secondary')])
+        .flexShrink(0)
+      Text(this.text)
+        .fontSize(FontSize.Caption)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+    }
+    .height(26)
+    .padding({ left: 9, right: 10 })
+    .backgroundColor($r('app.color.filter_chip_bg'))
+    .borderRadius(pillRadius(26))
   }
 }
 

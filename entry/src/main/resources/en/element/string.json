@@ -193,14 +193,6 @@
       "value": "Connecting to the Bluetooth camera…"
     },
     {
-      "name": "camera_ble_paired",
-      "value": "Paired · serial %1$s"
-    },
-    {
-      "name": "camera_ble_connected_name",
-      "value": "Connected · %1$s"
-    },
-    {
       "name": "camera_ble_browse_photos",
       "value": "Browse and download photos"
     },
@@ -581,16 +573,8 @@
       "value": "Serial Number"
     },
     {
-      "name": "camera_info_firmware",
-      "value": "Firmware"
-    },
-    {
-      "name": "camera_info_battery",
-      "value": "Battery"
-    },
-    {
-      "name": "camera_info_power",
-      "value": "Wake State"
+      "name": "camera_firmware_footer",
+      "value": "Firmware %1$s"
     },
     {
       "name": "camera_power_valid_wake",
@@ -1707,10 +1691,6 @@
     {
       "name": "camera_group_actions",
       "value": "Actions"
-    },
-    {
-      "name": "camera_group_ble_status",
-      "value": "Camera Status"
     },
     {
       "name": "settings_mock_model",

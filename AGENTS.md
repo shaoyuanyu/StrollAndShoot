@@ -457,8 +457,10 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps shot ap_connected
 - 由 `EntryAbility.onNewWant` 在 `MockPtpDevice.isDebugBuild()` 为真时处理，release
   包没有入口；
 - 名字就是 `CameraStateDemo.apply()` 的 case，覆盖 USB / 蓝牙 / AP / STA 的空闲、
-  搜索、首配、配对失败、已配对、交接、已连接、配对码、重连、断开、切换共 29 个状态
-  （1.65.1 新增 `usb_storage_denied`：会话在、读卡被拒，用于验收状态头的错误态）；
+  搜索、首配、配对失败、已配对、交接、已连接、配对码、重连、断开、切换共 31 个状态
+  （1.65.1 新增 `usb_storage_denied`：会话在、读卡被拒，用于验收状态头的错误态；
+  1.72.0 新增 `ble_low_battery` / `ble_camera_off`：电量低于两成的红色电池图标、
+  相机没开机时状态头的「未唤醒」胶囊与关机提示）；
 - 预演里的状态文案一律走 `L10n.tr(...)`，不要硬编码：硬编码那几条已经和资源里的
   空格、省略号漂移过（1.65.2 修），截图验收看到的就是错的东西；
 - 状态之间的口径、每个阶段该显示什么见 [PAGES.md](PAGES.md)「状态机：四种模式各一条线」。
