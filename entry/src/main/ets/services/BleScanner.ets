@@ -1698,16 +1698,13 @@ export class BleCameraLink {
       // **拿不到服务表就绝不能订阅**：订阅内部会同步发现服务，相机半睡时
       // 卡满 6 秒，系统判 THREAD_BLOCK_6S 闪退（2026-11-14 18:29）。
       //
-      // 但也别直接放弃（1.71.2）：stage1 本身就是叫醒相机的那一帧，可它一直
-      // 排在服务表后面，于是「相机半睡」变成了「永远等不到服务表」。这里先把
-      // stage1 发出去（写入不需要订阅），给相机一点刺激，再补一次服务发现。
-      this.onLog('配对: 服务表未就绪，先发 stage1 唤醒相机再补探');
-      try {
-        await this.writeCharacteristic(NIKON_CHAR_PAIRING, stage1.raw);
-      } catch (_e) {
-        // 服务表还没好时写入可能被拒，忽略：唤醒刺激已经发出去了
-      }
-      await BleCameraLink.sleep(600);
+      // 但不直接放弃（1.71.2）：相机断电/刚断开之后，它的 GATT 属性表要过
+      // 十几秒才可读，第一段窗口（12 秒）常常就差一点点。歇 1.2 秒再给一整段
+      // 新窗口；两段加起来二十多秒，正好覆盖真机上观察到的「下一次尝试才成功」。
+      // 这里**不**先写 stage1：服务表没到位时写入可能触发一次同步服务发现，
+      // 那会把 JS 主线程卡住（用户反馈过点击连接后卡顿几秒）。
+      this.onLog('配对: 服务表未就绪，歇一拍再补探一段');
+      await BleCameraLink.sleep(1200);
       if (!await this.ensureServices(true)) {
         this.onLog('配对: 补探后仍没有服务表，本轮不订阅（避免主线程卡死）');
         return null;
