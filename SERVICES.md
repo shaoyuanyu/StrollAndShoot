@@ -733,13 +733,18 @@ hdc shell aa start -a EntryAbility -b <bundle> --ps blectl off
 
 - 帧格式（APK `bleclient/H$a` 的编码器）：`u16 LE 总长 | u8 opcode | u8 0 | body`；
   `0x01` 能力查询（4B）、`0x10` 配置（4B）、`0x11` 进/出遥控（5B，body=mode）、
-  `0x12` 按键（6B，body=keyCode, keyOperation）。keyCode 2 半按 / 3 全按 / 4 录像，
+  `0x12` 按键（6B，body=keyCode, keyOperation）、`0x14` 特殊拍摄
+  （6B，body=functionCode, controlInfo）。keyCode 2 半按 / 3 全按 / 4 录像 /
+  5 菜单 / 6 回放 / 7 确定 / 8~11 方向 / 12~13 回放变焦，
   keyOperation 0 OFF / 1 ON。
 - **先开 indication 再写**：响应从 `0x2021` 的 indication 回来，状态从 `0x2020`
   的 indication 推。1.68.5 那次「写成功、没通知、随后 busy」就是少做了这一步。
 - 探针把每条通知原样写进 AppLog（`[BLECTL] ← 2021 [06 00 12 00 ...]`），
   `link.onAnyNotification` 是只给调试探针用的旁路，不影响原有 0x2008/配对分发。
 - 每轮只发一笔请求，失败即停（控制点 busy 要相机断电重启才恢复），不做循环重试。
+- 1.71.0 加的模式：`interval` / `lapse` / `focus`（`0x14` START）、
+  `stop1` / `stop2` / `stop3`（`0x14` STOP）、`play` / `menu` / `up` / `down` /
+  `left` / `right` / `ok`（单键轻点）、`cable`（读 0x200a 并订通知）。
 
 *蓝牙遥控：从探针到页面（1.70.0，2026-11-14 真机跑通）*
 
@@ -763,17 +768,20 @@ Z50II（固件 1.04）对 0x2021 的能力查询回应 `SUCCESS`：
 *协议与实现*
 
 - 帧格式：`u16 LE 总长 | u8 opcode | u8 0 | body`；
-  `0x11` 进/出遥控（body = 1/0）、`0x12` 按键（body = keyCode, keyOperation）。
-  keyCode：2 半按、3 全按、4 录像；keyOperation：0 OFF、1 ON。
+  `0x11` 进/出遥控（body = 1/0）、`0x12` 按键（body = keyCode, keyOperation）、
+  `0x14` 特殊拍摄（body = functionCode, controlInfo）。
+  keyCode：2 半按、3 全按、4 录像、5 菜单、6 回放、7 确定、8 上、9 下、10 右、
+  11 左、12 回放放大、13 回放缩小；keyOperation：0 OFF、1 ON。
 - 响应码：`1` SUCCESS、`2` 不支持该 op、`3` 参数错、`4` 操作失败、`5` 已在遥控中
   （APK `ResponseCode` 的 byte 值；`startBleRemote()` 把 5 也当作已进入）。
 - 链路层 API（`BleCameraLink`）：`enableRemoteIndications()`（0x2020/0x2021 都是
-  **indicate**）、`enterRemote()` / `exitRemote()`、`remoteKey()`、`readRemoteStatus()`。
+  **indicate**）、`enterRemote()` / `exitRemote()`、`remoteKey()`、
+  `remoteShootingEvent()`、`readRemoteStatus()`。
   响应等待用独立的 `remotePending`，不和配对的 `pendingChar` 抢。
 - `0x2020` 16B 状态解析（与 APK `V$a` 对拍）：byte0 主状态（0 NOT_CONTROL /
-  1 PHOTO / 2 PLAY / 3 MENU）、byte1 子状态、byte2 拍摄状态（0 NONE / 1 SHOOTING）、
-  byte3 限制位（bit0 释放受限、bit1 录像受限、bit2 照片错误、bit3 录像错误）、
-  byte4 bit0 对焦。
+  1 PHOTO / 2 PLAY / 3 MENU）、byte1 子状态、byte2 拍摄状态（0 NONE /
+  1 SHOOTING / 2 BULB / 3 TIME）、byte3 限制位（bit0 释放受限、bit1 录像受限、
+  bit2 照片错误、bit3 录像错误）、byte4 bit0 对焦。
 
 *生命周期（真机踩过的坑）*
 
@@ -794,6 +802,41 @@ Z50II（固件 1.04）对 0x2021 的能力查询回应 `SUCCESS`：
 现在 `bleRemotePressDown()` = 半按 ON + 全按 ON，`bleRemoteRelease()` = 全按 OFF +
 半按 OFF；B 门靠按住不放、松手结束曝光。`bleRemoteError` 接住写入失败/超时，
 页面显示红字。
+
+*特殊拍摄 / 回放 / 菜单 / 数据线（1.71.0）*
+
+四个功能各自对应一条已核过的官方协议：
+
+| 功能 | 协议 | 说明 |
+|---|---|---|
+| 特殊拍摄 | `0x14`：`u16 6 \| 0x14 \| 0 \| functionCode \| controlInfo` | functionCode 1 间隔定时 / 2 延时摄影 / 3 焦点移位；controlInfo 0 DEFAULT / 1 START / 2 STOP / 3 PAUSE。参数全在相机菜单里，手机只启停 |
+| 相机回放 | `0x12` 按键 | `PLAYBACK`(6) 进回放，`SELECTOR_LEFT/RIGHT`(11/10) 翻页，`PLAYBACK_ZOOM_IN/OUT`(12/13) 放大缩小 |
+| 相机菜单 | `0x12` 按键 | `MENU`(5) 开关菜单，`SELECTOR_*`(8~11) + `SELECTOR_OK`(7) 操作 |
+| 数据线 | `0x200a`（notify） | 4B LE，**bit0 = 已插数据线**（APK `z.a()` = `getInt() & 1`）。官方三个 `onLssCableAttachment` 都是空实现，我们只拿来提示 |
+
+- **按键成对发**：官方远程界面对方向/菜单/回放键绑的是 `onTouch`（ACTION_DOWN 发
+  ON、ACTION_UP 发 OFF）。`bleRemoteKeyTap()` 固定 ON → 90ms → OFF，等于一次轻点。
+- **切回拍摄模式发半按**：APK `cw`（`SetRemoteControlCameraMode`）切回 SHOOTING
+  时发的就是 `SHUTTER_RELEASE_HALF` ON。`bleRemoteHalfTap()` 补一笔 OFF，等同用户
+  半按一下，不会拍照。
+- **`0x15` 回放事件不做**：能力查询里 `remoteControlFlags = 0x0003`，playbackEvent
+  位是 **0**，Z50II 这条 op 不会响应；回放全靠 `0x12` 按键，不碰 `0x15`。
+- **录像只放入口**：`MOVIE_REC`(4) 在能力位里是支持的，但本轮按用户要求只摆出
+  禁用的入口（「尚未开发」），没有实现启停。
+- **串行队列**：所有遥控写入都走 `enqueueRemote()`。`0x2021` 每一笔都靠同一条特征
+  的 indication 回执，而链路只有一个 `remotePending` 槽；并发两笔会把前一笔的回执
+  槽覆盖掉（典型是快门还没收完、手指已经抬起）。排队后保证「发一笔、等回执、再发
+  下一笔」，失败不会卡住后一笔。
+- **退出要叫停特殊拍摄**：间隔/延时是相机侧长跑任务，`stopBleRemote()` 在写
+  `0x11=0` 之前先补一笔 `0x14 STOP`（失败不阻断退出），否则用户离开页面后相机
+  可能还在按间隔继续拍。
+- **`bleRemoteSpecialRunning` 是本地记账**：Z50II 的 `0x2020` capture 位在间隔拍摄
+  时也可能一直是 0，不能只靠状态位判断「是否在拍」，所以 START 成功后由手机记住。
+- **数据线状态不清空**：链路断开时 `bleCableNotifyOn` 归零（重连重订），但
+  `bleCableAttached` **保留**——插着数据线时相机会切走、链路正好断在这里，那句
+  提示正是断线之后最需要看到的。
+- 页面工具区的错误单独走 `bleRemoteToolError`，不复用 `bleRemoteError`（后者代表
+  「进不了遥控」，只挂在页面主状态行）。
 
 **2MP 自动传图走的是蓝牙经典（BTC/SPP）+ PTP，不是 BLE（2026-11-14 查证）**
 

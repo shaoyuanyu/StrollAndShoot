@@ -298,7 +298,7 @@
     },
     {
       "name": "camera_remote_hint",
-      "value": "離開這一頁會退出遙控，相機恢復一般拍攝"
+      "value": "離開這一頁會退出遙控，相機恢復普通拍攝；特殊拍攝會先停下來。"
     },
     {
       "name": "camera_remote_battery",
@@ -315,6 +315,150 @@
     {
       "name": "camera_remote_release_failed",
       "value": "快門釋放失敗"
+    },
+    {
+      "name": "camera_remote_tool_group",
+      "value": "遙控工具"
+    },
+    {
+      "name": "camera_remote_movie",
+      "value": "錄影"
+    },
+    {
+      "name": "camera_remote_movie_desc",
+      "value": "尚未開發"
+    },
+    {
+      "name": "camera_remote_special",
+      "value": "特殊拍攝"
+    },
+    {
+      "name": "camera_remote_special_desc",
+      "value": "間隔定時 / 延時攝影 / 焦點移位"
+    },
+    {
+      "name": "camera_remote_playback",
+      "value": "相機回放"
+    },
+    {
+      "name": "camera_remote_playback_desc",
+      "value": "翻頁、放大，手機操作相機螢幕"
+    },
+    {
+      "name": "camera_remote_menu",
+      "value": "相機選單"
+    },
+    {
+      "name": "camera_remote_menu_desc",
+      "value": "方向鍵與確定鍵"
+    },
+    {
+      "name": "camera_remote_special_title",
+      "value": "特殊拍攝"
+    },
+    {
+      "name": "camera_remote_special_hint",
+      "value": "相機依自己選單裡的間隔與張數拍攝。開始前請先把相機的「間隔定時拍攝」設好，並讓相機停在拍攝模式。"
+    },
+    {
+      "name": "camera_remote_special_interval",
+      "value": "間隔定時"
+    },
+    {
+      "name": "camera_remote_special_lapse",
+      "value": "延時攝影"
+    },
+    {
+      "name": "camera_remote_special_focus",
+      "value": "焦點移位"
+    },
+    {
+      "name": "camera_remote_special_start",
+      "value": "開始拍攝"
+    },
+    {
+      "name": "camera_remote_special_stop",
+      "value": "停止拍攝"
+    },
+    {
+      "name": "camera_remote_special_running",
+      "value": "相機正在依設定拍攝"
+    },
+    {
+      "name": "camera_remote_special_need_shooting",
+      "value": "相機不在拍攝模式，先回到拍攝"
+    },
+    {
+      "name": "camera_remote_special_start_failed",
+      "value": "開始失敗（回應碼 %1$d）：請檢查相機上的間隔定時設定"
+    },
+    {
+      "name": "camera_remote_key_failed",
+      "value": "相機沒有接受這次操作（回應碼 %1$d）"
+    },
+    {
+      "name": "camera_remote_playback_title",
+      "value": "相機回放"
+    },
+    {
+      "name": "camera_remote_playback_hint",
+      "value": "照片顯示在相機螢幕上，手機只負責翻頁與放大。"
+    },
+    {
+      "name": "camera_remote_playback_enter",
+      "value": "進入相機回放"
+    },
+    {
+      "name": "camera_remote_playback_exit",
+      "value": "返回拍攝"
+    },
+    {
+      "name": "camera_remote_playback_prev",
+      "value": "上一張"
+    },
+    {
+      "name": "camera_remote_playback_next",
+      "value": "下一張"
+    },
+    {
+      "name": "camera_remote_playback_zoom_in",
+      "value": "放大"
+    },
+    {
+      "name": "camera_remote_playback_zoom_out",
+      "value": "縮小"
+    },
+    {
+      "name": "camera_remote_playback_need_mode",
+      "value": "相機還在拍攝模式：先點「進入相機回放」。"
+    },
+    {
+      "name": "camera_remote_menu_title",
+      "value": "相機選單"
+    },
+    {
+      "name": "camera_remote_menu_hint",
+      "value": "方向鍵與確定鍵直接作用在相機選單上，相機螢幕會同步顯示。"
+    },
+    {
+      "name": "camera_remote_menu_open",
+      "value": "開啟相機選單"
+    },
+    {
+      "name": "camera_remote_menu_close",
+      "value": "關閉相機選單"
+    },
+    {
+      "name": "camera_remote_menu_ok",
+      "value": "確定"
+    },
+    {
+      "name": "camera_remote_menu_need_mode",
+      "value": "相機選單還沒開啟：先點「開啟相機選單」。"
+    },
+    {
+      "name": "camera_remote_cable_hint",
+      "value": "相機偵測到資料線已插入：藍牙待機可能隨時中斷，拔掉資料線後會自動重連。"
     },
     {
       "name": "camera_status_ble_permission",
@@ -1662,7 +1806,7 @@
     },
     {
       "name": "camera_guide_official_4",
-      "value": "遙控播放：翻頁、放大相機照片"
+      "value": "遙控播放：在手機上看相機裡的照片，翻頁與放大"
     },
     {
       "name": "camera_guide_official_5",
@@ -1686,7 +1830,7 @@
     },
     {
       "name": "camera_guide_partial_3",
-      "value": "藍牙遙控：快門（按住對焦、鬆手拍攝）已可用；錄影、間隔／延時與播放／選單遙控還沒有。"
+      "value": "藍牙遙控：快門、間隔／延時／焦點移位、回放與選單遙控已可用；錄影還沒做。"
     },
     {
       "name": "camera_title_with_serial",

@@ -27,9 +27,14 @@ import { CameraService } from '../services/CameraService';
  * - `feature` 开指示 + 发 0x01 能力查询（先看相机认不认这条通道）
  * - `on` / `off` 进出遥控模式
  * - `shot` 半按 ON→半按 OFF→全按 ON→全按 OFF
+ * - `shot2` / `shot3` 官方触摸序列 / 半按保持 1.5 秒
  * - `movie` 录像键 ON→OFF
  * - `config` 发 0x10 配置查询
  * - `status` 只读 0x2020 / 0x2081 的当前值
+ * - `interval` / `lapse` / `focus` 特殊拍摄开始（0x14：1/2/3 + START）
+ * - `stop1` / `stop2` / `stop3` 特殊拍摄停止（0x14：对应 functionCode + STOP）
+ * - `play` / `menu` / `up` / `down` / `left` / `right` / `ok` 单键轻点（1.71.0）
+ * - `cable` 读 0x200a 并订上通知（1.71.0）
  *
  * 注意：相机侧一旦把控制点判成 busy（1.68.5 那次），要断电重启才恢复；
  * 探针每轮只发一笔请求，失败就停，不循环重试。
@@ -38,19 +43,31 @@ export class BleRemoteProbe {
   private static readonly CH_STATUS = '00002020-3dd4-4255-8d62-6dc7b9bd5561';
   private static readonly CH_CONTROL = '00002021-3dd4-4255-8d62-6dc7b9bd5561';
   private static readonly CH_CAPTURE = '00002081-3dd4-4255-8d62-6dc7b9bd5561';
+  private static readonly CH_CABLE = '0000200a-3dd4-4255-8d62-6dc7b9bd5561';
 
   private static readonly OP_FEATURE = 0x01;
   private static readonly OP_CONFIG = 0x10;
   private static readonly OP_REMOTE = 0x11;
   private static readonly OP_KEY = 0x12;
+  private static readonly OP_SHOOTING_EVENT = 0x14;
 
-  /** 官方 `KeyCode`：2 半按、3 全按、4 录像。 */
+  /** 官方 `KeyCode`：2 半按、3 全按、4 录像、5 菜单、6 回放、7 确定、8~11 方向。 */
   private static readonly KEY_HALF = 2;
   private static readonly KEY_FULL = 3;
   private static readonly KEY_MOVIE = 4;
+  private static readonly KEY_MENU = 5;
+  private static readonly KEY_PLAYBACK = 6;
+  private static readonly KEY_OK = 7;
+  private static readonly KEY_UP = 8;
+  private static readonly KEY_DOWN = 9;
+  private static readonly KEY_RIGHT = 10;
+  private static readonly KEY_LEFT = 11;
   /** 官方 `KeyOperation`：0 OFF、1 ON。 */
   private static readonly OP_OFF = 0;
   private static readonly OP_ON = 1;
+  /** `0x14` 的 controlInfo：1 START、2 STOP。 */
+  private static readonly SHOOT_START = 1;
+  private static readonly SHOOT_STOP = 2;
 
   private static log(msg: string): void {
     try {
@@ -77,6 +94,28 @@ export class BleRemoteProbe {
       task = BleRemoteProbe.config();
     } else if (mode === 'status') {
       task = BleRemoteProbe.status();
+    } else if (mode === 'interval' || mode === 'lapse' || mode === 'focus') {
+      const fc = mode === 'interval' ? 1 : (mode === 'lapse' ? 2 : 3);
+      task = BleRemoteProbe.shootingEvent(fc, BleRemoteProbe.SHOOT_START);
+    } else if (mode.startsWith('stop')) {
+      const fc = mode.length > 4 ? Number(mode.slice(4)) : 1;
+      task = BleRemoteProbe.shootingEvent(Number.isNaN(fc) ? 1 : fc, BleRemoteProbe.SHOOT_STOP);
+    } else if (mode === 'play') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_PLAYBACK, '回放');
+    } else if (mode === 'menu') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_MENU, '菜单');
+    } else if (mode === 'up') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_UP, '上');
+    } else if (mode === 'down') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_DOWN, '下');
+    } else if (mode === 'left') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_LEFT, '左');
+    } else if (mode === 'right') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_RIGHT, '右');
+    } else if (mode === 'ok') {
+      task = BleRemoteProbe.keyTap(BleRemoteProbe.KEY_OK, '确定');
+    } else if (mode === 'cable') {
+      task = BleRemoteProbe.cable();
     } else {
       task = BleRemoteProbe.feature();
     }
@@ -247,6 +286,56 @@ export class BleRemoteProbe {
     if (!await BleRemoteProbe.write(link, '录像 OFF',
       BleRemoteProbe.frame(BleRemoteProbe.OP_KEY, [BleRemoteProbe.KEY_MOVIE, BleRemoteProbe.OP_OFF]))) return;
     await BleRemoteProbe.sleep(1500);
+  }
+
+  /**
+   * 特殊拍摄启停（1.71.0）：`06 00 14 00 <functionCode> <controlInfo>`。
+   *
+   * functionCode：1 间隔定时、2 延时摄影、3 焦点移位；controlInfo 1 开始、2 停止。
+   * 相机按自己菜单里的间隔/张数拍，所以开始前要在相机上把「间隔定时拍摄」设好。
+   */
+  private static async shootingEvent(fc: number, control: number): Promise<void> {
+    const link = await BleRemoteProbe.prepare();
+    if (link === null) return;
+    await BleRemoteProbe.logStatus(link, '开始前');
+    const label = `特殊拍摄 fc=${fc} control=${control}`;
+    if (!await BleRemoteProbe.write(link, label,
+      BleRemoteProbe.frame(BleRemoteProbe.OP_SHOOTING_EVENT, [fc, control]))) return;
+    await BleRemoteProbe.sleep(2500);
+    await BleRemoteProbe.logStatus(link, '2.5 秒后');
+    BleRemoteProbe.log('特殊拍摄结束（响应码 1 = 成功、4 = 相机拒绝：多半没设间隔）');
+  }
+
+  /** 单键轻点（1.71.0）：ON → 90ms → OFF，和页面里 `bleRemoteKeyTap` 同一条序列。 */
+  private static async keyTap(key: number, label: string): Promise<void> {
+    const link = await BleRemoteProbe.prepare();
+    if (link === null) return;
+    await BleRemoteProbe.logStatus(link, `${label}前`);
+    if (!await BleRemoteProbe.press(link, key, BleRemoteProbe.OP_ON, `${label} ON`, 90)) return;
+    await BleRemoteProbe.press(link, key, BleRemoteProbe.OP_OFF, `${label} OFF`, 1200);
+    await BleRemoteProbe.logStatus(link, `${label}后`);
+  }
+
+  /** 线缆接入（1.71.0）：读 0x200a 并订通知，插拔数据线看有没有 ←。 */
+  private static async cable(): Promise<void> {
+    const link = CameraService.getInstance().getBleLinkForProbe();
+    if (link === null || !link.connected) {
+      BleRemoteProbe.log('BLE 未连接：先把相机连上（蓝牙待机）再跑');
+      return;
+    }
+    link.onAnyNotification = (uuid: string, value: Uint8Array): void => {
+      BleRemoteProbe.log(`← ${BleRemoteProbe.short(uuid)} ${BleRemoteProbe.hex(value)}`);
+    };
+    const r = await link.readWithReason(BleRemoteProbe.CH_CABLE);
+    BleRemoteProbe.log(r.value === null
+      ? `读 0x200a 失败: ${r.error}`
+      : `0x200a = ${BleRemoteProbe.hex(r.value)}（bit0 = 数据线已插入）`);
+    try {
+      await link.enableNotification(BleRemoteProbe.CH_CABLE);
+      BleRemoteProbe.log('0x200a 通知已开：插/拔数据线看 ← 有没有变化');
+    } catch (err) {
+      BleRemoteProbe.log(`0x200a 通知开启失败: ${(err as Error).message}`);
+    }
   }
 
   private static async status(): Promise<void> {

@@ -136,6 +136,51 @@ const BLE_INFO_REFRESH_MS = 300000;
 /** 蓝牙遥控按键值（官方 `KeyCode`）。 */
 const BLE_KEY_HALF = 2;
 const BLE_KEY_FULL = 3;
+const BLE_KEY_MENU = 5;
+const BLE_KEY_PLAYBACK = 6;
+const BLE_KEY_OK = 7;
+const BLE_KEY_UP = 8;
+const BLE_KEY_DOWN = 9;
+const BLE_KEY_RIGHT = 10;
+const BLE_KEY_LEFT = 11;
+const BLE_KEY_ZOOM_IN = 12;
+const BLE_KEY_ZOOM_OUT = 13;
+/** 特殊拍摄的 functionCode（`0x14` 请求体第一个字节）。 */
+const BLE_SHOOT_INTERVAL = 1;
+const BLE_SHOOT_LAPSE = 2;
+const BLE_SHOOT_FOCUS_SHIFT = 3;
+/** `0x14` 的 controlInfo：0 DEFAULT、1 START、2 STOP、3 PAUSE。 */
+const BLE_SHOOT_START = 1;
+const BLE_SHOOT_STOP = 2;
+/**
+ * 遥控按键「点一下」的按住时长（ms）。
+ *
+ * 官方远程界面对方向/菜单/回放键绑的是 `onTouch`：按下发 ON、抬起发 OFF。
+ * 手机上没有物理按键行程，固定按这么久最接近一次轻点；太短相机来不及处理，
+ * 太长方向键会连跳。
+ */
+const BLE_KEY_TAP_MS = 90;
+
+/**
+ * 特殊拍摄的三种类型（就是 `0x14` 的 functionCode）。
+ *
+ * 页面不要写 1/2/3，一律用这里的名字：`setBleRemoteSpecial` 收到它之后
+ * 原样发给相机，`0` 表示还没选。
+ */
+export class BleSpecialShoot {
+  static readonly None: number = 0;
+  static readonly Interval: number = BLE_SHOOT_INTERVAL;
+  static readonly Lapse: number = BLE_SHOOT_LAPSE;
+  static readonly FocusShift: number = BLE_SHOOT_FOCUS_SHIFT;
+}
+
+/** 菜单方向盘的方向（页面与方向键一一对应，不传数字）。 */
+export class BleRemoteDirection {
+  static readonly Up: number = 0;
+  static readonly Down: number = 1;
+  static readonly Left: number = 2;
+  static readonly Right: number = 3;
+}
 /**
  * 直连「缓存热点」的等上链时限（1.68.0）。
  *
@@ -455,6 +500,24 @@ export class CameraService {
   /** bit0 释放受限 / bit1 录像受限 / bit2 照片错误 / bit3 录像错误。 */
   @Trace bleRemoteRestriction: number = 0;
   @Trace bleRemoteFocus: boolean = false;
+  /**
+   * 特殊拍摄（1.71.0）：0 未选、1 间隔定时、2 延时摄影、3 焦点移位。
+   *
+   * 选中项只是手机上的「上次选的那一种」，真正的拍摄参数在相机菜单里。
+   * `Running` 是本地记账：`0x14 START` 成功后为真，直到 STOP 或退出遥控；
+   * Z50II 的 `0x2020` capture 位在间隔拍摄时也可能一直是 0，不能只靠它。
+   */
+  @Trace bleRemoteSpecial: number = 0;
+  @Trace bleRemoteSpecialRunning: boolean = false;
+  /** 数据线已插入（0x200a bit0）：相机多半会切到 USB 模式，蓝牙待机会断。 */
+  @Trace bleCableAttached: boolean = false;
+  /**
+   * 遥控工具区（特殊拍摄 / 回放 / 菜单）的错误。
+   *
+   * 与 `bleRemoteError` 分开：后者是「进不了遥控」，只在页面主状态行显示；
+   * 这个只在对应半模态里显示，不能把已经连上遥控的页面顶成错误态。
+   */
+  @Trace bleRemoteToolError: string = '';
   /** 断链后正在自动重连（相机会休眠，链路断了自己爬起来）。 */
   @Trace bleReconnecting: boolean = false;
   /**
@@ -476,6 +539,17 @@ export class CameraService {
   private bleInfoLoggedBattery: boolean = false;
   private bleInfoLoggedPower: boolean = false;
   private bleInfoLoggedFirmware: boolean = false;
+  /** 线缆接入通知是否已订阅（每次连接只开一次）。 */
+  private bleCableNotifyOn: boolean = false;
+  /**
+   * 遥控请求的串行队列（1.71.0）。
+   *
+   * `0x2021` 上每一笔请求都靠**同一条特征的 indication** 回执，而链路里只有一个
+   * `remotePending` 槽位。两笔并发（典型是快门按下还没收完、手指已经抬起）
+   * 会把前一笔的回执槽覆盖掉，前一笔只能等超时，日志里还会多出一串假的 -1。
+   * 所有遥控写入都从这里排队，保证「发一笔、等回执、再发下一笔」。
+   */
+  private remoteQueue: Promise<void> = Promise.resolve();
   /**
    * 当前这轮 BLE 扫描属于哪个链路代次；-1 表示没有扫描。
    *
@@ -2314,6 +2388,10 @@ export class CameraService {
               this.bleServices = [];
               this.bleSerial = '';
               this.stopBleInfoWatch();
+              // 通知订阅跟着链路作废，重连后由 `refreshBleInfo` 重新订一次。
+              // **不清 `bleCableAttached`**：数据线插着时相机会切走、链路正好
+              // 断在这里，那正是这条提示要解释的场景；重连读到新值再更新。
+              this.bleCableNotifyOn = false;
               // 链路断了，相机那边的遥控会话也随之结束；本地状态必须归位。
               this.bleRemoteActive = false;
               this.bleRemoteEntering = false;
@@ -2411,6 +2489,10 @@ export class CameraService {
       SavedCameraStore.getInstance().rememberActive();
       this.log.add(`BLE 配对成功，相机序列号 ${serial}`);
 
+      // 线缆接入（0x200a）：相机插上数据线时给相机页一句提醒。
+      this.bleLink.onCableAttachment = (attached: boolean) => {
+        this.applyCableAttachment(attached);
+      };
       // 断链自动重连：相机会休眠，链路断了自己爬起来（用保存的身份复用握手）。
       this.bleLink.onReconnected = (serial: string) => {
         this.bleSerial = serial;
@@ -2581,6 +2663,8 @@ export class CameraService {
     this.bleBatteryPercent = -1;
     this.blePowerState = -1;
     this.bleFirmware = '';
+    this.bleCableAttached = false;
+    this.bleCableNotifyOn = false;
     this.bleInfoFirmwareTried = false;
     this.bleInfoLoggedBattery = false;
     this.bleInfoLoggedPower = false;
@@ -2652,6 +2736,23 @@ export class CameraService {
           this.log.add(`BLE 固件版本读取失败: ${fw.error}`);
         }
       }
+
+      // 线缆接入（0x200a，1.71.0）：插着数据线时相机多半会切到 USB 模式，
+      // 蓝牙待机会断。先读一次拿到当前值，再把通知订上（插/拔立刻能看见）。
+      await this.bleInfoSleep(250);
+      const cable = await link.readCable();
+      if (cable.value !== null) {
+        this.applyCableAttachment(BleCameraLink.parseCableAttachment(cable.value));
+      }
+      if (!this.bleCableNotifyOn) {
+        try {
+          await link.enableCableNotify();
+          this.bleCableNotifyOn = true;
+        } catch (err) {
+          // 订阅失败不影响定时读取，只是插拔不能立刻反映出来。下次刷新再试。
+          this.log.add(`BLE 线缆通知订阅失败: ${(err as Error).message}`);
+        }
+      }
     } finally {
       this.bleInfoBusy = false;
       if (this.bleConnected) {
@@ -2666,7 +2767,23 @@ export class CameraService {
     });
   }
 
-  // ---- 蓝牙遥控（1.70.0）----
+  // ---- 蓝牙遥控（1.70.0，1.71.0 加特殊拍摄 / 回放 / 菜单）----
+
+  /**
+   * 把一笔遥控操作排进串行队列，返回它自己的结果。
+   *
+   * 队列只保证顺序，不吞错误：调用方自己 catch。前一笔失败不会卡住后一笔
+   * （失败已经结束，`run` 的 reject 由调用方处理，队列的续体总是 resolved）。
+   */
+  private enqueueRemote<T>(op: () => Promise<T>): Promise<T> {
+    const run: Promise<T> = this.remoteQueue.then(() => op());
+    this.remoteQueue = run.then((): void => {
+      // 队列只负责顺序，结果交给调用方
+    }, (): void => {
+      // 同上：失败也不能让队列停在 rejected 状态
+    });
+    return run;
+  }
 
   /**
    * 进入蓝牙遥控。
@@ -2690,7 +2807,7 @@ export class CameraService {
         this.applyRemoteStatus(status);
       };
       await link.enableRemoteIndications();
-      const code = await link.enterRemote();
+      const code = await this.enqueueRemote<number>(() => link.enterRemote());
       // 5 = ALREADY_IN_PROGRESS：相机以前就停在遥控模式，直接当作已进入。
       if (code !== 1 && code !== 5) {
         this.bleRemoteError = L10n.tr('camera_remote_enter_failed');
@@ -2720,8 +2837,19 @@ export class CameraService {
     if (link !== null) {
       link.onRemoteStatus = (_status: BleRemoteStatus) => {};
       if (wasActive && link.connected) {
+        // 相机侧的间隔/延时是先按下的那条命令开的，退出遥控前先叫停，
+        // 免得用户离开页面后相机还在按自己的间隔继续拍。失败不阻断退出。
+        if (this.bleRemoteSpecialRunning) {
+          const fc = this.bleRemoteSpecial;
+          try {
+            await this.enqueueRemote<number>(
+              () => link.remoteShootingEvent(fc, BLE_SHOOT_STOP));
+          } catch (_err) {
+            // 相机已经不在遥控模式时这一笔必然失败，忽略
+          }
+        }
         try {
-          const code = await link.exitRemote();
+          const code = await this.enqueueRemote<number>(() => link.exitRemote());
           this.log.add(`蓝牙遥控: 退出（code=${code}）`);
         } catch (err) {
           this.log.add(`蓝牙遥控: 退出失败 ${(err as Error).message}`);
@@ -2736,7 +2864,7 @@ export class CameraService {
     const link = this.bleLink;
     if (link === null || !this.bleRemoteActive) return;
     try {
-      await link.remoteKey(BLE_KEY_HALF, on);
+      await this.enqueueRemote<number>(() => link.remoteKey(BLE_KEY_HALF, on));
     } catch (err) {
       this.bleRemoteError = (err as Error).message;
       this.log.add(`蓝牙遥控: 半按失败 ${this.bleRemoteError}`);
@@ -2755,8 +2883,8 @@ export class CameraService {
     const link = this.bleLink;
     if (link === null || !this.bleRemoteActive) return;
     try {
-      await link.remoteKey(BLE_KEY_HALF, true);
-      const code = await link.remoteKey(BLE_KEY_FULL, true);
+      await this.enqueueRemote<number>(() => link.remoteKey(BLE_KEY_HALF, true));
+      const code = await this.enqueueRemote<number>(() => link.remoteKey(BLE_KEY_FULL, true));
       if (code !== 1) {
         this.bleRemoteError = L10n.tr('camera_remote_release_failed');
         this.log.add(`蓝牙遥控: 快门失败 code=${code}`);
@@ -2774,11 +2902,169 @@ export class CameraService {
     const link = this.bleLink;
     if (link === null || !this.bleRemoteActive) return;
     try {
-      await link.remoteKey(BLE_KEY_FULL, false);
-      await link.remoteKey(BLE_KEY_HALF, false);
+      await this.enqueueRemote<number>(() => link.remoteKey(BLE_KEY_FULL, false));
+      await this.enqueueRemote<number>(() => link.remoteKey(BLE_KEY_HALF, false));
     } catch (err) {
       this.log.add(`蓝牙遥控: 松开快门失败 ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * 轻点一个遥控按键（方向 / 菜单 / 回放 / 变焦）。
+   *
+   * 官方远程界面对这些键绑的是 `onTouch`：按下发 ON、抬起发 OFF。手机没有
+   * 按键行程，所以固定按住 `BLE_KEY_TAP_MS` 再放——既像一次轻点，也不会让
+   * 方向键连跳。整段 ON→停→OFF 作为一个队列操作发出去，中途不会被别的请求
+   * 插进来把某一半丢掉。
+   */
+  private async bleRemoteKeyTap(key: number, label: string): Promise<boolean> {
+    const link = this.bleLink;
+    if (link === null || !this.bleRemoteActive) return false;
+    try {
+      const code = await this.enqueueRemote<number>(async (): Promise<number> => {
+        const press = await link.remoteKey(key, true);
+        await this.bleInfoSleep(BLE_KEY_TAP_MS);
+        await link.remoteKey(key, false);
+        return press;
+      });
+      if (code !== 1) {
+        this.bleRemoteToolError = L10n.tr('camera_remote_key_failed', code);
+        this.log.add(`蓝牙遥控: ${label}失败 code=${code}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      this.bleRemoteToolError = (err as Error).message;
+      this.log.add(`蓝牙遥控: ${label}异常 ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /** 回放翻页：`previous` 为真发 SELECTOR_LEFT，否则 SELECTOR_RIGHT。 */
+  async bleRemotePlaybackStep(previous: boolean): Promise<void> {
+    await this.bleRemoteKeyTap(previous ? BLE_KEY_LEFT : BLE_KEY_RIGHT,
+      previous ? '回放上一张' : '回放下一张');
+  }
+
+  /** 回放放大 / 缩小（PLAYBACK_ZOOM_IN / OUT）。 */
+  async bleRemotePlaybackZoom(zoomIn: boolean): Promise<void> {
+    await this.bleRemoteKeyTap(zoomIn ? BLE_KEY_ZOOM_IN : BLE_KEY_ZOOM_OUT,
+      zoomIn ? '回放放大' : '回放缩小');
+  }
+
+  /** 菜单方向键（`dir` 用 `BleRemoteDirection` 的四个值）。 */
+  async bleRemoteMenuMove(dir: number): Promise<void> {
+    let key = BLE_KEY_UP;
+    let label = '菜单上';
+    if (dir === BleRemoteDirection.Down) {
+      key = BLE_KEY_DOWN;
+      label = '菜单下';
+    } else if (dir === BleRemoteDirection.Left) {
+      key = BLE_KEY_LEFT;
+      label = '菜单左';
+    } else if (dir === BleRemoteDirection.Right) {
+      key = BLE_KEY_RIGHT;
+      label = '菜单右';
+    }
+    await this.bleRemoteKeyTap(key, label);
+  }
+
+  /** 菜单确定键（SELECTOR_OK）。 */
+  async bleRemoteMenuOk(): Promise<void> {
+    await this.bleRemoteKeyTap(BLE_KEY_OK, '菜单确定');
+  }
+
+  /** 半按一下（不拍）：官方靠这一下把相机从回放/菜单唤回拍摄。 */
+  async bleRemoteHalfTap(): Promise<boolean> {
+    const link = this.bleLink;
+    if (link === null || !this.bleRemoteActive) return false;
+    try {
+      await this.enqueueRemote<number>(async (): Promise<number> => {
+        const press = await link.remoteKey(BLE_KEY_HALF, true);
+        await this.bleInfoSleep(150);
+        await link.remoteKey(BLE_KEY_HALF, false);
+        return press;
+      });
+      this.log.add('蓝牙遥控: 半按一下，相机回到拍摄模式');
+      return true;
+    } catch (err) {
+      this.bleRemoteToolError = (err as Error).message;
+      this.log.add(`蓝牙遥控: 半按唤回失败 ${(err as Error).message}`);
+      return false;
+    }
+  }
+
+  /** 进入相机回放（发 PLAYBACK 键，官方 `cw` 切 CameraMode 就是这一笔）。 */
+  async bleRemoteEnterPlayback(): Promise<void> {
+    this.bleRemoteToolError = '';
+    await this.bleRemoteKeyTap(BLE_KEY_PLAYBACK, '进入回放');
+  }
+
+  /** 打开/关闭相机菜单（发 MENU 键）。 */
+  async bleRemoteToggleMenu(): Promise<void> {
+    this.bleRemoteToolError = '';
+    await this.bleRemoteKeyTap(BLE_KEY_MENU, '菜单键');
+  }
+
+  /** 选择特殊拍摄类型（1 间隔定时 / 2 延时摄影 / 3 焦点移位）。 */
+  setBleRemoteSpecial(kind: number): void {
+    if (this.bleRemoteSpecialRunning) return;
+    this.bleRemoteSpecial = kind;
+    this.bleRemoteToolError = '';
+  }
+
+  /**
+   * 开始特殊拍摄（`0x14` + START）。
+   *
+   * 相机用自己菜单里的间隔、张数、起始时间，手机这边没有参数可配。响应码
+   * 4 = OPERATION_FAILED：多半是相机上没把间隔定时打开，或者不在拍摄模式。
+   */
+  async bleRemoteSpecialStart(): Promise<void> {
+    const link = this.bleLink;
+    const fc = this.bleRemoteSpecial;
+    if (link === null || !this.bleRemoteActive || fc === 0) return;
+    this.bleRemoteToolError = '';
+    try {
+      const code = await this.enqueueRemote<number>(
+        () => link.remoteShootingEvent(fc, BLE_SHOOT_START));
+      if (code !== 1) {
+        this.bleRemoteToolError = L10n.tr('camera_remote_special_start_failed', code);
+        this.log.add(`蓝牙遥控: 特殊拍摄开始失败 code=${code}`);
+        return;
+      }
+      this.bleRemoteSpecialRunning = true;
+      this.log.add(`蓝牙遥控: 特殊拍摄已开始（type=${fc}）`);
+    } catch (err) {
+      this.bleRemoteToolError = (err as Error).message;
+      this.log.add(`蓝牙遥控: 特殊拍摄开始异常 ${(err as Error).message}`);
+    }
+  }
+
+  /** 停止特殊拍摄（`0x14` + STOP）。相机本来就没在拍时也发，结果不报错。 */
+  async bleRemoteSpecialStop(): Promise<void> {
+    const link = this.bleLink;
+    const fc = this.bleRemoteSpecial;
+    if (link === null || !this.bleRemoteActive || fc === 0) return;
+    this.bleRemoteToolError = '';
+    try {
+      const code = await this.enqueueRemote<number>(
+        () => link.remoteShootingEvent(fc, BLE_SHOOT_STOP));
+      this.bleRemoteSpecialRunning = false;
+      if (code !== 1) {
+        this.log.add(`蓝牙遥控: 特殊拍摄停止 code=${code}`);
+      } else {
+        this.log.add('蓝牙遥控: 特殊拍摄已停止');
+      }
+    } catch (err) {
+      this.bleRemoteSpecialRunning = false;
+      this.bleRemoteToolError = (err as Error).message;
+      this.log.add(`蓝牙遥控: 特殊拍摄停止异常 ${(err as Error).message}`);
+    }
+  }
+
+  /** 清掉工具区的错误（打开另一个半模态时调用）。 */
+  clearBleRemoteToolError(): void {
+    this.bleRemoteToolError = '';
   }
 
   private applyRemoteStatus(status: BleRemoteStatus): void {
@@ -2793,6 +3079,15 @@ export class CameraService {
     this.bleRemoteCapture = 0;
     this.bleRemoteRestriction = 0;
     this.bleRemoteFocus = false;
+    this.bleRemoteSpecialRunning = false;
+    this.bleRemoteToolError = '';
+  }
+
+  /** 线缆接入状态（0x200a）：只在真的变了时记一行日志。 */
+  private applyCableAttachment(attached: boolean): void {
+    if (this.bleCableAttached === attached) return;
+    this.bleCableAttached = attached;
+    this.log.add(`BLE 线缆接入: ${attached ? '已插入数据线' : '数据线已拔出'}`);
   }
 
   /** 写完一帧位置后读回 0x2007：全 0 = 相机没记下来，跟我们一致 = 存住了。 */

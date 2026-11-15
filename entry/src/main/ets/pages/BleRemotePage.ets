@@ -1,11 +1,14 @@
 import { PageHeader } from '../components/PageHeader';
-import { CameraService } from '../services/CameraService';
+import { BleRemoteDirection, BleSpecialShoot, CameraService } from '../services/CameraService';
 import { L10n } from '../utils/L10n';
-import { CardShadow, FontSize } from '../utils/UiTokens';
+import { WindowUtils } from '../utils/WindowUtils';
+import { CardShadow, FontSize, IconSize, RowHeight } from '../utils/UiTokens';
 import { Haptics } from '../utils/Haptics';
+import { GlassEffect } from '../utils/GlassEffect';
+import { uiMaterial } from '@kit.ArkUI';
 
 /**
- * 蓝牙遥控拍摄（1.70.0）。
+ * 蓝牙遥控拍摄（1.70.0，1.71.0 加工具区）。
  *
  * 只有蓝牙模式、已配对并连着相机时才会进来。进入页面 = 写 `0x11=1`，页面
  * 消失 = 写 `0x11=0`：相机在遥控模式下会**锁住回放与菜单**，不退出的话用户
@@ -14,6 +17,15 @@ import { Haptics } from '../utils/Haptics';
  * 交互照官方 SnapBridge：按下 = 半按对焦，松手 = 半按 OFF + 全按 ON 触发；
  * 全按 OFF 由服务层在 600ms 后补一笔复位。状态从 `0x2020` 的指示来，页面只用
  * `CameraService` 的 @Trace 字段，不直接碰 GATT。
+ *
+ * 工具区四件事（1.71.0）：
+ * - **录像**：只放入口，禁用并标「尚未开发」（用户明确要求先摆位、不实现）；
+ * - **特殊拍摄**：`0x14` 启停相机侧的间隔定时 / 延时摄影 / 焦点移位；
+ * - **相机回放**：`PLAYBACK` 进回放，方向键翻页、变焦键放大缩小；
+ * - **相机菜单**：`MENU` 开关菜单，方向键 + 确定键操作。
+ *
+ * 后三件都走同一个半模态容器（`bindSheet`），因为快门才是这一页的主角：
+ * 面板收起来时页面结构完全不变，只多一张工具卡。
  */
 @Builder
 export function BleRemotePageBuilder() {
@@ -25,6 +37,10 @@ export struct BleRemotePage {
   private pageInfos: NavPathStack = new NavPathStack();
   @Local svc: CameraService = CameraService.getInstance();
   @Local pressed: boolean = false;
+  /** 三个工具半模态各自独立开关：同一次只会有一个是 true。 */
+  @Local specialSheetOpen: boolean = false;
+  @Local playSheetOpen: boolean = false;
+  @Local menuSheetOpen: boolean = false;
 
   aboutToAppear(): void {
     this.enter();
@@ -41,6 +57,17 @@ export struct BleRemotePage {
     this.svc.startBleRemote().catch((_e: Error) => {
       // 错误原因服务层已经写进 bleRemoteError
     });
+  }
+
+  /**
+   * 底部手势条高度（vp）。
+   *
+   * 窗口是全屏布局，内容会一直铺到手势条下面，页面末尾的说明文字必须自己
+   * 让开这一截，否则最后一行会被手势条压住。
+   */
+  private navIndicatorVp(): number {
+    const px = WindowUtils.navigationIndicatorHeightPx;
+    return px > 0 ? this.getUIContext().px2vp(px) : 0;
   }
 
   private subtitle(): ResourceStr {
@@ -60,6 +87,16 @@ export struct BleRemotePage {
     const main = this.svc.bleRemoteMain;
     if (main !== 1 && main !== -1) return false;
     return (this.svc.bleRemoteRestriction & 0x05) === 0;
+  }
+
+  /** 相机是不是停在回放模式（`0x2020` main = 2）。 */
+  private inPlayback(): boolean {
+    return this.svc.bleRemoteActive && this.svc.bleRemoteMain === 2;
+  }
+
+  /** 相机是不是停在菜单里（`0x2020` main = 3）。 */
+  private inMenu(): boolean {
+    return this.svc.bleRemoteActive && this.svc.bleRemoteMain === 3;
   }
 
   private statusText(): ResourceStr {
@@ -172,6 +209,353 @@ export struct BleRemotePage {
     .onTouch((event: TouchEvent) => { this.onShutterTouch(event); })
   }
 
+  /**
+   * 工具区：四行入口，点开各自的半模态。
+   *
+   * 遥控还没进去时整块置灰但**不消失**：页面布局从一开始就稳定，不会在
+   * `0x11=1` 回来的一瞬间把快门顶走。
+   */
+  @Builder
+  ToolGroup() {
+    Column() {
+      Text($r('app.string.camera_remote_tool_group'))
+        .fontSize(FontSize.Section)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+        .padding({ left: 4, bottom: 2 })
+
+      RemoteToolRow({
+        label: $r('app.string.camera_remote_movie'),
+        badge: $r('app.string.camera_remote_movie_desc'),
+        disabled: true
+      })
+      RemoteToolRow({
+        label: $r('app.string.camera_remote_special'),
+        subtitle: $r('app.string.camera_remote_special_desc'),
+        disabled: !this.svc.bleRemoteActive,
+        onTap: () => { this.openSpecial(); }
+      })
+      RemoteToolRow({
+        label: $r('app.string.camera_remote_playback'),
+        subtitle: $r('app.string.camera_remote_playback_desc'),
+        disabled: !this.svc.bleRemoteActive,
+        onTap: () => {
+          this.svc.clearBleRemoteToolError();
+          this.playSheetOpen = true;
+        }
+      })
+      RemoteToolRow({
+        label: $r('app.string.camera_remote_menu'),
+        subtitle: $r('app.string.camera_remote_menu_desc'),
+        disabled: !this.svc.bleRemoteActive,
+        last: true,
+        onTap: () => {
+          this.svc.clearBleRemoteToolError();
+          this.menuSheetOpen = true;
+        }
+      })
+    }
+    .width('100%')
+  }
+
+  private openSpecial(): void {
+    this.svc.clearBleRemoteToolError();
+    if (this.svc.bleRemoteSpecial === BleSpecialShoot.None) {
+      // 默认落在最常用的间隔定时上，省一次点击；真正的间隔/张数在相机菜单里。
+      this.svc.setBleRemoteSpecial(BleSpecialShoot.Interval);
+    }
+    this.specialSheetOpen = true;
+  }
+
+  /** 半模态统一外观：底部、贴合内容高度、系统标题区带关闭键。 */
+  private toolSheetOptions(title: ResourceStr): SheetOptions {
+    const opts: SheetOptions = {
+      height: SheetSize.FIT_CONTENT,
+      preferType: SheetType.BOTTOM,
+      dragBar: true,
+      showClose: true,
+      title: { title: title }
+    };
+    if (GlassEffect.isEnabled()) {
+      opts.systemMaterial = GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+        style: uiMaterial.ImmersiveStyle.THICK
+      }));
+    } else {
+      opts.backgroundColor = $r('app.color.bg_surface');
+    }
+    return opts;
+  }
+
+  /** 特殊拍摄：选一种，然后开始/停止。 */
+  @Builder
+  SpecialSheet() {
+    Column({ space: 16 }) {
+      Text($r('app.string.camera_remote_special_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      Column() {
+        this.SpecialOption(BleSpecialShoot.Interval,
+          $r('app.string.camera_remote_special_interval'), false)
+        this.SpecialOption(BleSpecialShoot.Lapse,
+          $r('app.string.camera_remote_special_lapse'), false)
+        this.SpecialOption(BleSpecialShoot.FocusShift,
+          $r('app.string.camera_remote_special_focus'), true)
+      }
+      .width('100%')
+
+      if (this.svc.bleRemoteSpecialRunning) {
+        Text($r('app.string.camera_remote_special_running'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.status_connected'))
+          .width('100%')
+      } else if (!this.canShoot()) {
+        Text($r('app.string.camera_remote_special_need_shooting'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
+
+      if (this.svc.bleRemoteToolError !== '') {
+        Text(this.svc.bleRemoteToolError)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
+
+      RemoteSheetButton({
+        label: this.svc.bleRemoteSpecialRunning
+          ? $r('app.string.camera_remote_special_stop')
+          : $r('app.string.camera_remote_special_start'),
+        danger: this.svc.bleRemoteSpecialRunning,
+        active: this.svc.bleRemoteSpecialRunning || this.canShoot(),
+        onTap: () => {
+          Haptics.tap();
+          if (this.svc.bleRemoteSpecialRunning) {
+            this.svc.bleRemoteSpecialStop();
+          } else {
+            this.svc.bleRemoteSpecialStart();
+          }
+        }
+      })
+    }
+    .width('100%')
+    .padding({ left: 24, right: 24, top: 4, bottom: 24 })
+  }
+
+  /** 特殊拍摄的一个选项行（单选）。 */
+  @Builder
+  SpecialOption(kind: number, label: ResourceStr, last: boolean) {
+    Row() {
+      Text(label)
+        .fontSize(FontSize.Body)
+        .fontColor($r('app.color.text_primary'))
+      Blank()
+      if (this.svc.bleRemoteSpecial === kind) {
+        SymbolGlyph($r('sys.symbol.checkmark'))
+          .fontSize(IconSize.Body)
+          .fontColor([$r('app.color.primary')])
+      }
+    }
+    .width('100%')
+    .height(RowHeight.Single)
+    .border({ width: { bottom: last ? 0 : 0.5 }, color: $r('app.color.divider') })
+    .opacity(this.svc.bleRemoteSpecialRunning ? 0.4 : 1)
+    .onClick(() => {
+      if (this.svc.bleRemoteSpecialRunning) return;
+      Haptics.tap();
+      this.svc.setBleRemoteSpecial(kind);
+    })
+  }
+
+  /** 相机回放：进回放 → 翻页/放大 → 回拍摄。 */
+  @Builder
+  PlaybackSheet() {
+    Column({ space: 16 }) {
+      Text($r('app.string.camera_remote_playback_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      if (this.inPlayback()) {
+        Row({ space: 8 }) {
+          RemoteKeyButton({
+            label: $r('app.string.camera_remote_playback_prev'),
+            onTap: () => {
+              Haptics.tap();
+              this.svc.bleRemotePlaybackStep(true);
+            }
+          })
+          RemoteKeyButton({
+            label: $r('app.string.camera_remote_playback_zoom_out'),
+            onTap: () => {
+              Haptics.tap();
+              this.svc.bleRemotePlaybackZoom(false);
+            }
+          })
+          RemoteKeyButton({
+            label: $r('app.string.camera_remote_playback_zoom_in'),
+            onTap: () => {
+              Haptics.tap();
+              this.svc.bleRemotePlaybackZoom(true);
+            }
+          })
+          RemoteKeyButton({
+            label: $r('app.string.camera_remote_playback_next'),
+            onTap: () => {
+              Haptics.tap();
+              this.svc.bleRemotePlaybackStep(false);
+            }
+          })
+        }
+        .width('100%')
+
+        RemoteSheetButton({
+          label: $r('app.string.camera_remote_playback_exit'),
+          active: this.svc.bleRemoteActive,
+          onTap: () => {
+            Haptics.tap();
+            // 官方切回拍摄模式发的是「半按 ON」；这里补一笔 OFF，等同一次半按。
+            this.svc.bleRemoteHalfTap();
+          }
+        })
+      } else {
+        RemoteSheetButton({
+          label: $r('app.string.camera_remote_playback_enter'),
+          active: this.svc.bleRemoteActive,
+          onTap: () => {
+            Haptics.tap();
+            this.svc.bleRemoteEnterPlayback();
+          }
+        })
+        Text($r('app.string.camera_remote_playback_need_mode'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
+
+      if (this.svc.bleRemoteToolError !== '') {
+        Text(this.svc.bleRemoteToolError)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding({ left: 24, right: 24, top: 4, bottom: 24 })
+  }
+
+  /** 相机菜单：开关菜单 + 方向盘。 */
+  @Builder
+  MenuSheet() {
+    Column({ space: 16 }) {
+      Text($r('app.string.camera_remote_menu_hint'))
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      if (this.inMenu()) {
+        Column({ space: 10 }) {
+          Row() {
+            this.DirKey('↑', BleRemoteDirection.Up)
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+
+          Row({ space: 10 }) {
+            this.DirKey('←', BleRemoteDirection.Left)
+            this.OkKey()
+            this.DirKey('→', BleRemoteDirection.Right)
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+
+          Row() {
+            this.DirKey('↓', BleRemoteDirection.Down)
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+        }
+        .width('100%')
+
+        RemoteSheetButton({
+          label: $r('app.string.camera_remote_menu_close'),
+          active: this.svc.bleRemoteActive,
+          onTap: () => {
+            Haptics.tap();
+            this.svc.bleRemoteToggleMenu();
+          }
+        })
+      } else {
+        RemoteSheetButton({
+          label: $r('app.string.camera_remote_menu_open'),
+          active: this.svc.bleRemoteActive,
+          onTap: () => {
+            Haptics.tap();
+            this.svc.bleRemoteToggleMenu();
+          }
+        })
+        Text($r('app.string.camera_remote_menu_need_mode'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+      }
+
+      if (this.svc.bleRemoteToolError !== '') {
+        Text(this.svc.bleRemoteToolError)
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.status_error'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding({ left: 24, right: 24, top: 4, bottom: 24 })
+  }
+
+  /** 方向键：文字箭头，圆形中性底。 */
+  @Builder
+  DirKey(arrow: string, dir: number) {
+    Button(arrow)
+      .width(56)
+      .height(56)
+      .fontSize(FontSize.Title)
+      .fontColor($r('app.color.text_primary'))
+      .backgroundColor($r('app.color.action_neutral_fill'))
+      .borderRadius(28)
+      .onClick(() => {
+        Haptics.tap();
+        this.svc.bleRemoteMenuMove(dir);
+      })
+  }
+
+  /** 确定键。 */
+  @Builder
+  OkKey() {
+    Button($r('app.string.camera_remote_menu_ok'))
+      .width(88)
+      .height(56)
+      .fontSize(FontSize.Body)
+      .fontWeight(FontWeight.Medium)
+      .fontColor($r('app.color.text_primary'))
+      .backgroundColor($r('app.color.action_neutral_fill'))
+      .borderRadius(28)
+      .onClick(() => {
+        Haptics.tap();
+        this.svc.bleRemoteMenuOk();
+      })
+  }
+
   build() {
     NavDestination() {
       Column() {
@@ -202,26 +586,142 @@ export struct BleRemotePage {
               .borderRadius(18)
               .onClick(() => { this.enter(); })
           }
-
-          Text($r('app.string.camera_remote_hint'))
-            .fontSize(FontSize.Caption)
-            .lineHeight(18)
-            .fontColor($r('app.color.text_tertiary'))
-            .textAlign(TextAlign.Center)
-            .width('100%')
         }
         .layoutWeight(1)
         .width('100%')
         .justifyContent(FlexAlign.Center)
-        .padding({ left: 24, right: 24, bottom: 40 })
+        .padding({ left: 24, right: 24 })
+        .bindSheet($$this.playSheetOpen, this.PlaybackSheet(),
+          this.toolSheetOptions($r('app.string.camera_remote_playback_title')))
+
+        Column() {
+          this.ToolGroup()
+        }
+        .width('100%')
+        .padding({ left: 24, right: 24, bottom: 12 })
+        .bindSheet($$this.specialSheetOpen, this.SpecialSheet(),
+          this.toolSheetOptions($r('app.string.camera_remote_special_title')))
+
+        Text($r('app.string.camera_remote_hint'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .padding({ left: 24, right: 24, bottom: 20 + this.navIndicatorVp() })
       }
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.bg_page'))
+      .bindSheet($$this.menuSheetOpen, this.MenuSheet(),
+        this.toolSheetOptions($r('app.string.camera_remote_menu_title')))
     }
     .hideTitleBar(true)
     .onReady((context: NavDestinationContext) => {
       this.pageInfos = context.pathStack;
     })
+  }
+}
+
+/**
+ * 遥控工具行：标题 + 说明 + 右箭头；禁用时整行变灰、没有箭头。
+ *
+ * `badge` 是「尚未开发」这类状态胶囊，用在录像那一行——它永远不可点，
+ * 但接口位置先摆好。
+ */
+@ComponentV2
+struct RemoteToolRow {
+  @Param label: ResourceStr = '';
+  @Param subtitle: ResourceStr = '';
+  @Param badge: ResourceStr = '';
+  @Param disabled: boolean = false;
+  @Param last: boolean = false;
+  @Event onTap: () => void = () => {};
+
+  build() {
+    Row({ space: 8 }) {
+      Column({ space: 2 }) {
+        Row({ space: 6 }) {
+          Text(this.label)
+            .fontSize(FontSize.Body)
+            .fontColor(this.disabled
+              ? $r('app.color.text_tertiary') : $r('app.color.text_primary'))
+          if (this.badge !== '') {
+            Text(this.badge)
+              .fontSize(FontSize.Micro)
+              .fontColor($r('app.color.text_secondary'))
+              .backgroundColor($r('app.color.filter_chip_bg'))
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .borderRadius(6)
+          }
+        }
+        .alignItems(VerticalAlign.Center)
+
+        if (this.subtitle !== '') {
+          Text(this.subtitle)
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_tertiary'))
+            .alignSelf(ItemAlign.Start)
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      if (!this.disabled) {
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(IconSize.Body)
+          .fontColor([$r('app.color.text_tertiary')])
+      }
+    }
+    .width('100%')
+    .height(RowHeight.Double)
+    .border({ width: { bottom: this.last ? 0 : 0.5 }, color: $r('app.color.divider') })
+    .onClick(() => {
+      if (!this.disabled) this.onTap();
+    })
+  }
+}
+
+/** 半模态里的主按钮：实心胶囊，危险操作用红底。 */
+@ComponentV2
+struct RemoteSheetButton {
+  @Param label: ResourceStr = '';
+  @Param danger: boolean = false;
+  @Param active: boolean = true;
+  @Event onTap: () => void = () => {};
+
+  build() {
+    Button(this.label)
+      .width('100%')
+      .height(44)
+      .fontSize(FontSize.Body)
+      .fontWeight(FontWeight.Medium)
+      .fontColor($r('app.color.text_on_primary'))
+      .backgroundColor(this.danger
+        ? $r('app.color.button_danger') : $r('app.color.primary'))
+      .borderRadius(22)
+      .enabled(this.active)
+      .opacity(this.active ? 1 : 0.4)
+      .onClick(() => {
+        if (this.active) this.onTap();
+      })
+  }
+}
+
+/** 半模态里的次要按键：一行四颗等分，中性底。 */
+@ComponentV2
+struct RemoteKeyButton {
+  @Param label: ResourceStr = '';
+  @Event onTap: () => void = () => {};
+
+  build() {
+    Button(this.label)
+      .layoutWeight(1)
+      .height(44)
+      .fontSize(FontSize.Reading)
+      .fontColor($r('app.color.text_primary'))
+      .backgroundColor($r('app.color.action_neutral_fill'))
+      .borderRadius(22)
+      .onClick(() => { this.onTap(); })
   }
 }

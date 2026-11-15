@@ -10,7 +10,8 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
  * 振动极短，提供操作确认感」）。滚动、悬停、普通点击、列表里每一下都不震——
  * 振动一旦铺开就变成噪音，用户会去系统设置里把整台机器的触感关掉。
  *
- * 调用点：相机页切换连接模式（`CameraPage.ModePicker`）、蓝牙遥控快门的按下。
+ * 调用点：相机页切换连接模式（`CameraPage.ModePicker`）、蓝牙遥控快门的按下、
+ * 遥控工具区的单次按键（方向 / 确定 / 回放 / 菜单，1.71.0）。
  */
 export class Haptics {
   private static readonly TAG: string = 'Haptics';

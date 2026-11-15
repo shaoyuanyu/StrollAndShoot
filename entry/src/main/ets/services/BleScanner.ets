@@ -120,6 +120,14 @@ export const NIKON_CHAR_ESTABLISH = '00002005-3dd4-4255-8d62-6dc7b9bd5561';
 export const NIKON_CHAR_TIME = '00002006-3dd4-4255-8d62-6dc7b9bd5561';
 /** 位置（41B）。 */
 export const NIKON_CHAR_GEO = '00002007-3dd4-4255-8d62-6dc7b9bd5561';
+/**
+ * 线缆接入（4B LE 位域，bit0 = 已插数据线；`LSS_CABLE_ATTACHMENT`）。
+ *
+ * 官方 App 的三个接收端都是空实现（`onLssCableAttachment` 直接 return），
+ * 所以这里不照抄它，而是把值透出来给相机页做一句提醒：相机插上数据线后
+ * 通常会切到 USB 模式，蓝牙待机会断。
+ */
+export const NIKON_CHAR_CABLE = '0000200a-3dd4-4255-8d62-6dc7b9bd5561';
 /** 蓝牙遥控状态（indicate，16B；`LSS_STATUS_FOR_CONTROL`）。 */
 export const NIKON_CHAR_REMOTE_STATUS = '00002020-3dd4-4255-8d62-6dc7b9bd5561';
 /** 蓝牙遥控控制点（写请求、从同一条特征 indicate 回响应；`LSS_CONTROL_POINT_FOR_CONTROL`）。 */
@@ -372,6 +380,8 @@ export class BleCameraLink {
     (_uuid: string, _value: Uint8Array) => {};
   /** 遥控状态变化（0x2020 指示）；页面离开时由上层置回空实现。 */
   onRemoteStatus: (status: BleRemoteStatus) => void = (_status: BleRemoteStatus) => {};
+  /** 线缆接入变化（0x200a 通知）；只在待机链路上挂。 */
+  onCableAttachment: (attached: boolean) => void = (_attached: boolean) => {};
   /** 遥控控制点的响应等待（每笔请求只有一条指示）。 */
   private remotePending: PendingChar | null = null;
   /**
@@ -601,6 +611,9 @@ export class BleCameraLink {
             if (uuid === NIKON_CHAR_REMOTE_STATUS) {
               const status = BleCameraLink.parseRemoteStatus(value);
               if (status !== null) this.onRemoteStatus(status);
+            }
+            if (uuid === NIKON_CHAR_CABLE) {
+              this.onCableAttachment(BleCameraLink.parseCableAttachment(value));
             }
             const remote = this.remotePending;
             if (remote !== null && remote.uuid === uuid) {
@@ -1061,6 +1074,22 @@ export class BleCameraLink {
     return this.readWithReason(DEVICE_CHAR_FIRMWARE, DEVICE_INFO_SERVICE);
   }
 
+  /** 线缆接入（0x200a，4B LE 位域）。返回值交给 `parseCableAttachment` 解。 */
+  readCable(): Promise<BleReadResult> {
+    return this.readWithReason(NIKON_CHAR_CABLE);
+  }
+
+  /** 订阅线缆接入通知。相机在这条特征上是 notify（1.68.5 探针实测「可开」）。 */
+  async enableCableNotify(): Promise<void> {
+    await this.enableNotification(NIKON_CHAR_CABLE);
+  }
+
+  /** 0x200a 的 bit0 = 已插数据线（官方 `z.a()` 就是 `getInt() & 1`）。 */
+  static parseCableAttachment(value: Uint8Array): boolean {
+    if (value.length < 1) return false;
+    return (value[0] & 0x01) !== 0;
+  }
+
   // ---- 蓝牙遥控（0x2020 状态 / 0x2021 控制点，1.70.0）----
 
   /** 开遥控指示：0x2020 状态与 0x2021 响应都是 indicate。重复调用无副作用。 */
@@ -1081,6 +1110,22 @@ export class BleCameraLink {
   /** 按一次键（key 见 `KEY_HALF` / `KEY_FULL` / `KEY_MOVIE`）。返回响应码，1 = 成功。 */
   async remoteKey(key: number, on: boolean): Promise<number> {
     return this.remoteRequest(BleCameraLink.remoteFrame(0x12, [key, on ? 0x01 : 0x00]), 3000);
+  }
+
+  /**
+   * 特殊拍摄启停（`0x14`）：body = functionCode | controlInfo。
+   *
+   * - functionCode：1 间隔定时、2 延时摄影、3 焦点移位（官方
+   *   `BleLssControlPointForControlShootingEventRequestData$FunctionCode`）；
+   * - controlInfo：0 DEFAULT、1 START、2 STOP、3 PAUSE
+   *   （同文件 `$ControlInfo`）。
+   *
+   * 相机按自己菜单里设好的间隔、张数去拍，手机只负责开始/停止。返回响应码，
+   * 1 = 成功；4 = OPERATION_FAILED（多半是相机上没设间隔或不在拍摄模式）。
+   */
+  async remoteShootingEvent(functionCode: number, control: number): Promise<number> {
+    return this.remoteRequest(
+      BleCameraLink.remoteFrame(0x14, [functionCode, control]), 3000);
   }
 
   async readRemoteStatus(): Promise<BleRemoteStatus | null> {

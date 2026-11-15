@@ -298,7 +298,7 @@
     },
     {
       "name": "camera_remote_hint",
-      "value": "Leaving this page exits remote control and returns the camera to normal shooting"
+      "value": "Leaving this page ends remote shooting: the camera returns to normal shooting and any special shooting stops first."
     },
     {
       "name": "camera_remote_battery",
@@ -315,6 +315,150 @@
     {
       "name": "camera_remote_release_failed",
       "value": "Failed to release the shutter"
+    },
+    {
+      "name": "camera_remote_tool_group",
+      "value": "Remote tools"
+    },
+    {
+      "name": "camera_remote_movie",
+      "value": "Movie"
+    },
+    {
+      "name": "camera_remote_movie_desc",
+      "value": "Not available yet"
+    },
+    {
+      "name": "camera_remote_special",
+      "value": "Special shooting"
+    },
+    {
+      "name": "camera_remote_special_desc",
+      "value": "Interval timer / time-lapse / focus shift"
+    },
+    {
+      "name": "camera_remote_playback",
+      "value": "Camera playback"
+    },
+    {
+      "name": "camera_remote_playback_desc",
+      "value": "Page and zoom on the camera screen"
+    },
+    {
+      "name": "camera_remote_menu",
+      "value": "Camera menu"
+    },
+    {
+      "name": "camera_remote_menu_desc",
+      "value": "Arrow keys and OK"
+    },
+    {
+      "name": "camera_remote_special_title",
+      "value": "Special shooting"
+    },
+    {
+      "name": "camera_remote_special_hint",
+      "value": "The camera uses the interval and shot count from its own menu. Set “Interval timer shooting” on the camera first and leave it in shooting mode."
+    },
+    {
+      "name": "camera_remote_special_interval",
+      "value": "Interval timer"
+    },
+    {
+      "name": "camera_remote_special_lapse",
+      "value": "Time-lapse"
+    },
+    {
+      "name": "camera_remote_special_focus",
+      "value": "Focus shift"
+    },
+    {
+      "name": "camera_remote_special_start",
+      "value": "Start shooting"
+    },
+    {
+      "name": "camera_remote_special_stop",
+      "value": "Stop shooting"
+    },
+    {
+      "name": "camera_remote_special_running",
+      "value": "The camera is shooting with its settings"
+    },
+    {
+      "name": "camera_remote_special_need_shooting",
+      "value": "The camera is not in shooting mode"
+    },
+    {
+      "name": "camera_remote_special_start_failed",
+      "value": "Could not start (code %1$d); check the interval timer settings on the camera"
+    },
+    {
+      "name": "camera_remote_key_failed",
+      "value": "The camera did not accept this action (code %1$d)"
+    },
+    {
+      "name": "camera_remote_playback_title",
+      "value": "Camera playback"
+    },
+    {
+      "name": "camera_remote_playback_hint",
+      "value": "Photos appear on the camera screen; the phone only pages and zooms."
+    },
+    {
+      "name": "camera_remote_playback_enter",
+      "value": "Enter camera playback"
+    },
+    {
+      "name": "camera_remote_playback_exit",
+      "value": "Back to shooting"
+    },
+    {
+      "name": "camera_remote_playback_prev",
+      "value": "Previous"
+    },
+    {
+      "name": "camera_remote_playback_next",
+      "value": "Next"
+    },
+    {
+      "name": "camera_remote_playback_zoom_in",
+      "value": "Zoom in"
+    },
+    {
+      "name": "camera_remote_playback_zoom_out",
+      "value": "Zoom out"
+    },
+    {
+      "name": "camera_remote_playback_need_mode",
+      "value": "The camera is still in shooting mode. Tap “Enter camera playback” first."
+    },
+    {
+      "name": "camera_remote_menu_title",
+      "value": "Camera menu"
+    },
+    {
+      "name": "camera_remote_menu_hint",
+      "value": "Keys act on the camera menu directly; the camera screen shows the same thing."
+    },
+    {
+      "name": "camera_remote_menu_open",
+      "value": "Open camera menu"
+    },
+    {
+      "name": "camera_remote_menu_close",
+      "value": "Close camera menu"
+    },
+    {
+      "name": "camera_remote_menu_ok",
+      "value": "OK"
+    },
+    {
+      "name": "camera_remote_menu_need_mode",
+      "value": "The camera menu is closed. Tap “Open camera menu” first."
+    },
+    {
+      "name": "camera_remote_cable_hint",
+      "value": "The camera reports a USB cable is attached: Bluetooth standby may drop at any time and reconnects after you unplug it."
     },
     {
       "name": "camera_status_ble_permission",
@@ -1662,7 +1806,7 @@
     },
     {
       "name": "camera_guide_official_4",
-      "value": "Remote playback: page and zoom camera photos"
+      "value": "Remote playback: view photos from the camera on the phone, paging and zooming"
     },
     {
       "name": "camera_guide_official_5",
@@ -1686,7 +1830,7 @@
     },
     {
       "name": "camera_guide_partial_3",
-      "value": "Bluetooth remote: the still shutter (hold to focus, release to shoot) works; movie, interval/time-lapse and playback/menu remote are not implemented yet."
+      "value": "Bluetooth remote: shutter, interval/time-lapse/focus shift, playback and menu control work; movie is not implemented yet."
     },
     {
       "name": "camera_title_with_serial",

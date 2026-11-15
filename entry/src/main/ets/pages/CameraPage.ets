@@ -1533,7 +1533,8 @@ export struct CameraPage {
         GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_standby'),
         GUIDE_NONE, GUIDE_FULL, GUIDE_NONE, GUIDE_NONE, false)
-      // 遥控 1.70.0 起只做了静态快门（半按/释放），录像与间隔/延时还没做，所以是 ◐。
+      // 遥控 1.71.0 起有快门、间隔/延时/焦点移位、回放与菜单；录像还没做，
+      // 所以仍是 ◐。
       this.GuideFeatureRow($r('app.string.camera_guide_feature_remote'),
         GUIDE_NONE, GUIDE_PARTIAL, GUIDE_NONE, GUIDE_NONE, false)
       this.GuideFeatureRow($r('app.string.camera_guide_feature_online'),
@@ -2123,6 +2124,16 @@ export struct CameraPage {
       // 相机只读状态：电量 / 唤醒 / 固件，全部来自 GATT，不占 Wi-Fi（1.69.0）。
       if (this.bleInfoVisible()) {
         this.BleStatusBlock()
+      }
+      // 数据线提示（1.71.0）：相机从 0x200a 报「已插数据线」时，它多半会切到
+      // USB 模式，蓝牙待机随时会断。这句话正是断线之后最需要看到的那句，
+      // 所以不跟 `bleConnected` 绑，链路断了也留着。
+      if (this.svc.bleCableAttached) {
+        Text($r('app.string.camera_remote_cable_hint'))
+          .fontSize(FontSize.Caption)
+          .lineHeight(18)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
       }
       // 首配被相机拒绝时，这里给一句能直接照做的说明（1.66.1）：
       // 相机端还记着这台手机，得先去相机菜单删掉本机。
