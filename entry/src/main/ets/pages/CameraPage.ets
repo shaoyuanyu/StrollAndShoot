@@ -178,10 +178,10 @@ const TOP_PULL_MAX = REFLECTION_GROW_MAX / (1 - CARD_PULL_RATIO);
  *
  * **下拉阶段不转圈**（1.73.2，用户反馈「还没拉到 80%，图标已经和拉到之后一样是
  * 深色的，容易被误导」）：手指还在拉的时候，指示器是一条**跟着下拉量长出来的
- * 进度环**（官方 `Progress` 的 Ring，轨道用 `progress_track`），颜色
- * `text_tertiary`；拉到阈值才画满一圈、同时转成 `text_primary`。于是「还差一点」
- * 与「松手就刷新」在**弧长**和**深浅**上各有一档区别，不用读文字也分得出来。
- * 真正进入刷新（手指抬起、阈值已到）才换成系统 `LoadingProgress` 转圈。
+ * 弧**（官方 `Progress` 的 Ring），颜色 `text_tertiary`；拉到阈值才绕成一整圈、
+ * 同时转成 `text_primary`。于是「还差一点」与「松手就刷新」在**形状**（有没有
+ * 缺口）和**深浅**上各有一档区别，不用读文字也分得出来。真正进入刷新（手指抬起、
+ * 阈值已到）才换成系统 `LoadingProgress` 转圈。
  */
 const REFRESH_TRIGGER_RATIO = 0.8;
 /** 触发刷新所需的下拉量（vp）= 最大下拉的 80%。 */
@@ -3249,8 +3249,10 @@ export struct CameraPage {
           .width(REFRESH_RING)
           .height(REFRESH_RING)
           .color(this.refreshArmed() ? $r('app.color.text_primary') : $r('app.color.text_tertiary'))
-          // 轨道用专门的 progress_track：页面底色上一条更淡的线，才能看出「还差多少」
-          .backgroundColor($r('app.color.progress_track'))
+          // **不画轨道**（1.73.2）：轨道会把整个圆先描出来，没拉满时也像「已经是个
+          // 完整的环」，正是这次要消掉的误导。留空之后缺口就是还差的那一截，
+          // 拉满时环才闭合——形状本身给了第二档信号。
+          .backgroundColor(Color.Transparent)
           .style(this.refreshRingStyle)
       }
     }

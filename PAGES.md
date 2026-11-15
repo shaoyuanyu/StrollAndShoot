@@ -595,16 +595,18 @@ AP / STA 的空闲、搜索、首配、配对失败、已配对、交接、已�
   - **手指还在拉**：官方 `Progress` 的 Ring（外径 `REFRESH_RING = 20`、线宽
     `REFRESH_RING_STROKE = 2.5`）。`value` 直接取 `pullDown`、`total` 是
     `REFRESH_THRESHOLD_VP`，所以弧长就是「离能刷新还差多少」：不到阈值是
-    `text_tertiary`，到了阈值才画满一圈并转成 `text_primary`；轨道用
-    `progress_track`，看得出还空着多少。`enableSmoothEffect: false` 让弧长贴着
-    手指走，不额外做平滑。
+    `text_tertiary`，到了阈值才绕成一整圈并转成 `text_primary`。
+    `enableSmoothEffect: false` 让弧长贴着手指走，不额外做平滑。
+    **轨道必须透明**（`backgroundColor(Color.Transparent)`）：有轨道时整个圆会先
+    被描出来，没拉满也像「已经是个完整的环」，正是这次要消掉的误导；留空之后
+    缺口就是还差的那一截，拉满时环才闭合，形状本身给了第二档信号。
   - **手指抬起、阈值已到**：系统 `LoadingProgress`（`REFRESH_ICON = 27` 的盒子，
     实际画出来的圆约 **18vp**；颜色 `text_secondary`）。它与 20vp 的环只差 2vp、
     圆心重合，换过去看不出跳变。
   - **为什么不能一上来就转圈**（1.73.2 用户反馈）：以前两段都是同一个转圈，手指
     拉到一半它就已经在转、颜色也已经是 `text_secondary`，与「松手就能刷新」看不出
-    区别，容易被误导。现在「还差一点」是**浅色、没收满的弧**，「可以松手」是
-    **深色、完整的环**——弧长与深浅各给一档，转圈只表示「真的在刷新」。
+    区别，容易被误导。现在「还差一点」是**浅色、带缺口的弧**，「可以松手」是
+    **深色、闭合的环**——形状与深浅各给一档，转圈只表示「真的在刷新」。
   - **不要换回 `SwipeRefresherV2`**：它自带尺寸固定 13vp 左右，想放大只能给容器加
     `scale`，而 `scale` 是渲染变换、按 1x 栅格化再放大，边缘发虚（1.65.0 第二轮实测）。
     `LoadingProgress` 是系统加载动效本身，放大后仍然清晰。
