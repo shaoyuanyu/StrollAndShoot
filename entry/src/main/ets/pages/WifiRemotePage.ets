@@ -250,6 +250,11 @@ export struct WifiRemotePage {
       || live.frameWidth <= 0 || live.frameHeight <= 0) {
       return [];
     }
+    if (box.cx <= 0 || box.cy <= 0 || box.w <= 0 || box.h <= 0
+      || box.cx > live.afWidth || box.cy > live.afHeight
+      || box.w > live.afWidth || box.h > live.afHeight) {
+      return [];
+    }
     const scale = Math.min(this.viewW / live.frameWidth, this.viewH / live.frameHeight);
     if (scale <= 0) return [];
     const drawW = live.frameWidth * scale;
