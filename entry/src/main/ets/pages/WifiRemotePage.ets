@@ -68,6 +68,9 @@ export struct WifiRemotePage {
   @Local dialOpen: boolean = false;
   @Local dialParam: string = '';
   @Local dialIndex: number = 0;
+  /** 拖动时刻度直接透过玻璃；停稳后才淡入蓝色大数字。 */
+  @Local dialShowValue: boolean = true;
+  @Local dialScrolling: boolean = false;
   private dialScroller: Scroller = new Scroller();
   private dialAppliedValue: number = -1;
   /** 本次遥控里至少产生了一张照片/一段录像；退出页面时自动补一次快速扫描。 */
@@ -486,6 +489,8 @@ export struct WifiRemotePage {
     this.dialParam = param;
     this.dialOpen = true;
     this.dialIndex = 0;
+    this.dialShowValue = true;
+    this.dialScrolling = false;
     this.dialAppliedValue = -1;
     this.live?.ensureExposure();
     this.syncDialToCurrent();
@@ -502,6 +507,8 @@ export struct WifiRemotePage {
     this.dialParam = DIAL_WB;
     this.dialOpen = true;
     this.dialIndex = 0;
+    this.dialShowValue = true;
+    this.dialScrolling = false;
     this.dialAppliedValue = -1;
     this.live?.ensureWhiteBalance();
     this.syncDialToCurrent();
@@ -511,6 +518,8 @@ export struct WifiRemotePage {
   private closeDial(): void {
     this.dialOpen = false;
     this.dialParam = '';
+    this.dialShowValue = true;
+    this.dialScrolling = false;
     this.dialAppliedValue = -1;
   }
 
@@ -552,6 +561,11 @@ export struct WifiRemotePage {
     return Math.max(0, Math.min(length - 1, index));
   }
 
+  private onDialScrollStart(): void {
+    this.dialScrolling = true;
+    this.dialShowValue = false;
+  }
+
   private onDialScroll(): void {
     if (this.dialOptions().length === 0) return;
     this.dialIndex = this.dialIndexAtCurrentOffset();
@@ -559,6 +573,7 @@ export struct WifiRemotePage {
 
   private onDialScrollStop(): void {
     if (this.dialOptions().length === 0) return;
+    this.dialScrolling = false;
     this.dialIndex = this.dialIndexAtCurrentOffset();
     this.dialScroller.scrollTo({
       xOffset: this.dialIndex * DIAL_ITEM_WIDTH,
@@ -566,11 +581,16 @@ export struct WifiRemotePage {
       animation: true
     });
     this.applyDialValue();
+    setTimeout(() => {
+      if (this.dialOpen && !this.dialScrolling) this.dialShowValue = true;
+    }, 140);
   }
 
   private selectDialIndex(index: number): void {
     const length = this.dialOptions().length;
     if (length === 0) return;
+    this.dialShowValue = false;
+    this.dialScrolling = false;
     this.dialIndex = Math.max(0, Math.min(length - 1, index));
     this.dialScroller.scrollTo({
       xOffset: this.dialIndex * DIAL_ITEM_WIDTH,
@@ -578,6 +598,9 @@ export struct WifiRemotePage {
       animation: true
     });
     this.applyDialValue();
+    setTimeout(() => {
+      if (this.dialOpen && !this.dialScrolling) this.dialShowValue = true;
+    }, 140);
   }
 
   private applyDialValue(): void {
@@ -1374,6 +1397,7 @@ export struct WifiRemotePage {
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.None)
           .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(24) })
+          .onScrollStart(() => { this.onDialScrollStart(); })
           .onDidScroll(() => { this.onDialScroll(); })
           .onScrollStop(() => { this.onDialScrollStop(); })
 
@@ -1391,39 +1415,52 @@ export struct WifiRemotePage {
           .hitTestBehavior(HitTestMode.None)
 
           Stack() {
-            // 底层必须有不透明底：胶囊正下方就是滚动标签，纯透明会透出重影。
+            // 拖动时透明，刻度数字从下面透出来；停稳后这层不透明底淡入，盖住
+            // 滚动标签，让胶囊里的蓝色大数字成为唯一读数。
             Row()
               .width(DIAL_ITEM_WIDTH)
               .height(28)
               .borderRadius(14)
               .backgroundColor($r('app.color.bg_surface'))
+              .opacity(this.dialShowValue || !GlassEffect.isEnabled() ? 1 : 0)
+              .animation({ duration: 180, curve: Curve.EaseOut })
 
-            Row() {
-              Text(this.dialValueLabel())
-                .fontSize(FontSize.CardTitle)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.primary'))
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-            }
-            .width(DIAL_ITEM_WIDTH)
-            .height(28)
-            .borderRadius(14)
-            .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
-            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
-              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-              interactive: true,
-              materialColor: $r('app.color.remote_material_tint')
-            })))
-            .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
-            .shadow({
-              radius: 6,
-              color: $r('app.color.remote_image_shadow'),
-              offsetX: 0,
-              offsetY: 2
-            })
-            .justifyContent(FlexAlign.Center)
-            .alignItems(VerticalAlign.Center)
+            Row()
+              .width(DIAL_ITEM_WIDTH)
+              .height(28)
+              .borderRadius(14)
+              .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
+              .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+                style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+                interactive: true,
+                materialColor: $r('app.color.remote_material_tint')
+              })))
+              .shadow({
+                radius: 6,
+                color: $r('app.color.remote_image_shadow'),
+                offsetX: 0,
+                offsetY: 2
+              })
+              .opacity(this.dialShowValue ? 1 : 0.12)
+              .animation({ duration: 180, curve: Curve.EaseOut })
+
+            Row()
+              .width(DIAL_ITEM_WIDTH)
+              .height(28)
+              .borderRadius(14)
+              .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
+
+            Text(this.dialValueLabel())
+              .width(DIAL_ITEM_WIDTH)
+              .fontSize(FontSize.CardTitle)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary'))
+              .textAlign(TextAlign.Center)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .opacity(this.dialShowValue ? 1 : 0)
+              .scale({ x: this.dialShowValue ? 1 : 0.82, y: this.dialShowValue ? 1 : 0.82 })
+              .animation({ duration: 200, curve: Curve.EaseOut })
           }
           .width(DIAL_ITEM_WIDTH)
           .height(28)
