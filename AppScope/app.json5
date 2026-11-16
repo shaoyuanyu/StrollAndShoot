@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "io.github.shaoyuanyu.strollandshoot",
     "vendor": "example",
-    "versionCode": 1085005,
-    "versionName": "1.85.5",
+    "versionCode": 1085006,
+    "versionName": "1.85.6",
     "buildVersion": "1",
     "icon": "$media:layered_image",
     "label": "$string:app_name"

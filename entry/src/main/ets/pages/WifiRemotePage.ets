@@ -1435,12 +1435,6 @@ export struct WifiRemotePage {
                 interactive: true,
                 materialColor: $r('app.color.remote_material_tint')
               })))
-              .shadow({
-                radius: 6,
-                color: $r('app.color.remote_image_shadow'),
-                offsetX: 0,
-                offsetY: 2
-              })
               .opacity(this.dialShowValue ? 1 : 0.12)
               .animation({ duration: 180, curve: Curve.EaseOut })
 
@@ -1448,7 +1442,13 @@ export struct WifiRemotePage {
               .width(DIAL_ITEM_WIDTH)
               .height(28)
               .borderRadius(14)
-              .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
+              .border({ width: 0.5, color: $r('app.color.divider') })
+              .shadow({
+                radius: 6,
+                color: $r('app.color.remote_image_shadow'),
+                offsetX: 0,
+                offsetY: 2
+              })
 
             Text(this.dialValueLabel())
               .width(DIAL_ITEM_WIDTH)
