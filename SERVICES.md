@@ -385,8 +385,8 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 
 Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP/IP 做实时取景和
 静止图像遥控。协议从 SnapBridge 2.14.3 的 `ptpclient/actions/liveview`、
-`snapbridge.ptpclient.c8/y7` 反编译得到，操作码与参数如下（Z50II 尚未真机验证，
-本次不推送手机）：
+`snapbridge.ptpclient.c8/y7` 反编译得到，操作码与参数如下（Z50II 已真机跑通
+实时取景、快门、点画面对焦与自动扫描）：
 
 | 操作 | 码 | 参数 / 说明 |
 |---|---|---|
@@ -430,7 +430,7 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 2. `ChangeCameraMode(1)`；不支持该命令的机型继续尝试。
 3. 读 `LiveViewStatus`；已经为 1 就跳过 StartLiveView。
 4. `StartLiveView`，忙时 500ms 重试（最多 10 次）。
-5. `DeviceReady` 轮询到 `0x2001`，然后启动约 80ms 一帧的取景循环。
+5. `DeviceReady` 轮询到 `0x2001`，然后启动取景循环（目标间隔 40ms）。
 6. 停止时 `EndLiveView` → `ChangeCameraMode(0)`，无论用户返回、退后台、
    开始扫描还是断开 Wi-Fi 都要走这一步（相机在实时取景中会锁回放/菜单）。
 
@@ -444,12 +444,18 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 - **AF 坐标用头里的 wholeSize**：老协议偏移 12/14，Ex 偏移 16/18；JPEG 尺寸可能
   小于 wholeSize，直接拿 JPEG 宽高算 `ChangeAfArea` 会让焦点偏移。页面按 JPEG
   比例摆放画面、按归一化坐标映射到 wholeSize。
-- 帧循环每 30 帧打一行 `实时取景: 帧 n jpeg=... af=...x... frame=...x...`，并给
-  无 JPEG、`ChangeAfArea`、`AfDrive` 的响应码留日志，真机排查时先看这些行。
+- 帧循环每 30 帧打一行 `实时取景: 帧 n jpeg=... fetch=...ms decode=...ms drop=... fps=... af=...x... frame=...x...`，并给无 JPEG、`ChangeAfArea`、`AfDrive` 的响应码留日志，真机排查时先看这些行。
+- 每帧的显示尺寸直接从 JPEG 的 SOF 段解析，不再 `await pixelMap.getImageInfo()`；
+  这条 native 往返以前串在取帧和解码之间，会直接加到每帧延迟上。
 
 **并发与队列**
 
-- 取景循环只保留**一笔在途事务**，不做并发请求；每帧解完再发下一帧。
+- 取景循环只保留**一笔在途 PTP 事务**，不做并发请求；但取到 JPEG 后**不等解码**，
+  立刻发下一帧，JPEG 解码由另一个泵排空。这样网络往返和解码重叠，解码跟不上时
+  丢掉中间帧，只保留最新一帧（`drop` 计数），画面不会越拖越旧。
+- 旧帧延后约 250ms 释放，停止取景时 500ms，避免 UI 还在绘制就被回收导致黑闪。
+- 画面用 `ImageInterpolation.Medium`：640×424 的取景帧本来就要放大，High 插值
+  每帧多一次 GPU 采样，对连续换帧不划算。
 - 快门 / AF / 变焦前先 `pauseLoop()`，让已发出的那一帧结束；它们与扫描、下载
   共用 `PtpScheduler`，不会在 PTP/IP 单管道上插队。
 - 拍摄 / 对焦后必须等 `DeviceReady`；`0x2019`、`0xA200`、`0xA201`、`0xA202`、
@@ -464,8 +470,9 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 录像，会先补 `0x920B`。`WifiPtpLink` 为此增加了数据阶段：CmdRequest 的
 DataOut=2，随后 `StartData(9) + EndData(12)`（SnapBridge `u7` 同款）。
 
-**仍未做**：曝光参数、驱动模式、白平衡。真机验证待做；当前只过了构建、lint、
-JPEG 头解析与假 PTP 传输的命令序列单测。
+**仍未做**：曝光参数、驱动模式、白平衡；录像已接入但尚未真机验证。当前实时取景
+真机实测 640×424、约 70KB/帧、10–12fps，这一速度主要受相机 Wi-Fi 出帧限制，
+代码侧已把取帧和解码重叠、去掉每帧 `getImageInfo`，目标间隔 40ms。
 
 **BLE：扫描、GATT 与两段式首配（1.38.x）**
 

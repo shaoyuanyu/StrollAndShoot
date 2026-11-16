@@ -57,7 +57,14 @@ const RESPONSE_CAPTURE_BUSY_1 = 0xA201;
 const RESPONSE_MOVIE_FRAME_RELEASE = 0xA202;
 const RESPONSE_CAPTURE_BUSY_2 = 0xA207;
 
-const FRAME_INTERVAL_MS = 80;
+/**
+ * 取帧节拍：相机本身约 10fps 出帧，这里只保留一个很短的间隔，
+ * 避免取到同一帧后空转把 PTP 管道塞满。真正的上限由相机决定。
+ */
+const FRAME_INTERVAL_MS = 40;
+/** 旧帧延后释放：至少让 UI 画完当前这一帧，避免换帧瞬间黑闪。 */
+const FRAME_RELEASE_DELAY_MS = 250;
+const FRAME_FINAL_RELEASE_DELAY_MS = 500;
 const LOOP_FAIL_LIMIT = 5;
 const START_RETRY = 10;
 const START_RETRY_DELAY_MS = 500;
@@ -134,6 +141,47 @@ export function extractLiveViewJpeg(data: Uint8Array, ex: boolean): Uint8Array |
 }
 
 /**
+ * 从 JPEG 的 SOF 段读显示尺寸。
+ *
+ * 以前每帧都 `await pixelMap.getImageInfo()`，那一趟 native 调用虽然不长，
+ * 但和取帧串在一起会直接加到每帧延迟里。JPEG 头里本来就有宽高，直接扫
+ * SOF0/1/2 即可。
+ */
+export function parseJpegSize(data: Uint8Array): number[] {
+  if (data.length < 4 || data[0] !== 0xFF || data[1] !== 0xD8) return [0, 0];
+  let i = 2;
+  while (i + 9 < data.length) {
+    if (data[i] !== 0xFF) {
+      i++;
+      continue;
+    }
+    const marker = data[i + 1];
+    // 填充字节 / 无长度的标记。
+    if (marker === 0xFF) {
+      i++;
+      continue;
+    }
+    if (marker === 0xD8 || marker === 0xD9 || marker === 0x01
+      || (marker >= 0xD0 && marker <= 0xD7)) {
+      i += 2;
+      continue;
+    }
+    const segLen = (data[i + 2] << 8) | data[i + 3];
+    if (segLen < 2) return [0, 0];
+    const isSof = marker >= 0xC0 && marker <= 0xCF
+      && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC;
+    if (isSof) {
+      // SOF: 精度(1) + 高(2) + 宽(2)
+      const h = (data[i + 5] << 8) | data[i + 6];
+      const w = (data[i + 7] << 8) | data[i + 8];
+      return w > 0 && h > 0 ? [w, h] : [0, 0];
+    }
+    i += 2 + segLen;
+  }
+  return [0, 0];
+}
+
+/**
  * 实时取景 + 遥控控制器。
  *
  * 一个 Wi-Fi 会话对应一个实例；断开 / 换会话时由 `CameraService` 丢弃。
@@ -183,6 +231,24 @@ export class NikonWifiLiveView {
   private fpsFrames: number = 0;
   private frameIndex: number = 0;
   private extractFailures: number = 0;
+
+  /**
+   * 解码泵：取帧和 JPEG 解码重叠。
+   *
+   * PTP 一帧的往返约 80–100ms，JPEG 解码另算；以前两者串行，等于把解码
+   * 时间直接加在每一帧上。现在取帧循环只把最新的 JPEG 放进 `pendingJpeg`
+   * （解码慢时丢掉中间帧），解码自己在旁边排空，相机下一帧可以立刻开始取。
+   */
+  private pendingJpeg: Uint8Array | null = null;
+  private pendingToken: number = 0;
+  private decodeBusy: boolean = false;
+  private droppedFrames: number = 0;
+
+  /** 诊断：每 30 帧打印取帧 / 解码平均耗时。 */
+  private timingFrames: number = 0;
+  private timingFetchMs: number = 0;
+  private timingDecodeFrames: number = 0;
+  private timingDecodeMs: number = 0;
 
   constructor(transport: PtpTransport, deviceOps: number[],
               log: (msg: string) => void, deviceProps: number[] = []) {
@@ -271,6 +337,12 @@ export class NikonWifiLiveView {
       this.starting = false;
       this.paused = false;
       this.failStreak = 0;
+      this.pendingJpeg = null;
+      this.droppedFrames = 0;
+      this.timingFrames = 0;
+      this.timingFetchMs = 0;
+      this.timingDecodeFrames = 0;
+      this.timingDecodeMs = 0;
       this.fpsWindowStart = Date.now();
       this.fpsFrames = 0;
       this.startLoop(++this.loopToken);
@@ -296,6 +368,7 @@ export class NikonWifiLiveView {
     this.paused = false;
     this.loopToken++;
     this.failStreak = 0;
+    this.pendingJpeg = null;
     if (this.movieRecording) {
       await this.raw(NIKON_OP_END_MOVIE, [], false);
       this.movieRecording = false;
@@ -661,6 +734,7 @@ export class NikonWifiLiveView {
         this.afHeight = whole[1];
       }
       const jpeg = extractLiveViewJpeg(r.data, ex);
+      const elapsed = Date.now() - started;
       if (jpeg === null) {
         this.extractFailures++;
         if (this.extractFailures <= 3) {
@@ -670,20 +744,57 @@ export class NikonWifiLiveView {
         }
       } else {
         this.frameIndex++;
+        this.timingFrames++;
+        this.timingFetchMs += elapsed;
+        // 不 await 解码：把下一帧的取帧立刻发出去，解码由泵在旁边做。
+        this.queueFrame(jpeg, token);
         if (this.frameIndex === 1 || this.frameIndex % 30 === 0) {
+          const avgFetch = Math.round(this.timingFetchMs / Math.max(1, this.timingFrames));
+          const avgDecode = this.timingDecodeFrames > 0
+            ? Math.round(this.timingDecodeMs / this.timingDecodeFrames) : 0;
           this.log(`实时取景: 帧 ${this.frameIndex} jpeg=${jpeg.length}`
+            + ` fetch=${avgFetch}ms decode=${avgDecode}ms drop=${this.droppedFrames}`
+            + ` fps=${this.fps}`
             + ` af=${this.afWidth}x${this.afHeight} frame=${this.frameWidth}x${this.frameHeight}`);
+          this.timingFrames = 0;
+          this.timingFetchMs = 0;
+          this.timingDecodeFrames = 0;
+          this.timingDecodeMs = 0;
         }
-        await this.pushFrame(jpeg);
       }
 
-      const elapsed = Date.now() - started;
       const wait = Math.max(10, FRAME_INTERVAL_MS - elapsed);
       await delay(wait);
     }
   }
 
-  private async pushFrame(jpeg: Uint8Array): Promise<void> {
+  /** 把最新一帧交给解码泵；解码跟不上时丢掉中间帧，只保留最新。 */
+  private queueFrame(jpeg: Uint8Array, token: number): void {
+    if (!this.active || token !== this.loopToken) return;
+    if (this.pendingJpeg !== null) this.droppedFrames++;
+    this.pendingJpeg = jpeg;
+    this.pendingToken = token;
+    this.scheduleDecode();
+  }
+
+  private scheduleDecode(): void {
+    if (this.decodeBusy || this.pendingJpeg === null) return;
+    const jpeg = this.pendingJpeg;
+    const token = this.pendingToken;
+    this.pendingJpeg = null;
+    this.decodeBusy = true;
+    this.pushFrame(jpeg, token)
+      .catch((err: Error) => {
+        this.log(`实时取景: 解码异常 ${err.message}`);
+      })
+      .then(() => {
+        this.decodeBusy = false;
+        this.scheduleDecode();
+      });
+  }
+
+  private async pushFrame(jpeg: Uint8Array, token: number): Promise<void> {
+    const started = Date.now();
     try {
       const buf = jpeg.buffer.slice(jpeg.byteOffset, jpeg.byteOffset + jpeg.byteLength);
       const src = image.createImageSource(buf);
@@ -694,30 +805,40 @@ export class NikonWifiLiveView {
         try { src.release(); } catch (_e) { /* best effort */ }
       }
       if (pm === null) return;
-      if (!this.active) {
+      if (!this.active || token !== this.loopToken) {
         try { pm.release(); } catch (_e) { /* best effort */ }
         return;
       }
-      const info = await pm.getImageInfo();
-      if (!this.active) {
-        try { pm.release(); } catch (_e) { /* best effort */ }
-        return;
+      const size = parseJpegSize(jpeg);
+      let fw = size[0];
+      let fh = size[1];
+      if (fw <= 0 || fh <= 0) {
+        // 理论上不会走到这里；JPEG 头异常时再退回 native 查询。
+        const info = await pm.getImageInfo();
+        fw = info.size.width;
+        fh = info.size.height;
+        if (!this.active || token !== this.loopToken) {
+          try { pm.release(); } catch (_e) { /* best effort */ }
+          return;
+        }
       }
       const old = this.frame;
       this.frame = pm;
-      this.frameWidth = info.size.width;
-      this.frameHeight = info.size.height;
+      this.frameWidth = fw;
+      this.frameHeight = fh;
       if (this.afWidth === 0 || this.afHeight === 0) {
         this.afWidth = this.frameWidth;
         this.afHeight = this.frameHeight;
       }
       this.frameVersion++;
       this.countFrame();
+      this.timingDecodeFrames++;
+      this.timingDecodeMs += Date.now() - started;
       if (old !== null) {
-        // 给 UI 一帧时间把旧的绘制完；立刻 release 会出现黑闪。
+        // 给 UI 一两帧时间把旧的绘制完；立刻 release 会出现黑闪。
         setTimeout(() => {
           try { old.release(); } catch (_e) { /* best effort */ }
-        }, 1000);
+        }, FRAME_RELEASE_DELAY_MS);
       }
     } catch (_e) {
       // 单帧 JPEG 解码失败不打断实时取景。
@@ -766,7 +887,7 @@ export class NikonWifiLiveView {
       // UI 可能还拿着上一帧；延后释放，避免释放后仍被绘制。
       setTimeout(() => {
         try { old.release(); } catch (_e) { /* best effort */ }
-      }, 500);
+      }, FRAME_FINAL_RELEASE_DELAY_MS);
     }
   }
 

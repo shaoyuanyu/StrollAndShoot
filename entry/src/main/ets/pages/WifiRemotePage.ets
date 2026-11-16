@@ -286,7 +286,9 @@ export struct WifiRemotePage {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Contain)
-          .interpolation(ImageInterpolation.High)
+          // 实时取景是连续换帧，High 插值只在静态大图上值回票价；
+          // 这里用 Medium 减少每帧的 GPU 采样开销。
+          .interpolation(ImageInterpolation.Medium)
       } else if (this.live !== null && this.live.starting) {
         Column({ space: 10 }) {
           LoadingProgress()

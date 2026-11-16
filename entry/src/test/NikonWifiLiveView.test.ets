@@ -1,5 +1,20 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { extractLiveViewJpeg, parseLiveViewWholeSize } from '../main/ets/services/NikonWifiLiveView';
+import { extractLiveViewJpeg, parseJpegSize, parseLiveViewWholeSize }
+  from '../main/ets/services/NikonWifiLiveView';
+
+function makeJpeg(width: number, height: number): Uint8Array {
+  // SOI + SOF0（长度 17：2B 长度 + 1B 精度 + 2B 高 + 2B 宽 + 1B 分量数 + 9B 分量）
+  const data = new Uint8Array(23);
+  data.set([0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08], 0);
+  data[7] = (height >> 8) & 0xFF;
+  data[8] = height & 0xFF;
+  data[9] = (width >> 8) & 0xFF;
+  data[10] = width & 0xFF;
+  data[11] = 0x03;
+  data[21] = 0xFF;
+  data[22] = 0xD9;
+  return data;
+}
 
 function makePayload(headerLength: number, declaredOffset: number,
                      jpeg: number[]): Uint8Array {
@@ -66,6 +81,28 @@ export default function nikonWifiLiveViewTest() {
       const size = parseLiveViewWholeSize(data, true);
       expect(size[0]).assertEqual(1280);
       expect(size[1]).assertEqual(848);
+    });
+
+    it('从 JPEG SOF0 读取尺寸', 0, () => {
+      const size = parseJpegSize(makeJpeg(640, 424));
+      expect(size[0]).assertEqual(640);
+      expect(size[1]).assertEqual(424);
+    });
+
+    it('JPEG 头前有 APP 段时也能读尺寸', 0, () => {
+      const raw = makeJpeg(1024, 682);
+      const data = new Uint8Array(raw.length + 6);
+      data.set([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00], 0);
+      data.set(raw.subarray(2), 8);
+      const size = parseJpegSize(data);
+      expect(size[0]).assertEqual(1024);
+      expect(size[1]).assertEqual(682);
+    });
+
+    it('不是 JPEG 时返回 0', 0, () => {
+      const size = parseJpegSize(new Uint8Array([0x00, 0x01, 0x02, 0x03]));
+      expect(size[0]).assertEqual(0);
+      expect(size[1]).assertEqual(0);
     });
   });
 }
