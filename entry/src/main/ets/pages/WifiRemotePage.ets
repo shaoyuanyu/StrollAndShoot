@@ -408,28 +408,24 @@ export struct WifiRemotePage {
   /** 相机实时取景头里返回的 AF 框；不是本地点击画的假框。 */
   @Builder
   AfBoxes() {
-    if (this.live !== null && this.live.afBoxes.length > 0) {
-      Stack({ alignContent: Alignment.TopStart }) {
-        Repeat(this.live.afBoxes).each((item: RepeatItem<AfBox>) => {
-          this.AfBox(item.item);
-        }).key((box: AfBox) => `${Math.round(box.cx)}_${Math.round(box.cy)}`
-          + `_${Math.round(box.w)}_${Math.round(box.h)}`)
+    if (this.live !== null && this.live.afBoxes.length > 0
+      && this.afRect(this.live.afBoxes[0]).length === 4) {
+      Stack({ alignContent: Alignment.Center }) {
+        Row()
+          .width(this.afRect(this.live.afBoxes[0])[2])
+          .height(this.afRect(this.live.afBoxes[0])[3])
+          .border({ width: 1.4, color: this.afColor() })
+          .backgroundColor(Color.Transparent)
+        Row()
+          .width(4)
+          .height(4)
+          .backgroundColor(this.afColor())
       }
-      .width('100%')
-      .height('100%')
+      .width(this.afRect(this.live.afBoxes[0])[2])
+      .height(this.afRect(this.live.afBoxes[0])[3])
+      .position({ x: this.afRect(this.live.afBoxes[0])[0],
+        y: this.afRect(this.live.afBoxes[0])[1] })
       .hitTestBehavior(HitTestMode.None)
-    }
-  }
-
-  @Builder
-  AfBox(box: AfBox) {
-    if (this.afRect(box).length === 4) {
-      Row()
-        .width(this.afRect(box)[2])
-        .height(this.afRect(box)[3])
-        .position({ x: this.afRect(box)[0], y: this.afRect(box)[1] })
-        .border({ width: 1.4, color: this.afColor() })
-        .backgroundColor(Color.Transparent)
     }
   }
 

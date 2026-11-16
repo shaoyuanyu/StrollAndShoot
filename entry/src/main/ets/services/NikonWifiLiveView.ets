@@ -76,6 +76,8 @@ export const NIKON_PROP_LIVEVIEW_STATUS = 0xD1A2;
 export const NIKON_PROP_LIVEVIEW_PROHIBITION = 0xD1A4;
 export const NIKON_PROP_LIVEVIEW_SELECTOR = 0xD1A6;
 export const NIKON_PROP_AF_AREA_MODE = 0xD05D;
+/** 自动 ISO 高限；用来过滤相机描述里超出当前设置上限的 ISO 值。 */
+export const NIKON_PROP_ISO_AUTO_HIGH_LIMIT = 0xD183;
 
 /** `0xD061` 的取值：0=AF-S、1=AF-C、2=AF-F、3=MF（固定）、4=MF（可选）、5=AF-A。 */
 const AF_MODE_AF_F = 2;
@@ -343,6 +345,7 @@ export class NikonWifiLiveView {
   private log: (msg: string) => void;
   private useEx: boolean;
   private isoProperty: number = EXPOSURE_PROP_ISO;
+  private isoMax: number = 0;
   private afAreaModeOriginal: number = -1;
   private afAreaModeChanged: boolean = false;
   @Trace private frame: image.PixelMap | null = null;
@@ -587,6 +590,15 @@ export class NikonWifiLiveView {
         ? exposureU32le(isoData, 0) : exposureU16le(isoData, 0);
     }
 
+    const isoMaxData = await this.transport.getDevicePropValue(
+      NIKON_PROP_ISO_AUTO_HIGH_LIMIT, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (isoMaxData !== null && isoMaxData.length >= 4) {
+      const max = exposureU32le(isoMaxData, 0);
+      this.isoMax = max >= 100 && max <= 1000000 ? max : 0;
+      this.log(`曝光: ISO 设置上限=${this.isoMax > 0 ? this.isoMax : '未知'}`);
+    }
+
     const evData = await this.transport.getDevicePropValue(
       EXPOSURE_PROP_EV, PtpPriority.FOREGROUND);
     if (seq !== this.startSeq || !this.active) return;
@@ -618,11 +630,15 @@ export class NikonWifiLiveView {
       ? parseDescriptorOptions(isoData, EXPOSURE_PARAM_ISO) : [];
     this.isoOptions = iso.length > 0
       ? iso : staticOptions(EXPOSURE_PARAM_ISO);
-    this.log(`曝光: ISO选项 ${this.isoOptions.length} ${this.optionPreview(this.isoOptions)}`);
     if (this.isoProperty === EXPOSURE_PROP_ISO_FALLBACK) {
       // 旧属性是 UINT16，超过 65535 的 ISO 写不进去。
       this.isoOptions = this.isoOptions.filter((opt: ExposureOption) => opt.value <= 0xFFFF);
     }
+    if (this.isoMax > 0) {
+      const capped = this.isoOptions.filter((opt: ExposureOption) => opt.value <= this.isoMax);
+      if (capped.length >= 2) this.isoOptions = capped;
+    }
+    this.log(`曝光: ISO选项 ${this.isoOptions.length} ${this.optionPreview(this.isoOptions)}`);
 
     const evData = await this.readExposureDescriptor(EXPOSURE_PROP_EV);
     if (seq !== this.startSeq || !this.active) return;
@@ -740,6 +756,7 @@ export class NikonWifiLiveView {
       this.focusLogCount = 0;
       this.lastAfKey = '';
       this.isoProperty = EXPOSURE_PROP_ISO;
+      this.isoMax = 0;
       this.exposureReady = false;
       this.exposureLoading = false;
       this.afAreaModeOriginal = -1;
