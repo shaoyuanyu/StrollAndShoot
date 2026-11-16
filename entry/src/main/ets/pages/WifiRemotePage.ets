@@ -1580,7 +1580,7 @@ struct RemoteRoundControl {
   }
 }
 
-/** 变焦：左右两半合成一颗圆钮，和 AF 同尺寸；长焦在右、广角在左。 */
+/** 变焦：上下两半做成一颗 52×64 的长圆钮，单半点击区 52×31.75。 */
 @ComponentV2
 struct RemoteZoomControl {
   @Param isEnabled: boolean = true;
@@ -1588,42 +1588,42 @@ struct RemoteZoomControl {
   @Event onTele: () => void = () => {};
 
   build() {
-    Row() {
-      Button({ type: ButtonType.Normal, stateEffect: true }) {
-        Text('−')
-          .fontSize(20)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-      }
-      .layoutWeight(1)
-      .height(52)
-      .padding(0)
-      .backgroundColor(Color.Transparent)
-      .enabled(this.isEnabled)
-      .onClick(() => { this.onWide(); })
-
-      Row()
-        .width(0.5)
-        .height(24)
-        .backgroundColor($r('app.color.divider'))
-        .opacity(0.7)
-
+    Column() {
       Button({ type: ButtonType.Normal, stateEffect: true }) {
         Text('+')
-          .fontSize(20)
+          .fontSize(22)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
       }
-      .layoutWeight(1)
-      .height(52)
+      .width('100%')
+      .height(31.75)
       .padding(0)
       .backgroundColor(Color.Transparent)
       .enabled(this.isEnabled)
       .onClick(() => { this.onTele(); })
+
+      Row()
+        .width('100%')
+        .height(0.5)
+        .backgroundColor($r('app.color.divider'))
+        .opacity(0.7)
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Text('−')
+          .fontSize(22)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+      }
+      .width('100%')
+      .height(31.75)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .enabled(this.isEnabled)
+      .onClick(() => { this.onWide(); })
     }
     .width(52)
-    .height(52)
-    .borderRadius(26)
+    .height(64)
+    .borderRadius(18)
     .backgroundColor($r('app.color.filter_chip_bg'))
     .clip(true)
     .opacity(this.isEnabled ? 1 : 0.35)
