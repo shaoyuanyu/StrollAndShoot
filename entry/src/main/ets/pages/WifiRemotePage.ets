@@ -1305,13 +1305,9 @@ export struct WifiRemotePage {
     Column() {
       Row({ space: 8 }) {
         Text(this.dialTitle())
-          .fontSize(FontSize.Caption)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-        Text(this.dialValueLabel())
-          .fontSize(FontSize.PageTitle)
+          .fontSize(FontSize.Section)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.primary'))
+          .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
         Blank()
         Button({ type: ButtonType.Circle, stateEffect: true }) {
@@ -1349,11 +1345,26 @@ export struct WifiRemotePage {
             Row() {
               Row().width(this.dialSpacerWidth())
               Repeat(this.dialOptions()).each((item: RepeatItem<ExposureOption>) => {
-                Column({ space: 4 }) {
-                  Row()
-                    .width(item.index % 5 === 0 ? 1.5 : 1)
-                    .height(item.index % 5 === 0 ? 12 : 7)
-                    .backgroundColor($r('app.color.text_tertiary'))
+                Column() {
+                  Stack() {
+                    Row()
+                      .width(1)
+                      .height(7)
+                      .backgroundColor($r('app.color.text_tertiary'))
+                      .position({ x: 4, y: 5 })
+                    Row()
+                      .width(1.5)
+                      .height(12)
+                      .backgroundColor($r('app.color.text_tertiary'))
+                      .position({ x: 31, y: 0 })
+                    Row()
+                      .width(1)
+                      .height(7)
+                      .backgroundColor($r('app.color.text_tertiary'))
+                      .position({ x: 59, y: 5 })
+                  }
+                  .width(DIAL_ITEM_WIDTH)
+                  .height(12)
                   Text(item.item.label)
                     .fontSize(FontSize.Caption)
                     .fontColor($r('app.color.text_secondary'))
@@ -1361,7 +1372,7 @@ export struct WifiRemotePage {
                 }
                 .width(DIAL_ITEM_WIDTH)
                 .height(52)
-                .justifyContent(FlexAlign.Center)
+                .justifyContent(FlexAlign.SpaceBetween)
                 .alignItems(HorizontalAlign.Center)
                 .onClick(() => { this.selectDialIndex(item.index); })
               }).key((item: ExposureOption) => `${item.value}`)
@@ -1380,14 +1391,38 @@ export struct WifiRemotePage {
           Column() {
             Row()
               .width(2)
-              .height(20)
+              .height(32)
               .borderRadius(1)
               .backgroundColor($r('app.color.primary'))
           }
-          .width(2)
+          .width('100%')
           .height(52)
           .justifyContent(FlexAlign.Start)
           .alignItems(HorizontalAlign.Center)
+          .hitTestBehavior(HitTestMode.None)
+
+          Row() {
+            Text(this.dialValueLabel())
+              .fontSize(FontSize.CardTitle)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .width(DIAL_ITEM_WIDTH)
+          .height(28)
+          .borderRadius(14)
+          .backgroundColor($r('app.color.bg_surface'))
+          .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
+          .shadow({
+            radius: 6,
+            color: $r('app.color.remote_image_shadow'),
+            offsetX: 0,
+            offsetY: 2
+          })
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+          .offset({ y: 12 })
           .hitTestBehavior(HitTestMode.None)
         }
         .width('100%')
@@ -1399,12 +1434,13 @@ export struct WifiRemotePage {
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
     .borderRadius(Radius.Card)
     .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
+    .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
+    .shadow(CardShadow)
     .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
       style: uiMaterial.ImmersiveStyle.REGULAR,
       interactive: true,
       materialColor: $r('app.color.remote_material_tint')
     })))
-    .clip(true)
     .onAppear(() => { this.syncDialToCurrent(); })
     .position({ x: this.deckX(), y: this.deckY() - DIAL_PANEL_HEIGHT - 8 })
   }
