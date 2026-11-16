@@ -1052,21 +1052,8 @@ export struct WifiRemotePage {
 
   @Builder
   CaptureRow() {
-    Row() {
-      Column() {
-        RemoteRoundControl({
-          label: $r('app.string.camera_wifi_remote_af_abbr'),
-          caption: $r('app.string.camera_wifi_remote_af'),
-          diameter: 48,
-          labelSize: 15,
-          isEnabled: this.canAf(),
-          onTap: () => { this.onAf(); }
-        })
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
-
-      Column({ space: 4 }) {
+    Column({ space: 4 }) {
+      Row() {
         if (this.live !== null && this.live.supportsMovie) {
           RemoteModeSwitch({
             isMovie: this.live.movieMode,
@@ -1076,38 +1063,82 @@ export struct WifiRemotePage {
         } else {
           Blank().height(28)
         }
+      }
+      .width('100%')
+      .height(28)
+      .justifyContent(FlexAlign.Center)
 
-        RemoteShutter({
-          isMovie: this.live !== null && this.live.movieMode,
-          isRecording: this.live !== null && this.live.movieRecording,
-          isShooting: this.live !== null && this.live.shooting,
-          isEnabled: this.canShoot(),
-          onTap: () => { this.onShutter(); }
-        })
+      Row() {
+        Column() {
+          RemoteRoundControl({
+            label: $r('app.string.camera_wifi_remote_af_abbr'),
+            diameter: 52,
+            labelSize: 16,
+            isEnabled: this.canAf(),
+            onTap: () => { this.onAf(); }
+          })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
 
-        Text(this.shutterCaption())
+        Column() {
+          RemoteShutter({
+            isMovie: this.live !== null && this.live.movieMode,
+            isRecording: this.live !== null && this.live.movieRecording,
+            isShooting: this.live !== null && this.live.shooting,
+            isEnabled: this.canShoot(),
+            onTap: () => { this.onShutter(); }
+          })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+
+        Column() {
+          RemoteZoomControl({
+            isEnabled: this.canZoom(),
+            onWide: () => { this.onZoom(false); },
+            onTele: () => { this.onZoom(true); }
+          })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+      }
+      .width('100%')
+      .height(64)
+      .alignItems(VerticalAlign.Top)
+
+      Row() {
+        Text($r('app.string.camera_wifi_remote_af'))
+          .layoutWeight(1)
           .fontSize(FontSize.Micro)
           .lineHeight(12)
+          .textAlign(TextAlign.Center)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+
+        Text(this.shutterCaption())
+          .layoutWeight(1)
+          .fontSize(FontSize.Micro)
+          .lineHeight(12)
+          .textAlign(TextAlign.Center)
           .fontColor(this.shutterCaptionColor())
           .maxLines(1)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
 
-      Column() {
-        RemoteZoomControl({
-          isEnabled: this.canZoom(),
-          onWide: () => { this.onZoom(false); },
-          onTele: () => { this.onZoom(true); }
-        })
+        Text($r('app.string.camera_wifi_remote_zoom'))
+          .layoutWeight(1)
+          .fontSize(FontSize.Micro)
+          .lineHeight(12)
+          .textAlign(TextAlign.Center)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
+      .width('100%')
+      .height(12)
     }
     .width('100%')
     .height(132)
-    .padding({ bottom: 8 })
-    .alignItems(VerticalAlign.Bottom)
+    .padding({ top: 12, bottom: 8 })
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
@@ -1515,11 +1546,10 @@ struct RemoteModeSwitch {
   }
 }
 
-/** 圆形工具：AF、变焦 − / +。文字与说明都在按钮内，点击区域包含说明。 */
+/** 圆形工具：AF。说明文字统一放在拍摄行的标签行，控制本身只保留一个圆钮。 */
 @ComponentV2
 struct RemoteRoundControl {
   @Param label: ResourceStr = '';
-  @Param caption: ResourceStr = '';
   @Param diameter: number = 40;
   @Param labelSize: number = 16;
   @Param isEnabled: boolean = true;
@@ -1527,40 +1557,30 @@ struct RemoteRoundControl {
 
   build() {
     Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Column({ space: 4 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          Text(this.label)
-            .fontSize(this.labelSize)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-        }
-        .width(this.diameter)
-        .height(this.diameter)
-        .borderRadius(this.diameter / 2)
-        .backgroundColor($r('app.color.filter_chip_bg'))
-
-        Text(this.caption)
-          .fontSize(FontSize.Micro)
-          .lineHeight(12)
-          .fontColor($r('app.color.text_secondary'))
+      Stack({ alignContent: Alignment.Center }) {
+        Text(this.label)
+          .fontSize(this.labelSize)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
           .maxLines(1)
       }
-      .width('100%')
-      .alignItems(HorizontalAlign.Center)
+      .width(this.diameter)
+      .height(this.diameter)
+      .borderRadius(this.diameter / 2)
+      .backgroundColor($r('app.color.filter_chip_bg'))
     }
-    .width(this.diameter + 10)
-    .height(this.diameter + 16)
+    .width(this.diameter)
+    .height(this.diameter)
     .padding(0)
     .backgroundColor(Color.Transparent)
-    .borderRadius(12)
+    .borderRadius(this.diameter / 2)
     .enabled(this.isEnabled)
     .opacity(this.isEnabled ? 1 : 0.35)
     .onClick(() => { this.onTap(); })
   }
 }
 
-/** 变焦：广角 / 长焦两个方向收进同一颗胶囊，避免两个圆钮和各自说明散成一排。 */
+/** 变焦：广角 / 长焦上下叠进一颗竖向胶囊，宽度收窄，和左右控件更容易配平。 */
 @ComponentV2
 struct RemoteZoomControl {
   @Param isEnabled: boolean = true;
@@ -1568,68 +1588,56 @@ struct RemoteZoomControl {
   @Event onTele: () => void = () => {};
 
   build() {
-    Column({ space: 4 }) {
-      Row() {
-        Button({ type: ButtonType.Normal, stateEffect: true }) {
-          Row({ space: 3 }) {
-            Text('−')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.text_primary'))
-            Text($r('app.string.camera_wifi_remote_wide'))
-              .fontSize(FontSize.Micro)
-              .fontColor($r('app.color.text_secondary'))
-              .maxLines(1)
-          }
+    Column() {
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Row({ space: 2 }) {
+          Text('+')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+          Text($r('app.string.camera_wifi_remote_tele'))
+            .fontSize(FontSize.Micro)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
         }
-        .layoutWeight(1)
-        .height(34)
-        .padding(0)
-        .backgroundColor(Color.Transparent)
-        .borderRadius(17)
-        .enabled(this.isEnabled)
-        .onClick(() => { this.onWide(); })
-
-        Row()
-          .width(0.5)
-          .height(16)
-          .backgroundColor($r('app.color.divider'))
-          .opacity(0.7)
-
-        Button({ type: ButtonType.Normal, stateEffect: true }) {
-          Row({ space: 3 }) {
-            Text('+')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.text_primary'))
-            Text($r('app.string.camera_wifi_remote_tele'))
-              .fontSize(FontSize.Micro)
-              .fontColor($r('app.color.text_secondary'))
-              .maxLines(1)
-          }
-        }
-        .layoutWeight(1)
-        .height(34)
-        .padding(0)
-        .backgroundColor(Color.Transparent)
-        .borderRadius(17)
-        .enabled(this.isEnabled)
-        .onClick(() => { this.onTele(); })
       }
-      .width(96)
-      .height(38)
-      .padding(2)
-      .borderRadius(19)
-      .backgroundColor($r('app.color.filter_chip_bg'))
+      .width('100%')
+      .height(31.5)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .enabled(this.isEnabled)
+      .onClick(() => { this.onTele(); })
 
-      Text($r('app.string.camera_wifi_remote_zoom'))
-        .fontSize(FontSize.Micro)
-        .lineHeight(12)
-        .fontColor($r('app.color.text_secondary'))
-        .maxLines(1)
+      Row()
+        .width('100%')
+        .height(0.5)
+        .backgroundColor($r('app.color.divider'))
+        .opacity(0.7)
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Row({ space: 2 }) {
+          Text('−')
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+          Text($r('app.string.camera_wifi_remote_wide'))
+            .fontSize(FontSize.Micro)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+        }
+      }
+      .width('100%')
+      .height(31.5)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .enabled(this.isEnabled)
+      .onClick(() => { this.onWide(); })
     }
-    .width(96)
-    .alignItems(HorizontalAlign.Center)
+    .width(40)
+    .height(64)
+    .borderRadius(20)
+    .backgroundColor($r('app.color.filter_chip_bg'))
+    .clip(true)
     .opacity(this.isEnabled ? 1 : 0.35)
   }
 }
