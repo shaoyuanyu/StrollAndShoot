@@ -33,6 +33,8 @@ export struct WifiRemotePage {
   @Local focusY: number = 0;
   @Local focusVisible: boolean = false;
   @Local focusOk: boolean = false;
+  /** 本次遥控里至少产生了一张照片/一段录像；退出页面时自动补一次快速扫描。 */
+  private mediaChanged: boolean = false;
   private focusTimer: number = -1;
 
   aboutToAppear(): void {
@@ -52,12 +54,20 @@ export struct WifiRemotePage {
       clearTimeout(this.focusTimer);
       this.focusTimer = -1;
     }
-    this.live?.stop().catch((_e: Error) => {
+    // 退出前如果还在录像，这段录像也算新增媒体。
+    const hadMedia = this.mediaChanged || (this.live !== null && this.live.movieRecording);
+    const stop = this.live !== null ? this.live.stop().catch((_e: Error) => {
       // 链路已断时只清本地状态
-    });
+    }) : Promise.resolve();
     WindowUtils.window?.setWindowKeepScreenOn(false).catch((_e: Error) => {});
     WindowUtils.applyThemeSystemBars(
       WindowUtils.isDarkMode(this.getUIContext().getHostContext()));
+    stop.finally(() => {
+      if (!hadMedia) return;
+      this.svc.scanForCamera(true, true).catch((_e: Error) => {
+        this.svc.getLog().add(`遥控退出后自动扫描失败: ${(_e as Error).message}`);
+      });
+    });
   }
 
   /** 黑底页面需要白色状态栏图标；离开时恢复应用主题。 */
@@ -139,14 +149,18 @@ export struct WifiRemotePage {
     if (!this.canShoot()) return;
     Haptics.tap();
     if (this.live !== null && this.live.movieMode) {
-      const op = this.live.movieRecording
-        ? this.live.stopMovie() : this.live.startMovie();
-      op.catch((_e: Error) => {
+      const wasRecording = this.live.movieRecording;
+      const op = wasRecording ? this.live.stopMovie() : this.live.startMovie();
+      op.then((ok: boolean) => {
+        if (ok && wasRecording) this.mediaChanged = true;
+      }).catch((_e: Error) => {
         // 错误已写进 live.error
       });
       return;
     }
-    this.live?.capture().catch((_e: Error) => {
+    this.live?.capture().then((ok: boolean) => {
+      if (ok) this.mediaChanged = true;
+    }).catch((_e: Error) => {
       // 错误已写进 live.error
     });
   }
@@ -192,9 +206,16 @@ export struct WifiRemotePage {
     const drawH = live.frameHeight * scale;
     const left = (this.viewW - drawW) / 2;
     const top = (this.viewH - drawH) / 2;
-    const px = (event.x - left) / scale;
-    const py = (event.y - top) / scale;
-    if (px < 0 || py < 0 || px > live.frameWidth || py > live.frameHeight) return;
+    if (event.x < left || event.y < top || event.x > left + drawW || event.y > top + drawH) {
+      return;
+    }
+    // 画面按 JPEG 的宽高比摆放，但 ChangeAfArea 用的是头里的 wholeSize 坐标系。
+    const afW = live.afWidth > 0 ? live.afWidth : live.frameWidth;
+    const afH = live.afHeight > 0 ? live.afHeight : live.frameHeight;
+    const px = (event.x - left) / drawW * afW;
+    const py = (event.y - top) / drawH * afH;
+    this.svc.getLog().add(`实时取景: 点按 (${Math.round(event.x)},${Math.round(event.y)})`
+      + ` → AF (${Math.round(px)},${Math.round(py)}) / ${afW}x${afH}`);
 
     this.focusX = event.x;
     this.focusY = event.y;

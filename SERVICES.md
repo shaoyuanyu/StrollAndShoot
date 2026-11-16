@@ -441,6 +441,11 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 - Ex：偏移 12 处是 JPEG 长度（`b8`，前面两个 short + 两个 int）；
 - 先按声明长度取末尾并验证 `FF D8`，失败再从头扫 SOI，最后按 EOI 截断。
 不要把头的偏移写死成某个常数：不同固件版本头长度不同，末尾取帧更稳。
+- **AF 坐标用头里的 wholeSize**：老协议偏移 12/14，Ex 偏移 16/18；JPEG 尺寸可能
+  小于 wholeSize，直接拿 JPEG 宽高算 `ChangeAfArea` 会让焦点偏移。页面按 JPEG
+  比例摆放画面、按归一化坐标映射到 wholeSize。
+- 帧循环每 30 帧打一行 `实时取景: 帧 n jpeg=... af=...x... frame=...x...`，并给
+  无 JPEG、`ChangeAfArea`、`AfDrive` 的响应码留日志，真机排查时先看这些行。
 
 **并发与队列**
 
@@ -451,6 +456,8 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
   `0xA207` 视为忙，继续轮询，其它响应码立即报错。
 - 实时取景控制器随 Wi-Fi 会话创建，`CameraService.wifiLiveView` 持有；
   断开时先 `stop()` 再 `CloseSession`。
+- **拍摄后联动扫描**：`WifiRemotePage` 记录 `mediaChanged`，退出时 `live.stop()`
+  完成后自动 `scanForCamera(true, true)`；用户不需要再手动点「快速扫描」。
 
 **录像**：`setMovieMode()` 先停取景，写 `0x1016 [0xD1A6] + 1B 数据`，再重新
 启动取景；`startMovie()/stopMovie()` 发 `0x920A/0x920B`。停止取景时如果还在

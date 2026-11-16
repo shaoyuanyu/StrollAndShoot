@@ -1253,9 +1253,10 @@ STA，避免一条 PTP 会话被两种遥控入口同时使用。
 
 - **全屏黑底**，顶部返回 + 标题 + 状态 + fps；中间是 `ImageFit.Contain` 的实时
   画面，画面外留黑；底部 AF / 快门 / W-T 三组控件，最后一行是操作提示。
-- **点画面 = 移动对焦点 + 驱动一次 AF**：按 Contain 的显示矩形把点击 vp 换算成
-  实时取景 JPEG 像素坐标，再发 `0x9205 ChangeAfArea` 与 `0x90C1 AfDrive`；
-  画面上的 46vp 方框只做即时反馈，绿色 = `DeviceReady` 回来，白色 = 对焦中。
+- **点画面 = 移动对焦点 + 驱动一次 AF**：按 Contain 的显示矩形把点击 vp 归一化，
+  再映射到实时取景头里的 `wholeSize`（不是 JPEG 像素尺寸），发 `0x9205 ChangeAfArea`
+  与 `0x90C1 AfDrive`；画面上的 46vp 方框只做即时反馈，绿色 = `DeviceReady` 回来，
+  白色 = 对焦中。日志会打印 `点按 → AF (x,y) / wholeWxH` 和 `ChangeAfArea` 的响应码。
 - **AF 按钮**：不移动区域，只发 `AfDrive`。
 - **快门**：发 `0x9207 InitiateCaptureRecInMedia`（p1=-1 普通释放，p2=0 存卡），
   然后轮询 `0x90C8 DeviceReady`；不做 AF，用户先点画面或按 AF。
@@ -1276,6 +1277,9 @@ STA，避免一条 PTP 会话被两种遥控入口同时使用。
   再 `0x90C2 ChangeCameraMode(0)` 把控制权还给相机，最后释放 PixelMap。
 - 相机在实时取景期间会锁回放/菜单，所以**不能只靠用户按返回**；页面销毁和
   服务断开都必须收尾。
+- **拍摄后联动**：本次遥控里只要成功拍过照片或停止过录像，退出页面时会在
+  `live.stop()` 完成后自动跑一次 `scanForCamera(true, true)`，不需要用户再手动点
+  「快速扫描」；没有新增媒体则不扫描。
 - 实时取景帧与扫描/下载共用 `PtpScheduler`；快门 / AF / 变焦前会先暂停取景循环
   一拍，避免用户操作排在连续帧后面。
 

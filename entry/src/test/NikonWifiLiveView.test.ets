@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { extractLiveViewJpeg } from '../main/ets/services/NikonWifiLiveView';
+import { extractLiveViewJpeg, parseLiveViewWholeSize } from '../main/ets/services/NikonWifiLiveView';
 
 function makePayload(headerLength: number, declaredOffset: number,
                      jpeg: number[]): Uint8Array {
@@ -46,6 +46,26 @@ export default function nikonWifiLiveViewTest() {
     it('没有 JPEG 数据时返回 null', 0, () => {
       const data = new Uint8Array(32);
       expect(extractLiveViewJpeg(data, false)).assertNull();
+    });
+
+    it('标准头读取 wholeSize', 0, () => {
+      const data = new Uint8Array(32);
+      const view = new DataView(data.buffer);
+      view.setUint16(12, 640, true);
+      view.setUint16(14, 424, true);
+      const size = parseLiveViewWholeSize(data, false);
+      expect(size[0]).assertEqual(640);
+      expect(size[1]).assertEqual(424);
+    });
+
+    it('Ex 头读取 wholeSize', 0, () => {
+      const data = new Uint8Array(32);
+      const view = new DataView(data.buffer);
+      view.setUint16(16, 1280, true);
+      view.setUint16(18, 848, true);
+      const size = parseLiveViewWholeSize(data, true);
+      expect(size[0]).assertEqual(1280);
+      expect(size[1]).assertEqual(848);
     });
   });
 }

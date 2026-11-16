@@ -19,7 +19,7 @@
 
 ## 工程质量
 
-- **单测覆盖**：现有 78 个用例，缺 `CameraService` 排序/清洗、`ThumbnailCache` 键与过期、下载注册表存在性校验。
+- **单测覆盖**：现有 80 个用例，缺 `CameraService` 排序/清洗、`ThumbnailCache` 键与过期、下载注册表存在性校验。
 - **拆分大文件**：`CameraService.ets` 2178 行、`PhotoViewer.ets` 2164 行、`GpsTrackViewerPage.ets` 1431 行。`CameraService` 同时管缩略图缓存、下载、GPS 匹配、缓存设置与扫描统计，可按职责拆分。
 - **`GalleryPage` 手工缓存键**：全量分组、筛选、日期分组、行模型各有一份缓存与一组键，改动时容易漏。
 - **普通 `Map` 不参与追踪**：`thumbnailPixelMapMap` / `orientedDisplaySizes` / `compressedCache` 靠手工版本号驱动刷新，可考虑换成 `@ObservedV2` 容器。

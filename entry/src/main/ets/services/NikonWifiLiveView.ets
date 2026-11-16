@@ -69,9 +69,31 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function u16le(data: Uint8Array, offset: number): number {
+  if (offset + 2 > data.length) return 0;
+  return data[offset] | (data[offset + 1] << 8);
+}
+
 function u32le(data: Uint8Array | null): number {
   if (data === null || data.length < 4) return 0;
   return (data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24)) >>> 0;
+}
+
+/**
+ * 从实时取景头里读「整幅画面」尺寸（AF 坐标的坐标系）。
+ *
+ * - 老协议 `GetLiveViewImage`：头偏移 12/14；
+ * - `GetLiveViewImageEx`：头偏移 16/18。
+ *
+ * JPEG 尺寸通常比 wholeSize 小（相机可能按显示比例缩放），
+ * `ChangeAfArea` 用的是 wholeSize，因此不能直接拿 JPEG 尺寸算坐标。
+ */
+export function parseLiveViewWholeSize(data: Uint8Array, ex: boolean): number[] {
+  const offset = ex ? 16 : 12;
+  if (data.length < offset + 4) return [0, 0];
+  const w = u16le(data, offset);
+  const h = u16le(data, offset + 2);
+  return w > 0 && h > 0 ? [w, h] : [0, 0];
 }
 
 /**
@@ -126,6 +148,9 @@ export class NikonWifiLiveView {
   @Trace frameVersion: number = 0;
   @Trace frameWidth: number = 0;
   @Trace frameHeight: number = 0;
+  /** AF 坐标系（实时取景头里的 wholeSize）；0 表示还没读到。 */
+  @Trace afWidth: number = 0;
+  @Trace afHeight: number = 0;
   @Trace shooting: boolean = false;
   @Trace focusing: boolean = false;
   @Trace zooming: boolean = false;
@@ -147,7 +172,7 @@ export class NikonWifiLiveView {
   private transport: PtpTransport;
   private log: (msg: string) => void;
   private useEx: boolean;
-  private frame: image.PixelMap | null = null;
+  @Trace private frame: image.PixelMap | null = null;
   private loopToken: number = 0;
   private startSeq: number = 0;
   private paused: boolean = false;
@@ -156,6 +181,8 @@ export class NikonWifiLiveView {
   private failStreak: number = 0;
   private fpsWindowStart: number = 0;
   private fpsFrames: number = 0;
+  private frameIndex: number = 0;
+  private extractFailures: number = 0;
 
   constructor(transport: PtpTransport, deviceOps: number[],
               log: (msg: string) => void, deviceProps: number[] = []) {
@@ -336,6 +363,7 @@ export class NikonWifiLiveView {
     await this.pauseLoop();
     try {
       const r = await this.raw(NIKON_OP_AF_DRIVE, [], false);
+      this.log(`实时取景: AfDrive → ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
       if (r === null || r.code !== RESPONSE_OK) {
         this.error = r === null ? L10n.tr('camera_wifi_remote_af_failed')
           : this.errorText(r.code);
@@ -375,6 +403,8 @@ export class NikonWifiLiveView {
         const px = Math.max(0, Math.round(x));
         const py = Math.max(0, Math.round(y));
         const moved = await this.raw(NIKON_OP_CHANGE_AF_AREA, [px, py], false);
+        this.log(`实时取景: ChangeAfArea(${px},${py}) → `
+          + `${moved === null ? 'null' : '0x' + moved.code.toString(16)}`);
         if (moved === null || (moved.code !== RESPONSE_OK
           && moved.code !== RESPONSE_OPERATION_NOT_SUPPORTED)) {
           this.error = moved === null ? L10n.tr('camera_wifi_remote_af_failed')
@@ -384,6 +414,7 @@ export class NikonWifiLiveView {
       }
       if (!this.supportsAf) return false;
       const r = await this.raw(NIKON_OP_AF_DRIVE, [], false);
+      this.log(`实时取景: AfDrive → ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
       if (r === null || r.code !== RESPONSE_OK) {
         this.error = r === null ? L10n.tr('camera_wifi_remote_af_failed')
           : this.errorText(r.code);
@@ -623,8 +654,26 @@ export class NikonWifiLiveView {
       }
 
       this.failStreak = 0;
-      const jpeg = extractLiveViewJpeg(r.data, op === NIKON_OP_GET_LIVEVIEW_IMAGE_EX);
-      if (jpeg !== null) {
+      const ex = op === NIKON_OP_GET_LIVEVIEW_IMAGE_EX;
+      const whole = parseLiveViewWholeSize(r.data, ex);
+      if (whole[0] > 0 && whole[1] > 0) {
+        this.afWidth = whole[0];
+        this.afHeight = whole[1];
+      }
+      const jpeg = extractLiveViewJpeg(r.data, ex);
+      if (jpeg === null) {
+        this.extractFailures++;
+        if (this.extractFailures <= 3) {
+          this.log(`实时取景: 帧无 JPEG data=${r.data.length} head=`
+            + `${Array.from(r.data.subarray(0, Math.min(16, r.data.length)))
+              .map((b: number) => b.toString(16).padStart(2, '0')).join('')}`);
+        }
+      } else {
+        this.frameIndex++;
+        if (this.frameIndex === 1 || this.frameIndex % 30 === 0) {
+          this.log(`实时取景: 帧 ${this.frameIndex} jpeg=${jpeg.length}`
+            + ` af=${this.afWidth}x${this.afHeight} frame=${this.frameWidth}x${this.frameHeight}`);
+        }
         await this.pushFrame(jpeg);
       }
 
@@ -658,6 +707,10 @@ export class NikonWifiLiveView {
       this.frame = pm;
       this.frameWidth = info.size.width;
       this.frameHeight = info.size.height;
+      if (this.afWidth === 0 || this.afHeight === 0) {
+        this.afWidth = this.frameWidth;
+        this.afHeight = this.frameHeight;
+      }
       this.frameVersion++;
       this.countFrame();
       if (old !== null) {
