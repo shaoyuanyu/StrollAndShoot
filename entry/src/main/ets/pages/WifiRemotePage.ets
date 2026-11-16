@@ -16,7 +16,7 @@
  * 离开页面 = 结束实时取景并把控制权还给相机；相机在实时取景期间会锁回放/
  * 菜单（和蓝牙遥控一样），不能只靠用户按返回。
  */
-import { uiMaterial } from '@kit.ArkUI';
+import { LengthMetrics, uiMaterial } from '@kit.ArkUI';
 import { CameraService } from '../services/CameraService';
 import { NikonWifiLiveView, type AfBox } from '../services/NikonWifiLiveView';
 import {
@@ -39,8 +39,8 @@ const REMOTE_DECK_HEIGHT: number = 200;
 /** 取景画面四周的呼吸边距。 */
 const REMOTE_IMAGE_INSET: number = 8;
 /** 专业参数拨盘：每个刻度的宽度、面板高度、白平衡参数的占位标识。 */
-const DIAL_ITEM_WIDTH: number = 64;
-const DIAL_PANEL_HEIGHT: number = 104;
+const DIAL_ITEM_WIDTH: number = 52;
+const DIAL_PANEL_HEIGHT: number = 92;
 const DIAL_WB: string = '__wb__';
 
 @Builder
@@ -1303,28 +1303,31 @@ export struct WifiRemotePage {
   @Builder
   DialPanel() {
     Column() {
-      Row({ space: 8 }) {
+      Stack({ alignContent: Alignment.Center }) {
         Text(this.dialTitle())
           .fontSize(FontSize.Section)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
-        Blank()
-        Button({ type: ButtonType.Circle, stateEffect: true }) {
-          SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(IconSize.Body)
-            .fontColor([$r('app.color.text_secondary')])
+        Row() {
+          Blank()
+          Button({ type: ButtonType.Circle, stateEffect: true }) {
+            SymbolGlyph($r('sys.symbol.chevron_down'))
+              .fontSize(IconSize.Body)
+              .fontColor([$r('app.color.text_secondary')])
+          }
+          .width(28)
+          .height(28)
+          .padding(0)
+          .backgroundColor(Color.Transparent)
+          .borderRadius(14)
+          .onClick(() => { this.closeDial(); })
         }
-        .width(32)
-        .height(32)
-        .padding(0)
-        .backgroundColor(Color.Transparent)
-        .borderRadius(16)
-        .onClick(() => { this.closeDial(); })
+        .width('100%')
+        .height(28)
       }
       .width('100%')
-      .height(32)
-      .alignItems(VerticalAlign.Center)
+      .height(24)
 
       if (this.dialOptions().length === 0) {
         Row({ space: 8 }) {
@@ -1337,7 +1340,7 @@ export struct WifiRemotePage {
             .fontColor($r('app.color.text_secondary'))
         }
         .width('100%')
-        .height(52)
+        .height(48)
         .justifyContent(FlexAlign.Center)
       } else {
         Stack({ alignContent: Alignment.Center }) {
@@ -1356,32 +1359,33 @@ export struct WifiRemotePage {
                     .maxLines(1)
                 }
                 .width(DIAL_ITEM_WIDTH)
-                .height(52)
-                .justifyContent(FlexAlign.SpaceBetween)
+                .height(48)
+                .justifyContent(FlexAlign.Center)
                 .alignItems(HorizontalAlign.Center)
                 .onClick(() => { this.selectDialIndex(item.index); })
               }).key((item: ExposureOption) => `${item.value}`)
               Row().width(this.dialSpacerWidth())
             }
-            .height(52)
+            .height(48)
           }
           .width('100%')
-          .height(52)
+          .height(48)
           .scrollable(ScrollDirection.Horizontal)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.None)
+          .fadingEdge(true, { fadingEdgeLength: LengthMetrics.vp(24) })
           .onDidScroll(() => { this.onDialScroll(); })
           .onScrollStop(() => { this.onDialScrollStop(); })
 
           Column() {
             Row()
               .width(2)
-              .height(32)
+              .height(12)
               .borderRadius(1)
               .backgroundColor($r('app.color.primary'))
           }
           .width('100%')
-          .height(52)
+          .height(48)
           .justifyContent(FlexAlign.Start)
           .alignItems(HorizontalAlign.Center)
           .hitTestBehavior(HitTestMode.None)
@@ -1407,11 +1411,11 @@ export struct WifiRemotePage {
           })
           .justifyContent(FlexAlign.Center)
           .alignItems(VerticalAlign.Center)
-          .offset({ y: 12 })
+          .offset({ y: 0 })
           .hitTestBehavior(HitTestMode.None)
         }
         .width('100%')
-        .height(52)
+        .height(48)
       }
     }
     .width(this.deckWidthVp())
