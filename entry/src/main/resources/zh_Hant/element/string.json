@@ -1893,6 +1893,10 @@
       "value": "參數設定失敗"
     },
     {
+      "name": "camera_wifi_remote_current",
+      "value": "目前"
+    },
+    {
       "name": "camera_wifi_remote_exposure_hint",
       "value": "可調項目取決於相機的曝光模式"
     },

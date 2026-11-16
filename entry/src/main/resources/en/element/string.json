@@ -1893,6 +1893,10 @@
       "value": "Failed to apply setting"
     },
     {
+      "name": "camera_wifi_remote_current",
+      "value": "Current"
+    },
+    {
       "name": "camera_wifi_remote_exposure_hint",
       "value": "Available settings depend on the camera exposure mode"
     },

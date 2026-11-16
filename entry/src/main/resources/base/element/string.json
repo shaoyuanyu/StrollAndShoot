@@ -1893,6 +1893,10 @@
       "value": "参数设置失败"
     },
     {
+      "name": "camera_wifi_remote_current",
+      "value": "当前"
+    },
+    {
       "name": "camera_wifi_remote_exposure_hint",
       "value": "可调项取决于相机的曝光模式"
     },

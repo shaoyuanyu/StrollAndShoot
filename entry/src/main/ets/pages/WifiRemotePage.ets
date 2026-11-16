@@ -423,17 +423,25 @@ export struct WifiRemotePage {
     return live !== null && live.getExposureRaw(this.exposureParam) === value;
   }
 
-  private sheetOptions(): SheetOptions {
+  /**
+   * 半模态参数。
+   *
+   * 标题必须交给系统的 `SheetOptions.title`：半模态自身已经为拖拽条、关闭键
+   * 和圆角留好了标题区，自己再画一行标题会贴到圆角上、和关闭键抢位置。
+   */
+  private sheetOptions(title: ResourceStr): SheetOptions {
     const opts: SheetOptions = {
       height: SheetSize.MEDIUM,
       preferType: SheetType.BOTTOM,
       dragBar: true,
-      showClose: true
+      showClose: true,
+      title: { title }
     };
     // 半模态不跟随应用级材质开关，必须显式给；给材质时不能再设背景色。
     if (GlassEffect.isEnabled()) {
       opts.systemMaterial = GlassEffect.material(new uiMaterial.ImmersiveMaterial({
-        style: uiMaterial.ImmersiveStyle.ULTRA_THICK
+        style: uiMaterial.ImmersiveStyle.ULTRA_THICK,
+        materialColor: $r('app.color.viewer_material_tint')
       }));
     } else {
       opts.backgroundColor = $r('app.color.bg_surface');
@@ -1006,7 +1014,7 @@ export struct WifiRemotePage {
       })
     }
     .layoutWeight(1)
-    .bindSheet($$this.wbSheetOpen, this.WhiteBalanceSheet(), this.sheetOptions())
+    .bindSheet($$this.wbSheetOpen, this.WhiteBalanceSheet(), this.sheetOptions($r('app.string.camera_wifi_remote_wb')))
   }
 
   @Builder
@@ -1020,7 +1028,7 @@ export struct WifiRemotePage {
       })
     }
     .layoutWeight(1)
-    .bindSheet($$this.focusSheetOpen, this.FocusSheet(), this.sheetOptions())
+    .bindSheet($$this.focusSheetOpen, this.FocusSheet(), this.sheetOptions($r('app.string.camera_wifi_remote_focus_settings')))
   }
 
   @Builder
@@ -1170,7 +1178,7 @@ export struct WifiRemotePage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg_page'))
-    .bindSheet($$this.exposureSheetOpen, this.ExposureSheet(), this.sheetOptions())
+    .bindSheet($$this.exposureSheetOpen, this.ExposureSheet(), this.sheetOptions(this.exposureTitle(this.exposureParam)))
   }
 
   @Builder
@@ -1203,8 +1211,7 @@ export struct WifiRemotePage {
   @Builder
   ExposureSheet() {
     Column({ space: 12 }) {
-      RemoteSheetHeader({
-        title: this.exposureTitle(this.exposureParam),
+      RemoteSheetIntro({
         hint: $r('app.string.camera_wifi_remote_exposure_hint'),
         currentValue: this.exposureValue(this.exposureParam)
       })
@@ -1233,11 +1240,16 @@ export struct WifiRemotePage {
         .align(Alignment.Top)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+        // Scroll 在顶部继续上滑时把手势交给半模态换挡/展开，下滑时先滚列表。
+        .nestedScroll({
+          scrollForward: NestedScrollMode.PARENT_FIRST,
+          scrollBackward: NestedScrollMode.SELF_FIRST
+        })
       }
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 20, right: 20, top: 4, bottom: 20 })
+    .padding({ left: 20, right: 20, top: 12, bottom: 24 })
     // 系统材质很薄，取景画面亮时隔着玻璃看列表会花；这一层同色薄洗只压
     // 内容区，不动半模态自己的材质和圆角。
     .backgroundColor($r('app.color.remote_sheet_wash'))
@@ -1247,8 +1259,7 @@ export struct WifiRemotePage {
   @Builder
   WhiteBalanceSheet() {
     Column({ space: 12 }) {
-      RemoteSheetHeader({
-        title: $r('app.string.camera_wifi_remote_wb'),
+      RemoteSheetIntro({
         hint: $r('app.string.camera_wifi_remote_wb_hint'),
         currentValue: this.whiteBalanceLabel()
       })
@@ -1276,11 +1287,16 @@ export struct WifiRemotePage {
         .align(Alignment.Top)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+        // Scroll 在顶部继续上滑时把手势交给半模态换挡/展开，下滑时先滚列表。
+        .nestedScroll({
+          scrollForward: NestedScrollMode.PARENT_FIRST,
+          scrollBackward: NestedScrollMode.SELF_FIRST
+        })
       }
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 20, right: 20, top: 4, bottom: 20 })
+    .padding({ left: 20, right: 20, top: 12, bottom: 24 })
     .backgroundColor($r('app.color.remote_sheet_wash'))
   }
 
@@ -1288,8 +1304,7 @@ export struct WifiRemotePage {
   @Builder
   FocusSheet() {
     Column({ space: 12 }) {
-      RemoteSheetHeader({
-        title: $r('app.string.camera_wifi_remote_focus_settings'),
+      RemoteSheetIntro({
         hint: $r('app.string.camera_wifi_remote_af_hint'),
         currentValue: this.focusSettingLabel(),
         valueSize: 13
@@ -1345,11 +1360,16 @@ export struct WifiRemotePage {
         .align(Alignment.Top)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.Spring)
+        // Scroll 在顶部继续上滑时把手势交给半模态换挡/展开，下滑时先滚列表。
+        .nestedScroll({
+          scrollForward: NestedScrollMode.PARENT_FIRST,
+          scrollBackward: NestedScrollMode.SELF_FIRST
+        })
       }
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 20, right: 20, top: 4, bottom: 20 })
+    .padding({ left: 20, right: 20, top: 12, bottom: 24 })
     .backgroundColor($r('app.color.remote_sheet_wash'))
   }
 
@@ -1604,44 +1624,41 @@ struct RemoteShutter {
   }
 }
 
-/** 半模态统一标题：左侧标题 + 说明，右侧当前值。 */
+/** 半模态说明行：左边是相机能力说明，右边是当前值。标题已交给系统标题区。 */
 @ComponentV2
-struct RemoteSheetHeader {
-  @Param title: ResourceStr = '';
+struct RemoteSheetIntro {
   @Param hint: ResourceStr = '';
   @Param currentValue: string = '--';
   @Param valueSize: number = 20;
 
   build() {
     Row({ space: 12 }) {
-      Column({ space: 3 }) {
-        Text(this.title)
-          .fontSize(FontSize.Title)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.hint)
-          .fontSize(FontSize.Caption)
-          .lineHeight(18)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(2)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
+      Text(this.hint)
+        .fontSize(FontSize.Caption)
+        .lineHeight(18)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(2)
+        .layoutWeight(1)
 
-      Text(this.currentValue)
-        .fontSize(this.valueSize)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.primary'))
-        .maxLines(this.valueSize >= 18 ? 1 : 2)
-        .textAlign(TextAlign.End)
-        .constraintSize({ maxWidth: this.valueSize >= 18 ? 120 : 150 })
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .flexShrink(0)
+      Column({ space: 1 }) {
+        Text($r('app.string.camera_wifi_remote_current'))
+          .fontSize(FontSize.Micro)
+          .fontColor($r('app.color.text_tertiary'))
+          .maxLines(1)
+        Text(this.currentValue)
+          .fontSize(this.valueSize)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary'))
+          .maxLines(this.valueSize >= 18 ? 1 : 2)
+          .textAlign(TextAlign.End)
+          .constraintSize({ maxWidth: this.valueSize >= 18 ? 120 : 150 })
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.End)
+      .flexShrink(0)
     }
     .width('100%')
-    .padding({ right: 36, left: 4 })
+    .padding({ left: 4, right: 4 })
     .alignItems(VerticalAlign.Top)
   }
 }
