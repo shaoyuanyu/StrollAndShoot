@@ -34,8 +34,8 @@ import { GlassEffect } from '../utils/GlassEffect';
 
 /** 顶部标题栏高度（不含状态栏）：56vp 胶囊 + 上下各 6vp 呼吸边。 */
 const REMOTE_TOP_BAR_HEIGHT: number = 62;
-/** 底部控制台高度：曝光 48 + 工具 48 + 快门区 132 + 两条分隔线 + 上下内边距。 */
-const REMOTE_DECK_HEIGHT: number = 240;
+/** 底部控制台高度：专业参数条 56 + 快门区 132 + 分隔线 + 上下内边距。 */
+const REMOTE_DECK_HEIGHT: number = 200;
 /** 取景画面四周的呼吸边距。 */
 const REMOTE_IMAGE_INSET: number = 8;
 
@@ -327,6 +327,13 @@ export struct WifiRemotePage {
     const live = this.live;
     if (live === null || !live.active || !live.focusSettingsReady) return '--';
     return `${live.getAfModeLabel()} · ${live.getAfAreaLabel()}`;
+  }
+
+  /** 专业参数条只放得下一行，AF 格显示模式；区域在面板里看。 */
+  private focusModeLabel(): string {
+    const live = this.live;
+    if (live === null || !live.active || !live.focusSettingsReady) return '--';
+    return live.getAfModeLabel();
   }
 
   private canAdjustWb(): boolean {
@@ -937,8 +944,9 @@ export struct WifiRemotePage {
       .backgroundColor($r('app.color.divider'))
   }
 
+  /** 专业参数条：一行排下模式 / ISO / 光圈 / 快门 / EV / AF / WB，数值直接可点。 */
   @Builder
-  ExposureRow() {
+  ProParamsRow() {
     Row() {
       Column({ space: 1 }) {
         Text($r('app.string.camera_wifi_remote_mode'))
@@ -946,17 +954,24 @@ export struct WifiRemotePage {
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
         Text(this.exposureModeLabel())
-          .fontSize(FontSize.Caption)
+          .fontSize(FontSize.Reading)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      .width(48)
-      .height(46)
+      .layoutWeight(1)
+      .height(52)
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
 
+      this.VDivider()
+      RemoteExposureCell({
+        label: $r('app.string.camera_wifi_remote_iso'),
+        currentValue: this.exposureValue(EXPOSURE_PARAM_ISO),
+        isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_ISO),
+        onTap: () => { this.openExposure(EXPOSURE_PARAM_ISO); }
+      })
       this.VDivider()
       RemoteExposureCell({
         label: $r('app.string.camera_wifi_remote_aperture'),
@@ -973,21 +988,18 @@ export struct WifiRemotePage {
       })
       this.VDivider()
       RemoteExposureCell({
-        label: $r('app.string.camera_wifi_remote_iso'),
-        currentValue: this.exposureValue(EXPOSURE_PARAM_ISO),
-        isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_ISO),
-        onTap: () => { this.openExposure(EXPOSURE_PARAM_ISO); }
-      })
-      this.VDivider()
-      RemoteExposureCell({
         label: $r('app.string.camera_wifi_remote_ev'),
         currentValue: this.exposureValue(EXPOSURE_PARAM_EV),
         isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_EV),
         onTap: () => { this.openExposure(EXPOSURE_PARAM_EV); }
       })
+      this.VDivider()
+      this.FocusTool()
+      this.VDivider()
+      this.WbTool()
     }
     .width('100%')
-    .height(48)
+    .height(56)
     .padding({ left: 4, right: 4 })
     .alignItems(VerticalAlign.Center)
   }
@@ -995,8 +1007,8 @@ export struct WifiRemotePage {
   @Builder
   WbTool() {
     Row() {
-      RemoteToolCell({
-        label: $r('app.string.camera_wifi_remote_wb'),
+      RemoteExposureCell({
+        label: $r('app.string.camera_wifi_remote_wb_abbr'),
         currentValue: this.whiteBalanceLabel(),
         isEnabled: this.canAdjustWb(),
         onTap: () => { this.openWb(); }
@@ -1009,28 +1021,15 @@ export struct WifiRemotePage {
   @Builder
   FocusTool() {
     Row() {
-      RemoteToolCell({
-        label: $r('app.string.camera_wifi_remote_focus_settings'),
-        currentValue: this.focusSettingLabel(),
+      RemoteExposureCell({
+        label: $r('app.string.camera_wifi_remote_af_abbr'),
+        currentValue: this.focusModeLabel(),
         isEnabled: this.canAdjustFocus(),
         onTap: () => { this.openFocus(); }
       })
     }
     .layoutWeight(1)
     .bindSheet($$this.focusSheetOpen, this.FocusSheet(), this.sheetOptions($r('app.string.camera_wifi_remote_focus_settings')))
-  }
-
-  @Builder
-  ToolsRow() {
-    Row() {
-      this.WbTool()
-      this.VDivider()
-      this.FocusTool()
-    }
-    .width('100%')
-    .height(48)
-    .padding({ left: 4, right: 4 })
-    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -1094,12 +1093,7 @@ export struct WifiRemotePage {
   @Builder
   BottomDeck() {
     Column() {
-      this.ExposureRow()
-      Row()
-        .width('100%')
-        .height(0.5)
-        .backgroundColor($r('app.color.divider'))
-      this.ToolsRow()
+      this.ProParamsRow()
       Row()
         .width('100%')
         .height(0.5)
@@ -1394,55 +1388,12 @@ struct RemoteExposureCell {
       .alignItems(HorizontalAlign.Center)
     }
     .layoutWeight(1)
-    .height(46)
+    .height(52)
     .padding({ left: 2, right: 2 })
     .backgroundColor(Color.Transparent)
     .borderRadius(10)
     .enabled(this.isEnabled)
     .opacity(this.isEnabled ? 1 : 0.35)
-    .onClick(() => { this.onTap(); })
-  }
-}
-
-/** 白平衡 / 对焦工具格：标签 + 当前值 + 打开面板的箭头。 */
-@ComponentV2
-struct RemoteToolCell {
-  @Param label: ResourceStr = '';
-  @Param currentValue: string = '--';
-  @Param isEnabled: boolean = true;
-  @Event onTap: () => void = () => {};
-
-  build() {
-    Button({ type: ButtonType.Normal, stateEffect: true }) {
-      Row({ space: 6 }) {
-        Column({ space: 1 }) {
-          Text(this.label)
-            .fontSize(FontSize.Micro)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-          Text(this.currentValue)
-            .fontSize(FontSize.Reading)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(IconSize.Small)
-          .fontColor([$r('app.color.text_tertiary')])
-      }
-      .width('100%')
-      .padding({ left: 10, right: 10 })
-    }
-    .width('100%')
-    .height(48)
-    .padding(0)
-    .backgroundColor(Color.Transparent)
-    .enabled(this.isEnabled)
-    .opacity(this.isEnabled ? 1 : 0.4)
     .onClick(() => { this.onTap(); })
   }
 }

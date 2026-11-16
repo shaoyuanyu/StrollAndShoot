@@ -1917,6 +1917,10 @@
       "value": "白平衡"
     },
     {
+      "name": "camera_wifi_remote_wb_abbr",
+      "value": "WB"
+    },
+    {
       "name": "camera_wifi_remote_focus_settings",
       "value": "對焦設定"
     },
