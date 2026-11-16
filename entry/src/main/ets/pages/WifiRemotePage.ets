@@ -42,8 +42,9 @@ const REMOTE_IMAGE_INSET: number = 8;
 const DIAL_ITEM_WIDTH: number = 52;
 const DIAL_LENS_WIDTH: number = 60;
 const DIAL_LENS_HEIGHT: number = 60;
+const DIAL_LENS_RIM: number = 66;
 /** 镜片中心到刻度标签中心小于这个距离时，标签会与镜片边缘相交，整枚淡出。 */
-const DIAL_LABEL_OCCLUDE_RADIUS: number = DIAL_LENS_WIDTH / 2 + 12;
+const DIAL_LABEL_OCCLUDE_RADIUS: number = DIAL_LENS_RIM / 2 + 12;
 const DIAL_PANEL_HEIGHT: number = 104;
 const DIAL_WB: string = '__wb__';
 
@@ -1390,7 +1391,20 @@ export struct WifiRemotePage {
           .onScrollStop(() => { this.onDialScrollStop(); })
 
           Stack() {
-            // 圆形凸透镜：不透明底挡住滚动的中心标签，镜内是当前中心值的放大副本。
+            // 圆形凸透镜：外层厚玻璃圈 + 内层球面高光，镜内是当前中心值的放大副本。
+            Row()
+              .width(DIAL_LENS_RIM)
+              .height(DIAL_LENS_RIM)
+              .borderRadius(DIAL_LENS_RIM / 2)
+              .backgroundColor($r('app.color.remote_sheet_wash'))
+              .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
+              .shadow({
+                radius: 10,
+                color: $r('app.color.remote_image_shadow'),
+                offsetX: 0,
+                offsetY: 2
+              })
+
             Row()
               .width(DIAL_LENS_WIDTH)
               .height(DIAL_LENS_HEIGHT)
@@ -1411,7 +1425,7 @@ export struct WifiRemotePage {
                   [$r('app.color.primary'), 1.0]
                 ]
               })
-              .opacity(0.26)
+              .opacity(0.35)
 
             Row()
               .width(DIAL_LENS_WIDTH)
@@ -1437,12 +1451,6 @@ export struct WifiRemotePage {
               .height(DIAL_LENS_HEIGHT)
               .borderRadius(DIAL_LENS_WIDTH / 2)
               .border({ width: 0.75, color: $r('app.color.primary') })
-              .shadow({
-                radius: 10,
-                color: $r('app.color.remote_image_shadow'),
-                offsetX: 0,
-                offsetY: 2
-              })
 
             // 左上高光，给圆镜一点球面感。
             Row()
@@ -1473,8 +1481,8 @@ export struct WifiRemotePage {
             .justifyContent(FlexAlign.Center)
             .alignItems(HorizontalAlign.Center)
           }
-          .width(DIAL_LENS_WIDTH)
-          .height(DIAL_LENS_HEIGHT)
+          .width(DIAL_LENS_RIM)
+          .height(DIAL_LENS_RIM)
           .offset({ y: 0 })
           .hitTestBehavior(HitTestMode.None)
         }
