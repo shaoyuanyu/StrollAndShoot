@@ -34,8 +34,8 @@ import { GlassEffect } from '../utils/GlassEffect';
 
 /** 顶部标题栏高度（不含状态栏）：56vp 胶囊 + 上下各 6vp 呼吸边。 */
 const REMOTE_TOP_BAR_HEIGHT: number = 62;
-/** 底部控制台高度：曝光 48 + 工具 48 + 快门区 128 + 两条分隔线 + 上下内边距。 */
-const REMOTE_DECK_HEIGHT: number = 236;
+/** 底部控制台高度：曝光 48 + 工具 48 + 快门区 140 + 两条分隔线 + 上下内边距。 */
+const REMOTE_DECK_HEIGHT: number = 248;
 /** 取景画面四周的呼吸边距。 */
 const REMOTE_IMAGE_INSET: number = 8;
 
@@ -1125,7 +1125,7 @@ export struct WifiRemotePage {
       .justifyContent(FlexAlign.Center)
     }
     .width('100%')
-    .height(128)
+    .height(140)
     .alignItems(VerticalAlign.Center)
   }
 
