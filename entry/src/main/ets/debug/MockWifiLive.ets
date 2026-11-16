@@ -274,10 +274,15 @@ class MockWifiTransport implements PtpTransport {
     view.setUint16(18, 3712, false);
     header[41] = 0; // FocusDrive = STILL
     header[42] = this.focusState;
-    header[43] = 2; // Auto area
-    header[44] = 2; // 两块 AF 框
+    const area = this.props.get(PROP_AF_AREA) ?? -1;
+    const autoArea = area === 0x8011 || area === 0x8020 || area === 0x8021;
+    header[43] = autoArea ? 2 : 1;
+    // 单点 / 针点只返回一块框；自动区域返回两块，用来验收多框叠加。
+    header[44] = autoArea ? 2 : 1;
     writeBox(header, 48, 700, 560, this.boxCx, this.boxCy);
-    writeBox(header, 56, 500, 400, 3300, 2400);
+    if (autoArea) {
+      writeBox(header, 56, 500, 400, 3300, 2400);
+    }
     const out = new Uint8Array(header.length + jpeg.length);
     out.set(header, 0);
     out.set(jpeg, header.length);
