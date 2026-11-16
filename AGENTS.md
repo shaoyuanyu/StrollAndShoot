@@ -412,6 +412,7 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 |---|---|
 | `debug/MockPtpDevice.ets` | 虚拟相机的“硬件”：USB 描述符、DeviceInfo、1 个 storage、`DCIM → 100MOCK / 101MOCK` 两层目录树、38 张照片的元数据，以及按 handle 现场编码出的 JPEG（缩略图 180×120，原图 1200×800；4×3 多色块 + 白框 + 中心十字，左上角固定深色块做方向参照） |
 | `debug/MockPtpSession.ets` | `PtpTransport` 的第二个实现：`connect` / `getDeviceInfo` / `getStorageIDs` / `getObjectHandles` / `getObjectInfo` / `getThumb` / `getObject` / `getPartialObject`，每个调用带少量延迟让进度条可见。**`getObject` 固定 520ms/张**（靠近真实 USB 单张原图耗时）：之前 120ms 时 38 张几秒就传完，进度浮岛的下载中 / 保存中 / 完成三种状态根本来不及看 |
+| `debug/MockWifiLive.ets` | 假 Wi-Fi 实时取景传输：出 1200×800 色块帧、带 1024B Ex 头，能读写白平衡 / 曝光模式 / AF 模式与区域；`createMockWifiLiveView()` 供调试开关和 `wifi_remote` 预演共用，不反向依赖 `CameraService` |
 
 **`makeJpeg` 必须保持「按色带算一行 + 逐行 memcpy」的写法**（2026-11-07 实测，2026-11-09 改成多色块后复核）：原先是 1200×800 逐像素写 RGBA，96 万次 JS 循环、每次 4 次写入，`hilog` 实测 **fill 就要 127–167ms，整张 130–175ms**，而且跑在 UI 线程上；打开一张照片会连续生成「当前 + 邻近预加载」好几张，真机上表现就是「一开图 / 一传输就卡」。现在 4×3 色块图每个「色带行」只算一条行缓冲（横向 4 个色块 + 中心竖线 + 左右白框），再 `u8.set(row, offset)` 复制到该带所有行，fill 仍是 **1–2ms**、整张 10–17ms（余下是原生的 `createPixelMap` + `packToData`）。日志里每次生成会打一行 `MockPtp: jpeg 1200x800 10ms (fill 1ms)`，改这块时先看这个数。
 
@@ -421,7 +422,8 @@ $HDC -t $T file recv <上面那个路径> /tmp/app_shot.jpg
 
 - 设置页最底部「调试（仅调试包可见）→ 模拟相机设备」打开开关；
 - 开关下面会出现「模拟型号」下拉（1.48.0）：决定虚拟相机上报的 `manufacturer` / `model`，也就是**标题里的型号与页首立牌用哪张图**。选项由 `cameraStandeeKeys()` + `cameraStandeeLabel()` 生成，所以每一项都必然有立牌；第一项「未知型号」上报 `Virtual PTP Camera`，用来验收「认不出机型、不出立牌、标题退回全局『相机』」的分支。改型号会断开当前会话，回「相机」页再点一次「搜索相机」才生效；
-- 到「相机」页点「搜索相机」，会走 **搜索 → 连接 → 取设备信息 → 首次连接询问是否启用缓存 → 遍历目录 → 取元数据 → 按行取缩略图** 的完整流程；
+- **1.84.0 起四种模式都能用这台模拟相机**：USB 继续走 `scanForCamera()` 的 `MockPtpSession`；BLE / AP / STA 在 `searchByMode()` 里由 `connectMockCamera()` 直接接上同一套 `MockPtpSession` 数据，不扫蓝牙、不扫 mDNS/网段。BLE 是 `connected + wireless` 的浏览态，AP / STA 是 Wi-Fi 已连接；STA 的遥控页在 `ensureWifiLiveView()` 里用 `createMockWifiLiveView()` 出帧。调试开关打开时 STA 搜索会跳过手机热点弹窗。**BLE 遥控按键仍需真机，AP 按产品现状没有遥控**。
+- 到「相机」页点「搜索相机」，USB 会走 **搜索 → 连接 → 取设备信息 → 首次连接询问是否启用缓存 → 遍历目录 → 取元数据 → 按行取缩略图** 的完整流程；BLE/AP/STA 走上面的 mock 接入后同样扫描照片；
 - 画廊里看到的是扫描结果，不是直接塞进去的数组；第二次点「快速扫描」会命中磁盘缩略图缓存（`[CACHE_HIT]`）；
 - 预览器里的原图来自 `getObject()` 返回的真实 JPEG。
 

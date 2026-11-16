@@ -1014,6 +1014,7 @@ export struct CameraPage {
     // 设置里打开了「热点未开时弹窗提醒」才检查；系统不允许三方应用自动打开
     // 热点，这里只能引导用户手动去设置。失败后的「重试」不再重复弹。
     if (phase === CameraPhase.Idle && this.svc.linkMode === CameraLinkMode.STA
+      && !this.svc.isMockCameraEnabled()
       && this.staHotspotPref.check && !this.staHotspotPromptDismissed
       && phoneHotspotActive() === false) {
       this.showStaHotspotDialog();

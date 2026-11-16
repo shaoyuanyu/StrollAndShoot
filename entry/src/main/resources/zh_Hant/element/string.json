@@ -1006,7 +1006,7 @@
     },
     {
       "name": "settings_mock_camera_desc",
-      "value": "開啟後到「相機」頁點「搜尋相機」，會連上一台虛擬 PTP 相機並掃描 38 張合成照片"
+      "value": "開啟後，USB / 藍牙 / Wi-Fi AP / Wi-Fi STA 的「搜尋相機」都會連上虛擬相機並掃描 38 張合成照片；STA 還可進入即時取景遙控。"
     },
     {
       "name": "settings_disable_glass",

@@ -1006,7 +1006,7 @@
     },
     {
       "name": "settings_mock_camera_desc",
-      "value": "开启后到「相机」页点「搜索相机」，会连上一台虚拟 PTP 相机并扫描 38 张合成照片"
+      "value": "开启后，USB / 蓝牙 / Wi-Fi AP / Wi-Fi STA 的「搜索相机」都会连上虚拟相机并扫描 38 张合成照片；STA 还可进入实时取景遥控。"
     },
     {
       "name": "settings_disable_glass",

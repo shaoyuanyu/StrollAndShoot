@@ -45,6 +45,7 @@ import { ThumbnailCache, type CacheEntry } from './ThumbnailCache';
 import { L10n } from '../utils/L10n';
 import { MockPtpDevice } from '../debug/MockPtpDevice';
 import { MockPtpSession } from '../debug/MockPtpSession';
+import { createMockWifiLiveView } from '../debug/MockWifiLive';
 import type { PhotoEntry, DownloadRecord, DownloadProgress, DownloadResult } from '../model/PhotoEntry';
 
 const DOMAIN = 0x0000;
@@ -2473,6 +2474,7 @@ export class CameraService {
       this.connected = false;
       this.wifiSession = null;
       this.session = new PtpScheduler(new PtpSession());
+      this.sessionIsMock = false;
       if (!silent) {
         this.reportScanFailure(L10n.tr('camera_status_wifi_connect_failed', target));
       }
@@ -2568,6 +2570,7 @@ export class CameraService {
     }
     if (this.session === session) {
       this.session = new PtpScheduler(new PtpSession());
+      this.sessionIsMock = false;
       this.wireless = false;
       this.connected = false;
       this.usable = false;
@@ -2604,6 +2607,7 @@ export class CameraService {
     this.wifiLiveView = null;
     this.wifiSession = null;
     this.session = new PtpScheduler(new PtpSession());
+    this.sessionIsMock = false;
 
     const host = this.wifiHost;
     const port = this.wifiPort;
@@ -4190,6 +4194,124 @@ export class CameraService {
   }
 
   /**
+   * 调试包：把模拟相机接到 BLE / AP / STA 上。
+   *
+   * 底层仍用 `MockPtpSession`（和 USB 模拟相同的一套 38 张照片与元数据），
+   * 只是把会话标成无线，让相机页走真实模式的已连接/扫描/浏览路径：
+   * - BLE：同时摆出配对与临时浏览状态；
+   * - AP / STA：显示 Wi-Fi 已连接；
+   * - STA 的实时取景在 `ensureWifiLiveView()` 里换成 `MockWifiLive`。
+   *
+   * 只由 `searchByMode()` 在 `MockPtpDevice.isEnabled()` 时调用。
+   */
+  async connectMockCamera(mode: number): Promise<boolean> {
+    if (!MockPtpDevice.isEnabled() || mode === CameraLinkMode.USB) return false;
+    const epoch = this.linkEpoch;
+    this.log.add(`[Mock] 模拟相机接入模式 ${mode}`);
+    if (this.connected || this.bleConnected) {
+      try {
+        await this.disconnect();
+      } catch (_e) {
+        // 调试路径：旧会话收不干净也继续覆盖
+      }
+      this.bleConnected = false;
+    }
+    if (!this.epochCurrent(epoch)) return false;
+
+    this.linkMode = mode;
+    this.wireless = true;
+    this.wifiHost = '192.168.1.5';
+    this.wifiPort = 15740;
+    this.wifiLiveView = null;
+    this.wifiConnecting = false;
+    this.wifiAutoConnecting = false;
+    this.wifiReconnecting = false;
+    this.wifiScanning = false;
+    this.wifiCameras = [];
+    this.apJoining = false;
+    this.pairingRequired = false;
+    this.pairingCode = '';
+    this.wifiAutoReconnectArmed = false;
+    this.cancelWifiReconnect();
+    this.bleScanning = false;
+    this.bleConnecting = false;
+    this.bleReconnecting = false;
+    this.bleRecovering = false;
+    this.bleCameras = [];
+    this.bleHint = '';
+    this.wifiHint = '';
+    this.wirelessFailed = '';
+    this.lastScanError = '';
+    this.bleRemoteActive = false;
+    this.bleRemoteEntering = false;
+    this.bleRemoteMain = -1;
+    this.bleRemoteCapture = 0;
+    this.bleRemoteRestriction = 0;
+    this.bleRemoteFocus = false;
+    this.bleRemoteSpecial = 0;
+    this.bleRemoteSpecialRunning = false;
+    this.bleRemoteError = '';
+    this.bleRemoteToolError = '';
+
+    if (mode === CameraLinkMode.BLE) {
+      this.bleConnected = true;
+      this.bleSerial = 'MOCK-0001';
+      this.bleCameraName = 'Z 50II';
+      this.bleBatteryPercent = 82;
+      this.blePowerState = 3;
+      this.bleFirmware = '1.04';
+      this.bleCableAttached = false;
+    } else {
+      this.bleConnected = false;
+      this.bleSerial = '';
+      this.bleCameraName = '';
+      this.bleBatteryPercent = -1;
+      this.blePowerState = -1;
+      this.bleFirmware = '';
+      this.bleCableAttached = false;
+    }
+
+    const mock = new MockPtpSession();
+    this.session = new PtpScheduler(mock);
+    this.sessionIsMock = true;
+    const endpoint: PtpEndpoint = {
+      kind: PtpEndpointKind.WIFI,
+      host: this.wifiHost,
+      port: this.wifiPort,
+      label: 'Mock Wi-Fi Camera'
+    };
+    const ok = await this.session.connect(endpoint);
+    if (!ok || !this.epochCurrent(epoch)) {
+      this.connected = false;
+      this.usable = false;
+      return false;
+    }
+    this.connected = true;
+    this.usable = false;
+    const info = await this.session.getDeviceInfo();
+    if (!this.epochCurrent(epoch)) return false;
+    this.cameraName = info?.model || 'Z 50II';
+    this.cameraModel = this.cameraName;
+    this.deviceManufacturer = info?.manufacturer || 'Nikon';
+    this.deviceSerialNumber = info?.serialNumber || 'MOCK-0001';
+    this.deviceVersion = info?.deviceVersion || '2.00';
+    this.deviceOps = info?.operationsSupported ?? [];
+    this.deviceProps = info?.devicePropertiesSupported ?? [];
+    this.cameraIdentity = `Nikon_${this.cameraName}_${this.deviceSerialNumber}`;
+    this.ptpBatteryPercent = 87;
+    this.usable = true;
+    this.statusText = L10n.tr('camera_status_connected');
+    this.pendingCachingPrompt = false;
+    this.scanning = false;
+    this.photoCount = 0;
+    this.photos = [];
+    await this.scanForCamera(true, true);
+    if (!this.epochCurrent(epoch)) return false;
+    this.log.add(`[Mock] 模拟相机接入完成：${this.cameraIdentity} / ${this.photoCount} 张`);
+    return this.connected;
+  }
+
+  /**
    * 「搜索相机」的统一入口：按当前模式分派。
    *
    * 四种模式共用同一个按钮位置，用户不需要记「哪个按钮属于哪个模式」；
@@ -4197,6 +4319,13 @@ export class CameraService {
    */
   async searchByMode(): Promise<void> {
     this.log.add(`按模式搜索：${this.linkMode}`);
+    // 调试包：USB 继续走 scanForCamera 的 MockPtpSession；其余三种模式在
+    // 这里直接接到同一台假相机上，避免蓝牙/无线真的去扫射频和网段。
+    if (MockPtpDevice.isEnabled() && this.linkMode !== CameraLinkMode.USB) {
+      const mockOk = await this.connectMockCamera(this.linkMode);
+      if (!mockOk) this.log.add('[Mock] 模拟链路接入失败');
+      return;
+    }
     // 这一轮搜索属于当前链路选择；中途切模式后，后续 await 回来的步骤不能再
     // 接着跑（否则会在新模式里开一轮旧模式的搜索）。
     const epoch = this.linkEpoch;
@@ -5547,6 +5676,7 @@ export class CameraService {
     }
     if (this.session === session) {
       this.session = new PtpScheduler(new PtpSession());
+      this.sessionIsMock = false;
       this.connected = false;
       this.usable = false;
     }
@@ -7083,6 +7213,11 @@ export class CameraService {
     return this.sessionIsMock;
   }
 
+  /** 调试开关是否打开；相机页用它跳过 STA 的手机热点引导。 */
+  isMockCameraEnabled(): boolean {
+    return MockPtpDevice.isEnabled();
+  }
+
   /**
    * 把模拟相机记进「已配对相机」（仅调试包）。
    *
@@ -7113,8 +7248,19 @@ export class CameraService {
    * 而跳过真正的替换。
    */
   onMockCameraToggled(): void {
+    const wasMock = this.sessionIsMock;
     if (this.connected) {
       this.disconnect().catch((_e: Error) => { /* best effort */ });
+    }
+    // 关掉调试开关时别把模拟 BLE 的配对态留在页面上；真实 BLE 链路不归这里管。
+    if (wasMock && !MockPtpDevice.isEnabled()) {
+      this.bleConnected = false;
+      this.bleSerial = '';
+      this.bleCameraName = '';
+      this.bleBatteryPercent = -1;
+      this.blePowerState = -1;
+      this.bleFirmware = '';
+      this.bleCableAttached = false;
     }
   }
 
@@ -7146,8 +7292,12 @@ export class CameraService {
   ensureWifiLiveView(): NikonWifiLiveView | null {
     if (!this.connected || !this.wireless) return null;
     if (this.wifiLiveView === null) {
-      this.wifiLiveView = new NikonWifiLiveView(this.session, this.deviceOps,
-        (msg: string) => { this.log.add(msg); }, this.deviceProps);
+      if (this.sessionIsMock && this.linkMode === CameraLinkMode.STA) {
+        this.wifiLiveView = createMockWifiLiveView((msg: string) => { this.log.add(msg); });
+      } else {
+        this.wifiLiveView = new NikonWifiLiveView(this.session, this.deviceOps,
+          (msg: string) => { this.log.add(msg); }, this.deviceProps);
+      }
     }
     return this.wifiLiveView;
   }
@@ -7185,7 +7335,7 @@ export class CameraService {
     }
     // 用户主动断开：撤掉自动重连，避免刚断开就被自己接回来。
     const wasWireless = this.wireless;
-    if (wasWireless) {
+    if (wasWireless && !this.sessionIsMock) {
       // 先把「退出无线」的动作跑完：能秒退就秒退，退不了才排密集重扫。
       await this.exitWirelessToBle();
     }
@@ -7195,6 +7345,7 @@ export class CameraService {
     if (this.wireless) {
       // 回到 USB 默认实现，下一次「搜索相机」才不会把 USB 端点喂给 Wi-Fi 会话。
       this.session = new PtpScheduler(new PtpSession());
+      this.sessionIsMock = false;
       this.wireless = false;
     }
     this.wifiSession = null;

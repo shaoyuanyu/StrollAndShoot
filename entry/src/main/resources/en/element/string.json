@@ -1006,7 +1006,7 @@
     },
     {
       "name": "settings_mock_camera_desc",
-      "value": "Turn this on, then tap “Find Camera” on the Camera tab. A virtual PTP camera will connect and scan 38 synthetic photos."
+      "value": "Turn this on and “Find Camera” in USB, Bluetooth, Wi-Fi AP or Wi-Fi STA connects a virtual camera with 38 synthetic photos. STA also opens live view and remote shooting."
     },
     {
       "name": "settings_disable_glass",

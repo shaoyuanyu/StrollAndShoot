@@ -7,9 +7,9 @@
  * - 暴露白平衡 / 曝光模式 / AF 模式 / AF 区域的可读写属性与 `0x1014` 描述；
  * - `ChangeAfArea` 会真的移动第一块 AF 框，用于验收点画面对焦和多框叠加。
  *
- * 只由 `CameraStateDemo` 的 `wifi_remote` 预演安装，release 包没有调用入口。
+ * 由 `CameraService.connectMockCamera()`（调试开关打开时的 STA）和
+ * `CameraStateDemo` 的 `wifi_remote` 预演安装，release 包没有调用入口。
  */
-import { CameraService } from '../services/CameraService';
 import {
   type DeviceInfo,
   type ObjectInfo,
@@ -291,14 +291,15 @@ class MockWifiTransport implements PtpTransport {
   }
 }
 
-export class MockWifiLive {
-  /** 把 `CameraService.wifiLiveView` 换成一个会出帧、能读写的假实现。 */
-  static install(service: CameraService): void {
-    const log = (msg: string): void => {
-      service.getLog().add(msg);
-    };
-    const transport = new MockWifiTransport(log);
-    service.wifiLiveView = new NikonWifiLiveView(transport, OPS, log, PROPS);
-    log('[mock-wifi] 实时取景假相机已安装');
-  }
+/**
+ * 造一个会出帧、能读写的假实时取景控制器。
+ *
+ * 由 `CameraService` 在调试模式下直接挂到 `wifiLiveView`；也从 `CameraStateDemo`
+ * 的 `wifi_remote` 预演里使用。这里不接收 `CameraService`，避免服务层和调试模块
+ * 互相 import 形成环。
+ */
+export function createMockWifiLiveView(log: (msg: string) => void): NikonWifiLiveView {
+  const transport = new MockWifiTransport(log);
+  log('[mock-wifi] 实时取景假相机已安装');
+  return new NikonWifiLiveView(transport, OPS, log, PROPS);
 }
