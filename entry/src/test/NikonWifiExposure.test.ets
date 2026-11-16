@@ -2,6 +2,7 @@ import { describe, it, expect } from '@ohos/hypium';
 import {
   EXPOSURE_PARAM_APERTURE,
   EXPOSURE_PARAM_EV,
+  EXPOSURE_PARAM_ISO,
   EXPOSURE_PARAM_SHUTTER,
   formatAperture,
   formatEv,
@@ -29,6 +30,28 @@ function makeDescriptor(dataType: number, values: number[]): Uint8Array {
       view.setUint32(offset, value >>> 0, true);
     }
     offset += size;
+  }
+  return data;
+}
+
+/** 故意让头里的 dataType 和值的实际宽度不一致，用于验证按属性尝试 2B/4B。 */
+function makeMismatchedDescriptor(dataType: number, valueSize: number,
+                                  values: number[]): Uint8Array {
+  const data = new Uint8Array(8 + valueSize * 2 + values.length * valueSize);
+  const view = new DataView(data.buffer);
+  view.setUint16(0, 0xD0B4, true);
+  view.setUint16(2, dataType, true);
+  data[4] = 0x02;
+  data[5 + valueSize * 2] = 1;
+  view.setUint16(6 + valueSize * 2, values.length, true);
+  let offset = 8 + valueSize * 2;
+  for (const value of values) {
+    if (valueSize === 2) {
+      view.setUint16(offset, value, true);
+    } else {
+      view.setUint32(offset, value, true);
+    }
+    offset += valueSize;
   }
   return data;
 }
@@ -89,6 +112,20 @@ export default function nikonWifiExposureTest() {
       expect(staticOptions(EXPOSURE_PARAM_APERTURE).length > 0).assertTrue();
       expect(staticOptions(EXPOSURE_PARAM_SHUTTER).length > 0).assertTrue();
       expect(staticOptions(EXPOSURE_PARAM_EV).length > 0).assertTrue();
+    });
+
+    it('dataType 写成 UINT32 但值实际是 16 位时按属性回退到 2B', 0, () => {
+      const data = makeMismatchedDescriptor(0x0006, 2, [50, 100, 200, 400]);
+      const opts = parseDescriptorOptions(data, EXPOSURE_PARAM_ISO);
+      expect(opts.length).assertEqual(4);
+      expect(opts[1].value).assertEqual(100);
+      expect(opts[1].label).assertEqual('100');
+    });
+
+    it('只有一个不合理值时返回空，交给静态列表兜底', 0, () => {
+      const data = makeMismatchedDescriptor(0x0004, 2, [22]);
+      const opts = parseDescriptorOptions(data, EXPOSURE_PARAM_APERTURE);
+      expect(opts.length).assertEqual(0);
     });
   });
 }

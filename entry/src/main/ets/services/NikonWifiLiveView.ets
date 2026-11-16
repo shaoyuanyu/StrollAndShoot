@@ -347,6 +347,7 @@ export class NikonWifiLiveView {
   private fpsFrames: number = 0;
   private frameIndex: number = 0;
   private extractFailures: number = 0;
+  private focusLogCount: number = 0;
 
   /**
    * 解码泵：取帧和 JPEG 解码重叠。
@@ -561,6 +562,7 @@ export class NikonWifiLiveView {
       ? parseDescriptorOptions(apData, EXPOSURE_PARAM_APERTURE) : [];
     this.apertureOptions = ap.length > 0
       ? ap : staticOptions(EXPOSURE_PARAM_APERTURE);
+    this.log(`曝光: 光圈选项 ${this.apertureOptions.length} ${this.optionPreview(this.apertureOptions)}`);
 
     const shData = await this.readExposureDescriptor(EXPOSURE_PROP_SHUTTER);
     if (seq !== this.startSeq || !this.active) return;
@@ -568,6 +570,7 @@ export class NikonWifiLiveView {
       ? parseDescriptorOptions(shData, EXPOSURE_PARAM_SHUTTER) : [];
     this.shutterOptions = sh.length > 0
       ? sh : staticOptions(EXPOSURE_PARAM_SHUTTER);
+    this.log(`曝光: 快门选项 ${this.shutterOptions.length} ${this.optionPreview(this.shutterOptions)}`);
 
     const isoData = await this.readExposureDescriptor(this.isoProperty);
     if (seq !== this.startSeq || !this.active) return;
@@ -575,6 +578,7 @@ export class NikonWifiLiveView {
       ? parseDescriptorOptions(isoData, EXPOSURE_PARAM_ISO) : [];
     this.isoOptions = iso.length > 0
       ? iso : staticOptions(EXPOSURE_PARAM_ISO);
+    this.log(`曝光: ISO选项 ${this.isoOptions.length} ${this.optionPreview(this.isoOptions)}`);
     if (this.isoProperty === EXPOSURE_PROP_ISO_FALLBACK) {
       // 旧属性是 UINT16，超过 65535 的 ISO 写不进去。
       this.isoOptions = this.isoOptions.filter((opt: ExposureOption) => opt.value <= 0xFFFF);
@@ -586,6 +590,15 @@ export class NikonWifiLiveView {
       ? parseDescriptorOptions(evData, EXPOSURE_PARAM_EV) : [];
     this.evOptions = ev.length > 0
       ? ev : staticOptions(EXPOSURE_PARAM_EV);
+    this.log(`曝光: EV选项 ${this.evOptions.length} ${this.optionPreview(this.evOptions)}`);
+  }
+
+  private optionPreview(options: ExposureOption[]): string {
+    const labels: string[] = [];
+    for (let i = 0; i < options.length && i < 4; i++) {
+      labels.push(options[i].label);
+    }
+    return labels.join('/');
   }
 
   private async readExposureDescriptor(prop: number): Promise<Uint8Array | null> {
@@ -595,6 +608,9 @@ export class NikonWifiLiveView {
         + ` ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
       return null;
     }
+    const head = Array.from(r.data.subarray(0, Math.min(48, r.data.length)))
+      .map((b: number) => b.toString(16).padStart(2, '0')).join('');
+    this.log(`曝光: 描述 0x${prop.toString(16)} len=${r.data.length} head=${head}`);
     return r.data;
   }
 
@@ -681,6 +697,7 @@ export class NikonWifiLiveView {
       this.focusState = 0;
       this.focusDrive = 0;
       this.afBoxes = [];
+      this.focusLogCount = 0;
       this.isoProperty = EXPOSURE_PROP_ISO;
       this.exposureReady = false;
       this.exposureLoading = false;
@@ -1121,11 +1138,21 @@ export class NikonWifiLiveView {
         }
       } else {
         this.frameIndex++;
-        if (this.frameIndex === 1 && focus !== null) {
-          const first = focus.boxes.length > 0 ? focus.boxes[0] : null;
-          this.log(`实时取景: 焦点头 drive=${focus.drive} state=${focus.state}`
-            + ` boxes=${focus.boxes.length}`
-            + `${first === null ? '' : ` first=${first.w}x${first.h}@${first.cx},${first.cy}`}`);
+        if (this.frameIndex === 1) {
+          const head = Array.from(r.data.subarray(0, Math.min(64, r.data.length)))
+            .map((b: number) => b.toString(16).padStart(2, '0')).join('');
+          this.log(`实时取景: 取景头 len=${r.data.length} head=${head}`);
+          if (focus !== null) {
+            this.log(`实时取景: 焦点头 drive=${focus.drive} state=${focus.state}`
+              + ` boxes=${focus.boxes.length}`);
+          }
+        }
+        if (focus !== null && focus.boxes.length > 0 && this.focusLogCount < 3) {
+          const first = focus.boxes[0];
+          this.focusLogCount++;
+          this.log(`实时取景: AF框 n=${focus.boxes.length} state=${focus.state}`
+            + ` first=${first.w}x${first.h}@${first.cx},${first.cy}`
+            + ` whole=${this.afWidth}x${this.afHeight} frame=${this.frameWidth}x${this.frameHeight}`);
         }
         this.timingFrames++;
         this.timingFetchMs += elapsed;

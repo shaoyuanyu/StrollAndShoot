@@ -114,34 +114,6 @@ export function formatEv(raw: number): string {
   return `${sign}${value.toFixed(1)}`;
 }
 
-function valueSize(dataType: number): number {
-  if (dataType === 0x0001 || dataType === 0x0002) return 1;
-  if (dataType === 0x0003 || dataType === 0x0004) return 2;
-  if (dataType === 0x0005 || dataType === 0x0006) return 4;
-  return 0;
-}
-
-function isSignedType(dataType: number): boolean {
-  return dataType === 0x0001 || dataType === 0x0003 || dataType === 0x0005;
-}
-
-function readValue(data: Uint8Array, offset: number, dataType: number): number {
-  const size = valueSize(dataType);
-  if (size === 0 || offset + size > data.length) return 0;
-  let raw = 0;
-  for (let i = 0; i < size; i++) {
-    raw |= data[offset + i] << (8 * i);
-  }
-  if (size === 4) {
-    return isSignedType(dataType) ? raw | 0 : raw >>> 0;
-  }
-  if (isSignedType(dataType)) {
-    const signBit = 1 << (size * 8 - 1);
-    return (raw & signBit) !== 0 ? raw - (1 << (size * 8)) : raw;
-  }
-  return raw;
-}
-
 function makeOption(param: string, value: number): ExposureOption {
   return { value: value, label: exposureLabel(param, value) };
 }
@@ -159,18 +131,26 @@ export function exposureLabel(param: string, value: number): string {
 /**
  * 解析 `0x1014 GetDevicePropDesc` 的枚举 / 范围，转成 UI 选项。
  *
- * DevicePropDesc: property(u16) + dataType(u16) + getSet(u8) +
- * factory + current + formFlag(u8)；formFlag 1 = 枚举（数量 u16 + 值），
- * 2 = 范围（min/max/step）。
+ * 不盲信描述里的 dataType：尼康不同固件对同一属性的数据类型上报会漂移
+ * （实测 ISO 描述按 4B 读会得到 6553632）。这里按属性尝试 2B / 4B 两种
+ * 布局，只接受数值范围合理、项数足够的候选；都不合理就返回空，让调用方
+ * 使用标准 1/3 档兜底列表。
  */
 export function parseDescriptorOptions(data: Uint8Array, param: string): ExposureOption[] {
-  if (data.length < 6) return [];
-  const dataType = u16le(data, 2);
-  const size = valueSize(dataType);
-  if (size === 0) return [];
-  const factoryOffset = 5;
-  const currentOffset = factoryOffset + size;
-  const formOffset = currentOffset + size;
+  const sizes: number[] = param === EXPOSURE_PARAM_SHUTTER || param === EXPOSURE_PARAM_ISO
+    ? [4, 2] : [2, 4];
+  let best: ExposureOption[] = [];
+  for (const size of sizes) {
+    const options = parseDescriptorWithSize(data, param, size);
+    if (isPlausible(param, options)) return options;
+    if (options.length > best.length) best = options;
+  }
+  return [];
+}
+
+function parseDescriptorWithSize(data: Uint8Array, param: string, size: number): ExposureOption[] {
+  if (size <= 0 || data.length < 6) return [];
+  const formOffset = 5 + size * 2;
   if (formOffset >= data.length) return [];
   const form = data[formOffset];
   let offset = formOffset + 1;
@@ -181,15 +161,15 @@ export function parseDescriptorOptions(data: Uint8Array, param: string): Exposur
     offset += 2;
     const limit = Math.min(count, 256);
     for (let i = 0; i < limit && offset + size <= data.length; i++) {
-      values.push(readValue(data, offset, dataType));
+      values.push(readValueWithSize(data, offset, size, param === EXPOSURE_PARAM_EV));
       offset += size;
     }
   } else if (form === 2) {
     if (offset + size * 3 > data.length) return [];
-    const min = readValue(data, offset, dataType);
-    const max = readValue(data, offset + size, dataType);
-    const step = readValue(data, offset + size * 2, dataType);
-    if (step > 0) {
+    const min = readValueWithSize(data, offset, size, param === EXPOSURE_PARAM_EV);
+    const max = readValueWithSize(data, offset + size, size, param === EXPOSURE_PARAM_EV);
+    const step = readValueWithSize(data, offset + size * 2, size, param === EXPOSURE_PARAM_EV);
+    if (step > 0 && max >= min) {
       const count = Math.floor((max - min) / step) + 1;
       const limit = Math.min(count, 256);
       for (let i = 0; i < limit; i++) {
@@ -205,6 +185,41 @@ export function parseDescriptorOptions(data: Uint8Array, param: string): Exposur
     options.push(makeOption(param, value));
   }
   return options;
+}
+
+function readValueWithSize(data: Uint8Array, offset: number, size: number,
+                           signed: boolean): number {
+  if (offset + size > data.length) return 0;
+  let raw = 0;
+  for (let i = 0; i < size; i++) {
+    raw |= data[offset + i] << (8 * i);
+  }
+  if (size === 4) {
+    return signed ? raw | 0 : raw >>> 0;
+  }
+  if (signed) {
+    const signBit = 1 << (size * 8 - 1);
+    return (raw & signBit) !== 0 ? raw - (1 << (size * 8)) : raw;
+  }
+  return raw;
+}
+
+function isPlausible(param: string, options: ExposureOption[]): boolean {
+  if (options.length < 2) return false;
+  for (const opt of options) {
+    if (param === EXPOSURE_PARAM_APERTURE) {
+      if (opt.value < 50 || opt.value > 20000) return false;
+    } else if (param === EXPOSURE_PARAM_ISO) {
+      if (opt.value < 25 || opt.value > 204800) return false;
+    } else if (param === EXPOSURE_PARAM_EV) {
+      if (opt.value < -5000 || opt.value > 5000) return false;
+    } else if (param === EXPOSURE_PARAM_SHUTTER) {
+      const num = shutterNumerator(opt.value);
+      const den = shutterDenominator(opt.value);
+      if (num <= 0 || den <= 0 || num > 100000 || den > 100000) return false;
+    }
+  }
+  return true;
 }
 
 function shutterOption(numerator: number, denominator: number): ExposureOption {
