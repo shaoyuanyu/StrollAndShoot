@@ -1822,7 +1822,7 @@
     },
     {
       "name": "camera_wifi_remote_hint",
-      "value": "點畫面移動對焦點；按 AF 對焦，按快門拍攝。離開頁面會結束即時取景。"
+      "value": "點畫面對焦；點上方參數調光圈/快門/ISO/曝光補償；按快門拍攝。離開頁面會結束即時取景。"
     },
     {
       "name": "camera_wifi_remote_af",
@@ -1839,6 +1839,50 @@
     {
       "name": "camera_wifi_remote_fps",
       "value": "%1$d fps"
+    },
+    {
+      "name": "camera_wifi_remote_aperture",
+      "value": "光圈"
+    },
+    {
+      "name": "camera_wifi_remote_shutter",
+      "value": "快門"
+    },
+    {
+      "name": "camera_wifi_remote_iso",
+      "value": "ISO"
+    },
+    {
+      "name": "camera_wifi_remote_ev",
+      "value": "曝光補償"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_loading",
+      "value": "正在讀取相機參數…"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_empty",
+      "value": "相機沒有回傳可選值"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_failed",
+      "value": "參數設定失敗"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_hint",
+      "value": "可調項目取決於相機的曝光模式"
+    },
+    {
+      "name": "camera_wifi_remote_focus_match",
+      "value": "已合焦"
+    },
+    {
+      "name": "camera_wifi_remote_focus_deviated",
+      "value": "未合焦"
+    },
+    {
+      "name": "camera_wifi_remote_focus_driving",
+      "value": "對焦中"
     },
     {
       "name": "camera_group_actions",

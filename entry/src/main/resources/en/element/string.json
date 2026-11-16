@@ -1822,7 +1822,7 @@
     },
     {
       "name": "camera_wifi_remote_hint",
-      "value": "Tap the image to move the focus point; tap AF to focus and the shutter to shoot. Leaving this page ends live view."
+      "value": "Tap to focus; tap a setting above to change aperture, shutter, ISO or exposure compensation; press the shutter to shoot. Leaving ends live view."
     },
     {
       "name": "camera_wifi_remote_af",
@@ -1839,6 +1839,50 @@
     {
       "name": "camera_wifi_remote_fps",
       "value": "%1$d fps"
+    },
+    {
+      "name": "camera_wifi_remote_aperture",
+      "value": "Aperture"
+    },
+    {
+      "name": "camera_wifi_remote_shutter",
+      "value": "Shutter"
+    },
+    {
+      "name": "camera_wifi_remote_iso",
+      "value": "ISO"
+    },
+    {
+      "name": "camera_wifi_remote_ev",
+      "value": "Exposure comp."
+    },
+    {
+      "name": "camera_wifi_remote_exposure_loading",
+      "value": "Reading camera settings…"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_empty",
+      "value": "No selectable values returned"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_failed",
+      "value": "Failed to apply setting"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_hint",
+      "value": "Available settings depend on the camera exposure mode"
+    },
+    {
+      "name": "camera_wifi_remote_focus_match",
+      "value": "Focused"
+    },
+    {
+      "name": "camera_wifi_remote_focus_deviated",
+      "value": "Out of focus"
+    },
+    {
+      "name": "camera_wifi_remote_focus_driving",
+      "value": "Focusing"
     },
     {
       "name": "camera_group_actions",

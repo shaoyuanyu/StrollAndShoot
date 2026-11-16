@@ -381,7 +381,7 @@ mDNS 被客户端隔离/访客网络挡掉时一个广播都收不到，所以 S
 
 手机同时挂办公网和相机热点时，app 的 socket 默认绑在系统默认网络上，往热点网段发的 SYN 会从错误网卡出去，表现为 `2301115 Operation in progress`。`WifiPtpLink` 在 connect 前按目标 IP 的网段找对应网络，先 `bind` 本地地址、再 `net.bindSocket()`。注意 `connection.getAllNets()` 不保证包含没有 INTERNET 能力的热点网络，匹配失败时退回默认网络（日志会缺 `socket 绑定本地` 那行）。
 
-### Wi-Fi STA 实时取景与遥控（1.80.0）
+### Wi-Fi STA 实时取景与遥控（1.81.0）
 
 Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP/IP 做实时取景和
 静止图像遥控。协议从 SnapBridge 2.14.3 的 `ptpclient/actions/liveview`、
@@ -400,7 +400,8 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `AfDrive` | `0x90C1` | 无参数 |
 | `ChangeAfArea` | `0x9205` | `[x, y]`，实时取景头 wholeSize 坐标系（不是 JPEG 像素） |
 | `ZoomControlOperation` | `0x9016` | `[wideSteps, teleSteps]`，SnapBridge 用 `[1,0]` / `[0,1]` |
-| `SetDevicePropValue` | `0x1016` | 参数=属性码，数据段=新值；用于写 `0xD1A6` |
+| `GetDevicePropDesc` | `0x1014` | 参数=属性码，返回属性描述（类型、当前值、枚举/范围） |
+| `SetDevicePropValue` | `0x1016` | 参数=属性码，数据段=新值；用于选择器与曝光参数 |
 | `StartMovieRecInCard` | `0x920A` | 无参数 |
 | `EndMovieRec` | `0x920B` | 无参数 |
 
@@ -413,6 +414,10 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `LiveViewProhibitionCondition` | `0xD1A4` | 非 0 不允许取景；bit31 是「拍摄中」标志，忽略 |
 | `LiveViewSelector` | `0xD1A6` | 0 = 静止图像，1 = 录像；写它走 `0x1016` 数据阶段 |
 | `AfModeAtLiveView` | `0xD061` | 0=AF-S、1=AF-C、2=AF-F、3/4=MF、5=AF-A |
+| `FNumber` | `0x5007` | UINT16，f 值 ×100（f/2.8 = 280） |
+| `ExposureTime` | `0xD100` | UINT32，高 16 位分子、低 16 位分母（1/250 = 0x000100FA） |
+| `ExposureIndex` | `0xD0B4` / `0x500F` | ISO；优先 4B 的 `0xD0B4`，不支持时退 2B 的 `0x500F` |
+| `ExposureBiasCompensation` | `0x5010` | INT16，单位 1/1000 EV（+1/3 EV = 333） |
 
 **实现分层**
 
@@ -421,8 +426,9 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `pages/PtpHost.ets` | `PtpTransport.rawCommand(opcode, params, expectData)`，USB 返回 null |
 | `services/PtpScheduler.ets` | 把 `rawCommand` 与照片事务放进同一串行队列 |
 | `services/WifiPtpSession.ets` | 把 `rawCommand` 翻译成 PTP/IP 事务，返回响应码/参数/数据 |
-| `services/NikonWifiLiveView.ets` | 启动 / 停止、取景循环、快门、AF、变焦；`@ObservedV2` 状态 |
-| `pages/WifiRemotePage.ets` | 黑底全屏取景、点画面对焦、AF / 快门 / W-T |
+| `services/NikonWifiLiveView.ets` | 启动 / 停止、取景循环、快门、AF、变焦、曝光读写；`@ObservedV2` 状态 |
+| `services/NikonWifiExposure.ets` | 曝光属性码、格式化、`0x1014` 描述解析、兜底列表 |
+| `pages/WifiRemotePage.ets` | 黑底全屏取景、点画面对焦、真实 AF 框、曝光参数面板、AF / 快门 / W-T |
 
 **启动顺序**（照 SnapBridge `StartLiveViewAction`）
 
@@ -448,6 +454,10 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
   比例摆放画面、按归一化坐标映射到 wholeSize。Z50II 实际值是 **5568×3712**；
   1.80.2 及以前按小端读成 49173×32782，所有点都被放大约 8.8 倍，1.80.3 修正。
 - 帧循环每 30 帧打一行 `实时取景: 帧 n jpeg=... fetch=...ms decode=...ms drop=... fps=... af=...x... frame=...x...`，并给无 JPEG、`ChangeAfArea`、`AfDrive` 的响应码留日志，真机排查时先看这些行。
+- **焦点状态和相机 AF 框也来自实时取景头**（Ex，偏移来自 SnapBridge `b8` + `z7`）：
+  41 = FocusDrive（0 静止 / 1 驱动）、42 = FocusState（0 未知 / 1 未合焦 / 2 合焦）、
+  44 = AF 框数量、48 起每块 8 字节（宽、高、中心 x、中心 y，大端 short）。
+  页面按 wholeSize 映射成屏幕矩形，不再用本地点击框伪装合焦。
 - 每帧的显示尺寸直接从 JPEG 的 SOF 段解析，不再 `await pixelMap.getImageInfo()`；
   这条 native 往返以前串在取帧和解码之间，会直接加到每帧延迟上。
 
@@ -459,8 +469,8 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 - 旧帧延后约 250ms 释放，停止取景时 500ms，避免 UI 还在绘制就被回收导致黑闪。
 - 画面用 `ImageInterpolation.Medium`：640×424 的取景帧本来就要放大，High 插值
   每帧多一次 GPU 采样，对连续换帧不划算。
-- 快门 / AF / 变焦前先 `pauseLoop()`，让已发出的那一帧结束；它们与扫描、下载
-  共用 `PtpScheduler`，不会在 PTP/IP 单管道上插队。
+- 快门 / AF / 变焦 / 曝光写入前先 `pauseLoop()`，让已发出的那一帧结束；它们与
+  扫描、下载共用 `PtpScheduler`，不会在 PTP/IP 单管道上插队。
 - 拍摄 / 对焦后必须等 `DeviceReady`；`0x2019`、`0xA200`、`0xA201`、`0xA202`、
   `0xA207` 视为忙，继续轮询，其它响应码立即报错。
 - **AF-F（`0xD061=2`）只发 `ChangeAfArea`，不再补 `AfDrive`**：连续伺服本来就在
@@ -471,12 +481,24 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 - **拍摄后联动扫描**：`WifiRemotePage` 记录 `mediaChanged`，退出时 `live.stop()`
   完成后自动 `scanForCamera(true, true)`；用户不需要再手动点「快速扫描」。
 
+**曝光参数（1.81.0）**
+
+- 启动取景后异步读 `0x5007` / `0xD100` / `0xD0B4`（或 `0x500F`）/ `0x5010` 的当前值；
+  同时用 `0x1014` 读四组 DevicePropDesc。描述里 formFlag=1 取枚举，formFlag=2 取
+  min/max/step，最多保留 256 项；相机不返回描述时用 `NikonWifiExposure` 的标准
+  1/3 档列表兜底。
+- 写参数统一走 `0x1016`，数据段小端：光圈 2B、快门 4B、ISO 4B/2B、EV 2B 有符号。
+  写入前 `pauseLoop()`，忙时最多重试 2 次，写完回读相机实际值，避免 UI 显示
+  “请求值”而不是“相机接受值”。
+- 参数能否调整取决于相机曝光模式（P/A/S/M）；页面只提供当前可选值，不替相机
+  切模式。UI 是底部四个胶囊 + 系统 `bindSheet` 列表，具体见 [PAGES.md](PAGES.md)。
+
 **录像**：`setMovieMode()` 先停取景，写 `0x1016 [0xD1A6] + 1B 数据`，再重新
 启动取景；`startMovie()/stopMovie()` 发 `0x920A/0x920B`。停止取景时如果还在
 录像，会先补 `0x920B`。`WifiPtpLink` 为此增加了数据阶段：CmdRequest 的
 DataOut=2，随后 `StartData(9) + EndData(12)`（SnapBridge `u7` 同款）。
 
-**仍未做**：曝光参数、驱动模式、白平衡；录像已接入但尚未真机验证。当前实时取景
+**仍未做**：驱动模式、白平衡；录像已接入但尚未真机验证。当前实时取景
 真机实测 640×424、约 70KB/帧，1.80.2 后取帧约 22–38ms、解码约 18–23ms、
 20–25fps；上限主要受相机出帧和 40ms 节拍限制。
 

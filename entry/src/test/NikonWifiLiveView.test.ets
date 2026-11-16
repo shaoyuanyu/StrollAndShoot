@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { extractLiveViewJpeg, parseJpegSize, parseLiveViewWholeSize }
+import { extractLiveViewJpeg, parseJpegSize, parseLiveViewFocus, parseLiveViewWholeSize }
   from '../main/ets/services/NikonWifiLiveView';
 
 function makeJpeg(width: number, height: number): Uint8Array {
@@ -112,6 +112,30 @@ export default function nikonWifiLiveViewTest() {
       const size = parseJpegSize(new Uint8Array([0x00, 0x01, 0x02, 0x03]));
       expect(size[0]).assertEqual(0);
       expect(size[1]).assertEqual(0);
+    });
+
+    it('解析实时取景焦点状态和相机 AF 框', 0, () => {
+      const data = new Uint8Array(56);
+      data[41] = 0;
+      data[42] = 2;
+      data[44] = 1;
+      const view = new DataView(data.buffer);
+      view.setUint16(48, 120, false);
+      view.setUint16(50, 80, false);
+      view.setUint16(52, 500, false);
+      view.setUint16(54, 400, false);
+      const focus = parseLiveViewFocus(data, true);
+      expect(focus !== null).assertTrue();
+      expect(focus?.state).assertEqual(2);
+      expect(focus?.drive).assertEqual(0);
+      expect(focus?.boxes.length).assertEqual(1);
+      expect(focus?.boxes[0].cx).assertEqual(500);
+      expect(focus?.boxes[0].cy).assertEqual(400);
+      expect(focus?.boxes[0].w).assertEqual(120);
+    });
+
+    it('老协议没有焦点字段时返回 null', 0, () => {
+      expect(parseLiveViewFocus(new Uint8Array(128), false)).assertNull();
     });
   });
 }

@@ -193,8 +193,11 @@ export class WifiPtpSession implements PtpTransport {
     if (!this.open) return null;
     try {
       const frame = opcode === 0x9203 || opcode === 0x9428;
+      // 0x1014 属性描述只是几十到几百字节；给 3 秒，避免相机不支持时
+      // 每条都按默认 30 秒超时把实时取景管道卡住。
+      const timeout = frame || opcode === 0x1014 ? 3000 : undefined;
       const r = await this.exec(opcode, params, expectData,
-        `NikonOp(0x${opcode.toString(16)})`, frame ? 3000 : undefined, dataOut);
+        `NikonOp(0x${opcode.toString(16)})`, timeout, dataOut);
       return { code: r.code, params: r.params, data: r.data };
     } catch (err) {
       this.log(`NikonOp(0x${opcode.toString(16)}) 失败: ${(err as Error).message}`);

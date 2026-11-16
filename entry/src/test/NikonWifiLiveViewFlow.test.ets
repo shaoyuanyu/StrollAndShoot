@@ -7,6 +7,7 @@ import { NikonWifiLiveView, NIKON_OP_AF_DRIVE, NIKON_OP_CAPTURE,
   NIKON_OP_SET_DEVICE_PROP_VALUE, NIKON_OP_START_LIVEVIEW, NIKON_OP_START_MOVIE,
   NIKON_OP_END_MOVIE, NIKON_OP_ZOOM, NIKON_PROP_LIVEVIEW_SELECTOR }
   from '../main/ets/services/NikonWifiLiveView';
+import { EXPOSURE_PARAM_APERTURE } from '../main/ets/services/NikonWifiExposure';
 
 const OPS: number[] = [
   NIKON_OP_CHANGE_CAMERA_MODE, NIKON_OP_START_LIVEVIEW, NIKON_OP_END_LIVEVIEW,
@@ -55,6 +56,10 @@ class FakeLiveTransport implements PtpTransport {
   async rawCommand(opcode: number, params: number[], _expectData: boolean,
     dataOut?: Uint8Array, _priority?: PtpPriority): Promise<PtpRawResult | null> {
     this.ops.push({ opcode: opcode, params: params, data: dataOut ?? null });
+    if (opcode === NIKON_OP_GET_LIVEVIEW_IMAGE_EX || opcode === NIKON_OP_GET_LIVEVIEW_IMAGE) {
+      // 给取景循环一个“成功”的假帧，避免 5 次失败后自动 stop 干扰后续断言。
+      return { code: 0x2001, params: [], data: new Uint8Array([0xFF, 0xD8, 0xFF, 0xD9]) };
+    }
     return { code: 0x2001, params: [], data: null };
   }
 
@@ -184,6 +189,28 @@ export default function nikonWifiLiveViewFlowTest() {
       expect(ok).assertTrue();
       expect(fake.has(NIKON_OP_CHANGE_AF_AREA)).assertTrue();
       expect(fake.has(NIKON_OP_AF_DRIVE)).assertFalse();
+
+      await live.stop();
+      await delay(10);
+    });
+
+    it('曝光参数写入光圈属性并回读', 0, async () => {
+      const fake = new FakeLiveTransport();
+      const live = new NikonWifiLiveView(fake, OPS, (_m: string) => {}, PROPS);
+      expect(await live.start()).assertTrue();
+      for (let i = 0; i < 30 && !live.exposureReady; i++) {
+        await delay(10);
+      }
+      expect(live.exposureReady).assertTrue();
+
+      const ok = await live.setExposure(EXPOSURE_PARAM_APERTURE, 280);
+      expect(ok).assertTrue();
+      const sets = fake.findAll(NIKON_OP_SET_DEVICE_PROP_VALUE);
+      expect(sets.length >= 1).assertTrue();
+      const last = sets[sets.length - 1];
+      expect(last.params[0]).assertEqual(0x5007);
+      expect(last.data?.[0]).assertEqual(0x18);
+      expect(last.data?.[1]).assertEqual(0x01);
 
       await live.stop();
       await delay(10);

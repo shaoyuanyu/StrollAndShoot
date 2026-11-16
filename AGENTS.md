@@ -181,7 +181,7 @@ hvigorw test -p module=entry -p coverage=true
 - 结果文件：`entry/.test/default/intermediates/test/coverage_data/test_result.txt`，末尾一行是 `Tests run / Failure / Error / Pass`。
 - `entry/src/mock/Libentry.mock.ets` 是模板生成的，曾经编译不过（三处无类型对象字面量，`arkts-no-untyped-obj-literals`），已改为先声明 `interface` 再返回。改动 mock 的返回值时必须保持这一点。
 - Instrument Test 需要设备，且 `ohosTest` 的 HAP 要签名，本机模拟器装不了签名的包。
-- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 80 个用例）；`entry/src/ohosTest` 仍是模板用例。
+- `entry/src/test` 已有真实单测（分组、键计算、GPS 合并/心跳/轨迹聚合/格式化/模拟图案等，共 95 个用例）；`entry/src/ohosTest` 仍是模板用例。
 
 ### macOS
 
@@ -675,7 +675,8 @@ HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_kno
 | 模块 | 职责 |
 |---|---|
 | `services/CameraService.ets` | 扫描、连接、下载、缩略图/原图加载、缓存与 GPS 匹配 |
-| `services/NikonWifiLiveView.ets` | Wi-Fi STA 实时取景、快门、AF、变焦；PTP rawCommand + 串行调度 |
+| `services/NikonWifiLiveView.ets` | Wi-Fi STA 实时取景、快门、AF、变焦、曝光读写；PTP rawCommand + 串行调度 |
+| `services/NikonWifiExposure.ets` | 曝光属性码、值格式化、`0x1014` 描述解析与兜底列表 |
 | `services/GpsRecorder.ets` | 连续定位、后台长时任务、按天聚合、模拟轨迹 |
 | `services/ThumbnailCache.ets` | 缩略图磁盘缓存、manifest、过期清理 |
 | `services/AppLog.ets` | 内存环形缓冲 + `app_log.txt` 追加写 + hilog |

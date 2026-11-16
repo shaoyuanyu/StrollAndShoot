@@ -25,6 +25,34 @@
 import { image } from '@kit.ImageKit';
 import { L10n } from '../utils/L10n';
 import { PtpPriority, type PtpTransport, type PtpRawResult } from '../pages/PtpHost';
+import {
+  EXPOSURE_OP_GET_DEVICE_PROP_DESC,
+  EXPOSURE_OP_SET_DEVICE_PROP_VALUE,
+  EXPOSURE_PARAM_APERTURE,
+  EXPOSURE_PARAM_EV,
+  EXPOSURE_PARAM_ISO,
+  EXPOSURE_PARAM_SHUTTER,
+  EXPOSURE_PROP_APERTURE,
+  EXPOSURE_PROP_EV,
+  EXPOSURE_PROP_ISO,
+  EXPOSURE_PROP_ISO_FALLBACK,
+  EXPOSURE_PROP_SHUTTER,
+  type ExposureOption,
+  formatAperture,
+  formatEv,
+  formatIso,
+  formatShutter,
+  parseDescriptorOptions,
+  signed16,
+  staticOptions,
+  shutterDenominator,
+  shutterNumerator,
+  shutterRaw,
+  u16le as exposureU16le,
+  u16leBytes,
+  u32le as exposureU32le,
+  u32leBytes
+} from './NikonWifiExposure';
 
 /** 尼康 PTP 操作码。 */
 export const NIKON_OP_SET_DEVICE_PROP_VALUE = 0x1016;
@@ -198,6 +226,55 @@ export function parseJpegSize(data: Uint8Array): number[] {
   return [0, 0];
 }
 
+/** 相机实时取景头里的一块 AF 区域（wholeSize 坐标系，单位与 wholeSize 相同）。 */
+export interface AfBox {
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+}
+
+export interface LiveViewFocus {
+  /** 0 = 未知，1 = 未合焦（DEVIATED），2 = 合焦（MATCH）。 */
+  state: number;
+  /** 0 = 静止，1 = 正在驱动。 */
+  drive: number;
+  boxes: AfBox[];
+}
+
+/**
+ * 解析实时取景头里的焦点状态与相机实际 AF 框。
+ *
+ * Ex 头（`GetLiveViewImageEx`）的布局来自 SnapBridge `b8` + `z7`：
+ * - 偏移 41：FocusDrive（0=STILL，1=DRIVING）；
+ * - 偏移 42：FocusState（0=UNKNOWN，1=DEVIATED，2=MATCH）；
+ * - 偏移 44：AF 框数量；
+ * - 偏移 48 起：每块 4 个大端 short（宽、高、中心 x、中心 y）。
+ *
+ * 老协议没有这套字段，返回 null，页面只显示本地点击反馈。
+ */
+export function parseLiveViewFocus(data: Uint8Array, ex: boolean): LiveViewFocus | null {
+  if (!ex || data.length < 48) return null;
+  const count = data[44] & 0xFF;
+  const boxes: AfBox[] = [];
+  let offset = 48;
+  const limit = Math.min(count, 96);
+  for (let i = 0; i < limit && offset + 8 <= data.length; i++) {
+    const w = u16be(data, offset);
+    const h = u16be(data, offset + 2);
+    if (w > 0 && h > 0) {
+      boxes.push({
+        w: w,
+        h: h,
+        cx: u16be(data, offset + 4),
+        cy: u16be(data, offset + 6)
+      });
+    }
+    offset += 8;
+  }
+  return { state: data[42], drive: data[41], boxes: boxes };
+}
+
 /**
  * 实时取景 + 遥控控制器。
  *
@@ -226,6 +303,25 @@ export class NikonWifiLiveView {
   @Trace movieSwitching: boolean = false;
   /** 相机当前实时取景对焦模式（0xD061）；-1 = 没读到。 */
   @Trace afMode: number = -1;
+  /** 相机实时取景头里的焦点状态与 AF 框。 */
+  @Trace focusState: number = 0;
+  @Trace focusDrive: number = 0;
+  @Trace afBoxes: AfBox[] = [];
+
+  /** 曝光参数（原始值，格式见 NikonWifiExposure）。 */
+  @Trace aperture: number = 0;
+  @Trace shutterNum: number = 0;
+  @Trace shutterDen: number = 0;
+  @Trace iso: number = 0;
+  @Trace ev: number = 0;
+  @Trace apertureOptions: ExposureOption[] = [];
+  @Trace shutterOptions: ExposureOption[] = [];
+  @Trace isoOptions: ExposureOption[] = [];
+  @Trace evOptions: ExposureOption[] = [];
+  @Trace exposureLoading: boolean = false;
+  @Trace exposureReady: boolean = false;
+  /** 正在写入的参数名；空串表示空闲。 */
+  @Trace exposureWriting: string = '';
   /** 最近一次对焦命令是否成功（只代表相机接受了命令，不代表合焦）。 */
   @Trace lastFocusOk: boolean = false;
 
@@ -239,6 +335,7 @@ export class NikonWifiLiveView {
   private transport: PtpTransport;
   private log: (msg: string) => void;
   private useEx: boolean;
+  private isoProperty: number = EXPOSURE_PROP_ISO;
   @Trace private frame: image.PixelMap | null = null;
   private loopToken: number = 0;
   private startSeq: number = 0;
@@ -293,6 +390,212 @@ export class NikonWifiLiveView {
   /** 当前帧；只读。UI 用 `frameVersion` 触发重建，Map / PixelMap 本身不参与追踪。 */
   getPixelMap(): image.PixelMap | null {
     return this.frame;
+  }
+
+  /** 参数当前显示值；0 / 未读到时是 `--`。 */
+  getExposureLabel(param: string): string {
+    if (param === EXPOSURE_PARAM_APERTURE) return formatAperture(this.aperture);
+    if (param === EXPOSURE_PARAM_SHUTTER) {
+      return formatShutter(this.shutterNum, this.shutterDen);
+    }
+    if (param === EXPOSURE_PARAM_ISO) return formatIso(this.iso);
+    if (param === EXPOSURE_PARAM_EV) return formatEv(this.ev);
+    return '--';
+  }
+
+  getExposureOptions(param: string): ExposureOption[] {
+    if (param === EXPOSURE_PARAM_APERTURE) return this.apertureOptions;
+    if (param === EXPOSURE_PARAM_SHUTTER) return this.shutterOptions;
+    if (param === EXPOSURE_PARAM_ISO) return this.isoOptions;
+    if (param === EXPOSURE_PARAM_EV) return this.evOptions;
+    return [];
+  }
+
+  getExposureRaw(param: string): number {
+    if (param === EXPOSURE_PARAM_APERTURE) return this.aperture;
+    if (param === EXPOSURE_PARAM_SHUTTER) {
+      return shutterRaw(this.shutterNum, this.shutterDen);
+    }
+    if (param === EXPOSURE_PARAM_ISO) return this.iso;
+    if (param === EXPOSURE_PARAM_EV) return this.ev;
+    return 0;
+  }
+
+  /** 页面打开参数面板时兜底触发读取；正常在 start() 后已经自动开始。 */
+  ensureExposure(): void {
+    if (!this.active || this.exposureReady || this.exposureLoading) return;
+    this.loadExposureState().catch((_e: Error) => { /* 已写日志 */ });
+  }
+
+  /**
+   * 写一个曝光参数。
+   *
+   * 写之前先暂停取景循环，避免参数事务排在连续帧后面；写完回读相机实际值，
+   * 不假设相机一定接受请求值（光圈/快门范围会随镜头与曝光模式变化）。
+   */
+  async setExposure(param: string, value: number): Promise<boolean> {
+    if (!this.active || !this.exposureReady || this.exposureWriting !== '') {
+      return false;
+    }
+    const seq = this.startSeq;
+    let prop = 0;
+    let data: Uint8Array | null = null;
+    if (param === EXPOSURE_PARAM_APERTURE) {
+      prop = EXPOSURE_PROP_APERTURE;
+      data = u16leBytes(value);
+    } else if (param === EXPOSURE_PARAM_SHUTTER) {
+      prop = EXPOSURE_PROP_SHUTTER;
+      data = u32leBytes(value);
+    } else if (param === EXPOSURE_PARAM_ISO) {
+      prop = this.isoProperty;
+      data = prop === EXPOSURE_PROP_ISO ? u32leBytes(value) : u16leBytes(value);
+    } else if (param === EXPOSURE_PARAM_EV) {
+      prop = EXPOSURE_PROP_EV;
+      data = u16leBytes(value & 0xFFFF);
+    } else {
+      return false;
+    }
+    this.exposureWriting = param;
+    this.error = '';
+    await this.pauseLoop();
+    try {
+      let r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [prop], false, data);
+      for (let i = 0; i < 2 && r !== null && r.code === RESPONSE_DEVICE_BUSY; i++) {
+        await delay(100);
+        r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [prop], false, data);
+      }
+      if (seq !== this.startSeq || !this.active) return false;
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = L10n.tr('camera_wifi_remote_exposure_failed');
+        this.log(`曝光: ${param} 写入失败 ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+        return false;
+      }
+      await delay(40);
+      await this.readExposureValues(seq);
+      this.log(`曝光: ${param} → ${this.getExposureLabel(param)}`);
+      return true;
+    } finally {
+      this.exposureWriting = '';
+      this.resumeLoop();
+    }
+  }
+
+  private async loadExposureState(): Promise<void> {
+    if (this.exposureLoading) return;
+    const seq = this.startSeq;
+    this.exposureLoading = true;
+    try {
+      await this.readExposureValues(seq);
+      if (seq !== this.startSeq || !this.active) return;
+      await this.loadExposureOptions(seq);
+      if (seq !== this.startSeq || !this.active) return;
+      this.exposureReady = true;
+      this.log(`曝光: ${this.getExposureLabel(EXPOSURE_PARAM_APERTURE)}`
+        + ` ${this.getExposureLabel(EXPOSURE_PARAM_SHUTTER)}`
+        + ` ${this.getExposureLabel(EXPOSURE_PARAM_ISO)}`
+        + ` EV ${this.getExposureLabel(EXPOSURE_PARAM_EV)}`);
+    } catch (err) {
+      this.log(`曝光: 读取参数异常 ${(err as Error).message}`);
+      if (this.active) {
+        // 至少让用户能打开面板、看到相机当前值；写入失败会单独提示。
+        if (this.apertureOptions.length === 0) {
+          this.apertureOptions = staticOptions(EXPOSURE_PARAM_APERTURE);
+        }
+        if (this.shutterOptions.length === 0) {
+          this.shutterOptions = staticOptions(EXPOSURE_PARAM_SHUTTER);
+        }
+        if (this.isoOptions.length === 0) {
+          this.isoOptions = staticOptions(EXPOSURE_PARAM_ISO);
+        }
+        if (this.evOptions.length === 0) {
+          this.evOptions = staticOptions(EXPOSURE_PARAM_EV);
+        }
+        this.exposureReady = true;
+      }
+    } finally {
+      if (seq === this.startSeq) this.exposureLoading = false;
+    }
+  }
+
+  private async readExposureValues(seq: number): Promise<void> {
+    const ap = await this.transport.getDevicePropValue(
+      EXPOSURE_PROP_APERTURE, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (ap !== null && ap.length >= 2) this.aperture = exposureU16le(ap, 0);
+
+    const sh = await this.transport.getDevicePropValue(
+      EXPOSURE_PROP_SHUTTER, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (sh !== null && sh.length >= 4) {
+      const raw = exposureU32le(sh, 0);
+      this.shutterNum = shutterNumerator(raw);
+      this.shutterDen = shutterDenominator(raw);
+    }
+
+    let isoData = await this.transport.getDevicePropValue(
+      this.isoProperty, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (isoData === null && this.isoProperty === EXPOSURE_PROP_ISO) {
+      this.isoProperty = EXPOSURE_PROP_ISO_FALLBACK;
+      isoData = await this.transport.getDevicePropValue(
+        this.isoProperty, PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq || !this.active) return;
+    }
+    if (isoData !== null) {
+      this.iso = this.isoProperty === EXPOSURE_PROP_ISO && isoData.length >= 4
+        ? exposureU32le(isoData, 0) : exposureU16le(isoData, 0);
+    }
+
+    const evData = await this.transport.getDevicePropValue(
+      EXPOSURE_PROP_EV, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (evData !== null && evData.length >= 2) {
+      this.ev = signed16(exposureU16le(evData, 0));
+    }
+  }
+
+  private async loadExposureOptions(seq: number): Promise<void> {
+    const apData = await this.readExposureDescriptor(EXPOSURE_PROP_APERTURE);
+    if (seq !== this.startSeq || !this.active) return;
+    const ap = apData !== null
+      ? parseDescriptorOptions(apData, EXPOSURE_PARAM_APERTURE) : [];
+    this.apertureOptions = ap.length > 0
+      ? ap : staticOptions(EXPOSURE_PARAM_APERTURE);
+
+    const shData = await this.readExposureDescriptor(EXPOSURE_PROP_SHUTTER);
+    if (seq !== this.startSeq || !this.active) return;
+    const sh = shData !== null
+      ? parseDescriptorOptions(shData, EXPOSURE_PARAM_SHUTTER) : [];
+    this.shutterOptions = sh.length > 0
+      ? sh : staticOptions(EXPOSURE_PARAM_SHUTTER);
+
+    const isoData = await this.readExposureDescriptor(this.isoProperty);
+    if (seq !== this.startSeq || !this.active) return;
+    const iso = isoData !== null
+      ? parseDescriptorOptions(isoData, EXPOSURE_PARAM_ISO) : [];
+    this.isoOptions = iso.length > 0
+      ? iso : staticOptions(EXPOSURE_PARAM_ISO);
+    if (this.isoProperty === EXPOSURE_PROP_ISO_FALLBACK) {
+      // 旧属性是 UINT16，超过 65535 的 ISO 写不进去。
+      this.isoOptions = this.isoOptions.filter((opt: ExposureOption) => opt.value <= 0xFFFF);
+    }
+
+    const evData = await this.readExposureDescriptor(EXPOSURE_PROP_EV);
+    if (seq !== this.startSeq || !this.active) return;
+    const ev = evData !== null
+      ? parseDescriptorOptions(evData, EXPOSURE_PARAM_EV) : [];
+    this.evOptions = ev.length > 0
+      ? ev : staticOptions(EXPOSURE_PARAM_EV);
+  }
+
+  private async readExposureDescriptor(prop: number): Promise<Uint8Array | null> {
+    const r = await this.raw(EXPOSURE_OP_GET_DEVICE_PROP_DESC, [prop], true);
+    if (r === null || r.code !== RESPONSE_OK || r.data === null) {
+      this.log(`曝光: 属性 0x${prop.toString(16)} 无描述`
+        + ` ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+      return null;
+    }
+    return r.data;
   }
 
   async start(): Promise<boolean> {
@@ -375,8 +678,19 @@ export class NikonWifiLiveView {
       this.timingDecodeMs = 0;
       this.fpsWindowStart = Date.now();
       this.fpsFrames = 0;
+      this.focusState = 0;
+      this.focusDrive = 0;
+      this.afBoxes = [];
+      this.isoProperty = EXPOSURE_PROP_ISO;
+      this.exposureReady = false;
+      this.exposureLoading = false;
+      this.apertureOptions = [];
+      this.shutterOptions = [];
+      this.isoOptions = [];
+      this.evOptions = [];
       this.startLoop(++this.loopToken);
       this.log('实时取景: 已启动');
+      this.loadExposureState().catch((_e: Error) => { /* 已写日志 */ });
       return true;
     } catch (err) {
       this.error = (err as Error).message;
@@ -415,6 +729,10 @@ export class NikonWifiLiveView {
     this.shooting = false;
     this.focusing = false;
     this.zooming = false;
+    this.focusState = 0;
+    this.focusDrive = 0;
+    this.afBoxes = [];
+    this.exposureReady = false;
   }
 
   /**
@@ -475,7 +793,8 @@ export class NikonWifiLiveView {
       const ready = await this.waitDeviceReady(this.startSeq, DEVICE_READY_TIMEOUT_MS);
       this.lastFocusOk = ready;
       if (ready) {
-        this.lastAction = L10n.tr('camera_wifi_remote_af_done');
+        // 合焦与否以实时取景头的 FocusState 为准，不把 DeviceReady 当合焦。
+        this.lastAction = '';
       } else {
         this.error = L10n.tr('camera_wifi_remote_af_failed');
       }
@@ -524,7 +843,7 @@ export class NikonWifiLiveView {
         const ok = areaCode === RESPONSE_OK;
         this.lastFocusOk = ok;
         if (ok) {
-          this.lastAction = L10n.tr('camera_wifi_remote_af_done');
+          this.lastAction = '';
         } else {
           this.error = L10n.tr('camera_wifi_remote_af_failed');
         }
@@ -542,7 +861,8 @@ export class NikonWifiLiveView {
       const ready = await this.waitDeviceReady(this.startSeq, DEVICE_READY_TIMEOUT_MS);
       this.lastFocusOk = ready;
       if (ready) {
-        this.lastAction = L10n.tr('camera_wifi_remote_af_done');
+        // 合焦与否以实时取景头的 FocusState 为准，不把 DeviceReady 当合焦。
+        this.lastAction = '';
       } else {
         this.error = L10n.tr('camera_wifi_remote_af_failed');
       }
@@ -759,6 +1079,11 @@ export class NikonWifiLiveView {
         continue;
       }
 
+      if (r !== null && r.code === RESPONSE_DEVICE_BUSY) {
+        // 读曝光描述/属性时相机会短暂忙；不算取景失败，避免连续几次后误停。
+        await delay(20);
+        continue;
+      }
       if (r === null || r.code !== RESPONSE_OK || r.data === null) {
         this.failStreak++;
         if (this.failStreak >= LOOP_FAIL_LIMIT) {
@@ -779,6 +1104,12 @@ export class NikonWifiLiveView {
         this.afWidth = whole[0];
         this.afHeight = whole[1];
       }
+      const focus = parseLiveViewFocus(r.data, ex);
+      if (focus !== null) {
+        this.focusState = focus.state;
+        this.focusDrive = focus.drive;
+        this.afBoxes = focus.boxes;
+      }
       const jpeg = extractLiveViewJpeg(r.data, ex);
       const elapsed = Date.now() - started;
       if (jpeg === null) {
@@ -790,6 +1121,12 @@ export class NikonWifiLiveView {
         }
       } else {
         this.frameIndex++;
+        if (this.frameIndex === 1 && focus !== null) {
+          const first = focus.boxes.length > 0 ? focus.boxes[0] : null;
+          this.log(`实时取景: 焦点头 drive=${focus.drive} state=${focus.state}`
+            + ` boxes=${focus.boxes.length}`
+            + `${first === null ? '' : ` first=${first.w}x${first.h}@${first.cx},${first.cy}`}`);
+        }
         this.timingFrames++;
         this.timingFetchMs += elapsed;
         // 不 await 解码：把下一帧的取帧立刻发出去，解码由泵在旁边做。
