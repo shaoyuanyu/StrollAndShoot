@@ -244,6 +244,8 @@ export interface LiveViewFocus {
   state: number;
   /** 0 = 静止，1 = 正在驱动。 */
   drive: number;
+  /** 头里的 AF 模式：0=OTHER、1=FACIAL、2=AUTO_AREA（与 AFAreaMode 不同）。 */
+  mode: number;
   boxes: AfBox[];
 }
 
@@ -277,7 +279,7 @@ export function parseLiveViewFocus(data: Uint8Array, ex: boolean): LiveViewFocus
     }
     offset += 8;
   }
-  return { state: data[42], drive: data[41], boxes: boxes };
+  return { state: data[42], drive: data[41], mode: data[43], boxes: boxes };
 }
 
 /**
@@ -355,6 +357,7 @@ export class NikonWifiLiveView {
   private frameIndex: number = 0;
   private extractFailures: number = 0;
   private focusLogCount: number = 0;
+  private lastAfKey: string = '';
 
   /**
    * 解码泵：取帧和 JPEG 解码重叠。
@@ -735,6 +738,7 @@ export class NikonWifiLiveView {
       this.focusDrive = 0;
       this.afBoxes = [];
       this.focusLogCount = 0;
+      this.lastAfKey = '';
       this.isoProperty = EXPOSURE_PROP_ISO;
       this.exposureReady = false;
       this.exposureLoading = false;
@@ -931,6 +935,13 @@ export class NikonWifiLiveView {
       } else {
         this.error = L10n.tr('camera_wifi_remote_af_failed');
       }
+      setTimeout(() => {
+        if (!this.active) return;
+        const box = this.afBoxes.length > 0 ? this.afBoxes[0] : null;
+        this.log(`实时取景: 对焦后 请求=${Math.round(x)},${Math.round(y)}`
+          + ` 框=${box === null ? '无' : `${box.cx},${box.cy}`}`
+          + ` state=${this.focusState} mode=${this.afMode}`);
+      }, 250);
       return ready;
     } finally {
       this.focusing = false;
@@ -1190,17 +1201,19 @@ export class NikonWifiLiveView {
           const head = Array.from(r.data.subarray(0, Math.min(64, r.data.length)))
             .map((b: number) => b.toString(16).padStart(2, '0')).join('');
           this.log(`实时取景: 取景头 len=${r.data.length} head=${head}`);
-          if (focus !== null) {
-            this.log(`实时取景: 焦点头 drive=${focus.drive} state=${focus.state}`
-              + ` boxes=${focus.boxes.length}`);
-          }
         }
-        if (focus !== null && focus.boxes.length > 0 && this.focusLogCount < 3) {
-          const first = focus.boxes[0];
-          this.focusLogCount++;
-          this.log(`实时取景: AF框 n=${focus.boxes.length} state=${focus.state}`
-            + ` first=${first.w}x${first.h}@${first.cx},${first.cy}`
-            + ` whole=${this.afWidth}x${this.afHeight} frame=${this.frameWidth}x${this.frameHeight}`);
+        if (focus !== null) {
+          const first = focus.boxes.length > 0 ? focus.boxes[0] : null;
+          const key = `${focus.state}_${focus.drive}_${focus.mode}_${focus.boxes.length}`
+            + `${first === null ? '' : `_${first.w}_${first.h}_${first.cx}_${first.cy}`}`;
+          if (key !== this.lastAfKey && this.focusLogCount < 30) {
+            this.lastAfKey = key;
+            this.focusLogCount++;
+            this.log(`实时取景: AF框 n=${focus.boxes.length} state=${focus.state}`
+              + ` drive=${focus.drive} lvMode=${focus.mode}`
+              + `${first === null ? ' 无框' : ` first=${first.w}x${first.h}@${first.cx},${first.cy}`}`
+              + ` whole=${this.afWidth}x${this.afHeight}`);
+          }
         }
         this.timingFrames++;
         this.timingFetchMs += elapsed;
