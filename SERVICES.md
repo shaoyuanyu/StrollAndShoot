@@ -476,6 +476,9 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 - **AF-F（`0xD061=2`）只发 `ChangeAfArea`，不再补 `AfDrive`**：连续伺服本来就在
   追焦，SnapBridge 的 `LiveViewAutoFocusRepository` 也是这个分支。其它 AF 模式
   才走「移动区域 + AfDrive」。
+- **自动区域 AF 会临时切到单点**：`0xD05D` 读当前 AF 区域模式，若为自动区域
+  （`0x8011/0x8020/0x8021`）就写 `0x8010`（单点），使 `ChangeAfArea` 真正生效、
+  取景头返回 AF 框；`stop()` 时把原模式写回。不是自动区域则不碰。
 - 实时取景控制器随 Wi-Fi 会话创建，`CameraService.wifiLiveView` 持有；
   断开时先 `stop()` 再 `CloseSession`。
 - **拍摄后联动扫描**：`WifiRemotePage` 记录 `mediaChanged`，退出时 `live.stop()`
@@ -484,8 +487,8 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 **曝光参数（1.81.0）**
 
 - 启动取景后异步读 `0x5007` / `0xD100` / `0xD0B4`（或 `0x500F`）/ `0x5010` 的当前值；
-  同时用 `0x1014` 读四组 DevicePropDesc。描述里 formFlag=1 取枚举，formFlag=2 取
-  min/max/step，最多保留 256 项。**不盲信描述头里的 dataType**：同一属性在不同固件
+  同时用 `0x1014` 读四组 DevicePropDesc。**PTP FormFlag 是 1=Range、2=Enumeration**
+  （曾经写反导致光圈被当成范围、只解析出 f/0.22）；最多保留 256 项。**不盲信描述头里的 dataType**：同一属性在不同固件
   可能报 2B/4B 不一致，解析时两种布局都试，只接受数值范围合理、项数 ≥2 的候选；
   候选都不合理（例如光圈只解析出 f/0.22、ISO 只解析出 6553632）就返回空，退回
   `NikonWifiExposure` 的标准 1/3 档列表。描述头与首帧取景头会写入 app_log，

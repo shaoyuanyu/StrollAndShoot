@@ -155,7 +155,9 @@ function parseDescriptorWithSize(data: Uint8Array, param: string, size: number):
   const form = data[formOffset];
   let offset = formOffset + 1;
   const values: number[] = [];
-  if (form === 1) {
+  // PTP FormFlag：1 = Range（min/max/step），2 = Enumeration（count + values）。
+  // 之前把这两个分支写反了，光圈枚举被当成 range，才出现 f/0.22 这种值。
+  if (form === 2) {
     if (offset + 2 > data.length) return [];
     const count = u16le(data, offset);
     offset += 2;
@@ -164,7 +166,7 @@ function parseDescriptorWithSize(data: Uint8Array, param: string, size: number):
       values.push(readValueWithSize(data, offset, size, param === EXPOSURE_PARAM_EV));
       offset += size;
     }
-  } else if (form === 2) {
+  } else if (form === 1) {
     if (offset + size * 3 > data.length) return [];
     const min = readValueWithSize(data, offset, size, param === EXPOSURE_PARAM_EV);
     const max = readValueWithSize(data, offset + size, size, param === EXPOSURE_PARAM_EV);

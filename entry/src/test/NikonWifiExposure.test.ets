@@ -20,7 +20,7 @@ function makeDescriptor(dataType: number, values: number[]): Uint8Array {
   view.setUint16(0, 0x5007, true);
   view.setUint16(2, dataType, true);
   data[4] = 0x02;
-  data[5 + size * 2] = 1;
+  data[5 + size * 2] = 2;
   view.setUint16(6 + size * 2, values.length, true);
   let offset = 8 + size * 2;
   for (const value of values) {
@@ -42,7 +42,7 @@ function makeMismatchedDescriptor(dataType: number, valueSize: number,
   view.setUint16(0, 0xD0B4, true);
   view.setUint16(2, dataType, true);
   data[4] = 0x02;
-  data[5 + valueSize * 2] = 1;
+  data[5 + valueSize * 2] = 2;
   view.setUint16(6 + valueSize * 2, values.length, true);
   let offset = 8 + valueSize * 2;
   for (const value of values) {
@@ -88,6 +88,32 @@ export default function nikonWifiExposureTest() {
       expect(opts[0].label).assertEqual('f/2.8');
       expect(opts[1].label).assertEqual('f/3.2');
       expect(opts[2].value).assertEqual(400);
+    });
+
+    it('PTP FormFlag 1 是 Range、2 是 Enumeration', 0, () => {
+      const range = new Uint8Array(16);
+      const view = new DataView(range.buffer);
+      view.setUint16(0, 0x5007, true);
+      view.setUint16(2, 0x0004, true);
+      range[4] = 0x02;
+      range[9] = 0x01; // FormFlag = Range
+      view.setUint16(10, 100, true);
+      view.setUint16(12, 300, true);
+      view.setUint16(14, 50, true);
+      const opts = parseDescriptorOptions(range, EXPOSURE_PARAM_APERTURE);
+      expect(opts.length).assertEqual(5);
+      expect(opts[0].value).assertEqual(100);
+      expect(opts[4].value).assertEqual(300);
+    });
+
+    it('实际光圈枚举按 22 项解析，首项 f/1.4', 0, () => {
+      const values = [140, 160, 180, 200, 220, 250, 280, 320, 350, 400, 450,
+        500, 560, 630, 710, 800, 900, 1000, 1100, 1300, 1400, 1600];
+      const opts = parseDescriptorOptions(makeDescriptor(0x0004, values),
+        EXPOSURE_PARAM_APERTURE);
+      expect(opts.length).assertEqual(22);
+      expect(opts[0].value).assertEqual(140);
+      expect(opts[0].label).assertEqual('f/1.4');
     });
 
     it('解析快门 32 位枚举描述', 0, () => {

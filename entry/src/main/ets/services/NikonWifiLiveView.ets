@@ -75,9 +75,14 @@ export const NIKON_PROP_AF_MODE_AT_LIVEVIEW = 0xD061;
 export const NIKON_PROP_LIVEVIEW_STATUS = 0xD1A2;
 export const NIKON_PROP_LIVEVIEW_PROHIBITION = 0xD1A4;
 export const NIKON_PROP_LIVEVIEW_SELECTOR = 0xD1A6;
+export const NIKON_PROP_AF_AREA_MODE = 0xD05D;
 
 /** `0xD061` 的取值：0=AF-S、1=AF-C、2=AF-F、3=MF（固定）、4=MF（可选）、5=AF-A。 */
 const AF_MODE_AF_F = 2;
+const AF_AREA_SINGLE_POINT = 0x8010;
+const AF_AREA_AUTO_AREA = 0x8011;
+const AF_AREA_AUTO_AREA_L_CHARACTER = 0x8020;
+const AF_AREA_AUTO_AREA_L_ANIMAL = 0x8021;
 
 const RESPONSE_OK = 0x2001;
 const RESPONSE_OPERATION_NOT_SUPPORTED = 0x2005;
@@ -336,6 +341,8 @@ export class NikonWifiLiveView {
   private log: (msg: string) => void;
   private useEx: boolean;
   private isoProperty: number = EXPOSURE_PROP_ISO;
+  private afAreaModeOriginal: number = -1;
+  private afAreaModeChanged: boolean = false;
   @Trace private frame: image.PixelMap | null = null;
   private loopToken: number = 0;
   private startSeq: number = 0;
@@ -478,6 +485,36 @@ export class NikonWifiLiveView {
     } finally {
       this.exposureWriting = '';
       this.resumeLoop();
+    }
+  }
+
+  /**
+   * 实时取景下点画面要能移动对焦点，前提是相机处于支持点选的 AF 区域模式。
+   * Z50II 默认可能在「自动区域 AF」，此时 `0x9205 ChangeAfArea` 虽返回成功，
+   * 但取景头里 AF 数量为 0、画面没有真实对焦框。这里只在自动区域模式时切到
+   * 单点 AF，并在停止取景时恢复用户原来的模式。
+   */
+  private async prepareAfAreaMode(seq: number): Promise<void> {
+    const data = await this.transport.getDevicePropValue(
+      NIKON_PROP_AF_AREA_MODE, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (data === null || data.length < 2) return;
+    const mode = exposureU16le(data, 0);
+    this.log(`实时取景: AF 区域模式=0x${mode.toString(16)}`);
+    if (mode !== AF_AREA_AUTO_AREA
+      && mode !== AF_AREA_AUTO_AREA_L_CHARACTER
+      && mode !== AF_AREA_AUTO_AREA_L_ANIMAL) {
+      return;
+    }
+    const r = await this.raw(NIKON_OP_SET_DEVICE_PROP_VALUE,
+      [NIKON_PROP_AF_AREA_MODE], false, u16leBytes(AF_AREA_SINGLE_POINT));
+    if (seq !== this.startSeq || !this.active) return;
+    if (r !== null && r.code === RESPONSE_OK) {
+      this.afAreaModeOriginal = mode;
+      this.afAreaModeChanged = true;
+      this.log('实时取景: AF 区域模式 → 单点');
+    } else {
+      this.log(`实时取景: 切换单点 AF 失败 ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
     }
   }
 
@@ -701,10 +738,13 @@ export class NikonWifiLiveView {
       this.isoProperty = EXPOSURE_PROP_ISO;
       this.exposureReady = false;
       this.exposureLoading = false;
+      this.afAreaModeOriginal = -1;
+      this.afAreaModeChanged = false;
       this.apertureOptions = [];
       this.shutterOptions = [];
       this.isoOptions = [];
       this.evOptions = [];
+      this.prepareAfAreaMode(seq).catch((_e: Error) => { /* 已写日志 */ });
       this.startLoop(++this.loopToken);
       this.log('实时取景: 已启动');
       this.loadExposureState().catch((_e: Error) => { /* 已写日志 */ });
@@ -733,6 +773,14 @@ export class NikonWifiLiveView {
     if (this.movieRecording) {
       await this.raw(NIKON_OP_END_MOVIE, [], false);
       this.movieRecording = false;
+    }
+    if (this.afAreaModeChanged) {
+      const restored = await this.raw(NIKON_OP_SET_DEVICE_PROP_VALUE,
+        [NIKON_PROP_AF_AREA_MODE], false, u16leBytes(this.afAreaModeOriginal));
+      this.log(`实时取景: AF 区域模式恢复 0x${this.afAreaModeOriginal.toString(16)}`
+        + ` ${restored === null ? 'null' : '0x' + restored.code.toString(16)}`);
+      this.afAreaModeChanged = false;
+      this.afAreaModeOriginal = -1;
     }
     const wasStarted = this.liveViewStarted;
     this.liveViewStarted = false;
