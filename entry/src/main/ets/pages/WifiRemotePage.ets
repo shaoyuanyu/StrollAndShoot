@@ -1390,27 +1390,43 @@ export struct WifiRemotePage {
           .alignItems(HorizontalAlign.Center)
           .hitTestBehavior(HitTestMode.None)
 
-          Row() {
-            Text(this.dialValueLabel())
-              .fontSize(FontSize.CardTitle)
-              .fontWeight(FontWeight.Medium)
-              .fontColor($r('app.color.primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Stack() {
+            // 底层必须有不透明底：胶囊正下方就是滚动标签，纯透明会透出重影。
+            Row()
+              .width(DIAL_ITEM_WIDTH)
+              .height(28)
+              .borderRadius(14)
+              .backgroundColor($r('app.color.bg_surface'))
+
+            Row() {
+              Text(this.dialValueLabel())
+                .fontSize(FontSize.CardTitle)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.primary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .width(DIAL_ITEM_WIDTH)
+            .height(28)
+            .borderRadius(14)
+            .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
+            .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+              style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
+              interactive: true,
+              materialColor: $r('app.color.remote_material_tint')
+            })))
+            .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
+            .shadow({
+              radius: 6,
+              color: $r('app.color.remote_image_shadow'),
+              offsetX: 0,
+              offsetY: 2
+            })
+            .justifyContent(FlexAlign.Center)
+            .alignItems(VerticalAlign.Center)
           }
           .width(DIAL_ITEM_WIDTH)
           .height(28)
-          .borderRadius(14)
-          .backgroundColor($r('app.color.bg_surface'))
-          .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
-          .shadow({
-            radius: 6,
-            color: $r('app.color.remote_image_shadow'),
-            offsetX: 0,
-            offsetY: 2
-          })
-          .justifyContent(FlexAlign.Center)
-          .alignItems(VerticalAlign.Center)
           .offset({ y: 0 })
           .hitTestBehavior(HitTestMode.None)
         }
