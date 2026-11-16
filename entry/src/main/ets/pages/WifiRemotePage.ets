@@ -38,6 +38,10 @@ const REMOTE_TOP_BAR_HEIGHT: number = 62;
 const REMOTE_DECK_HEIGHT: number = 200;
 /** 取景画面四周的呼吸边距。 */
 const REMOTE_IMAGE_INSET: number = 8;
+/** 专业参数拨盘：每个刻度的宽度、面板高度、白平衡参数的占位标识。 */
+const DIAL_ITEM_WIDTH: number = 64;
+const DIAL_PANEL_HEIGHT: number = 104;
+const DIAL_WB: string = '__wb__';
 
 @Builder
 export function WifiRemotePageBuilder() {
@@ -60,6 +64,12 @@ export struct WifiRemotePage {
   @Local exposureParam: string = '';
   @Local wbSheetOpen: boolean = false;
   @Local focusSheetOpen: boolean = false;
+  /** 专业参数拨盘：当前参数、候选刻度、是否展开。 */
+  @Local dialOpen: boolean = false;
+  @Local dialParam: string = '';
+  @Local dialIndex: number = 0;
+  private dialScroller: Scroller = new Scroller();
+  private dialAppliedValue: number = -1;
   /** 本次遥控里至少产生了一张照片/一段录像；退出页面时自动补一次快速扫描。 */
   private mediaChanged: boolean = false;
   private focusTimer: number = -1;
@@ -423,6 +433,175 @@ export struct WifiRemotePage {
   private currentExposureOptions(): ExposureOption[] {
     const live = this.live;
     return live !== null ? live.getExposureOptions(this.exposureParam) : [];
+  }
+
+  private exposureOptionsFor(param: string): ExposureOption[] {
+    const live = this.live;
+    return live !== null ? live.getExposureOptions(param) : [];
+  }
+
+  private dialOptions(): ExposureOption[] {
+    if (this.dialParam === DIAL_WB) {
+      const out: ExposureOption[] = [];
+      for (const item of this.wbOptions()) {
+        const opt: ExposureOption = { value: item.value, label: item.label };
+        out.push(opt);
+      }
+      return out;
+    }
+    return this.exposureOptionsFor(this.dialParam);
+  }
+
+  private dialTitle(): ResourceStr {
+    if (this.dialParam === DIAL_WB) return $r('app.string.camera_wifi_remote_wb');
+    if (this.dialParam === EXPOSURE_PARAM_APERTURE) return $r('app.string.camera_wifi_remote_aperture');
+    if (this.dialParam === EXPOSURE_PARAM_SHUTTER) return $r('app.string.camera_wifi_remote_shutter');
+    if (this.dialParam === EXPOSURE_PARAM_ISO) return $r('app.string.camera_wifi_remote_iso');
+    if (this.dialParam === EXPOSURE_PARAM_EV) return $r('app.string.camera_wifi_remote_ev');
+    return $r('app.string.camera_wifi_remote_mode');
+  }
+
+  private dialValueLabel(): string {
+    const opts = this.dialOptions();
+    if (opts.length === 0) return '--';
+    const index = Math.max(0, Math.min(opts.length - 1, this.dialIndex));
+    return opts[index].label;
+  }
+
+  private dialViewportWidth(): number {
+    return Math.max(0, this.deckWidthVp() - 24);
+  }
+
+  private dialSpacerWidth(): number {
+    return Math.max(0, (this.dialViewportWidth() - DIAL_ITEM_WIDTH) / 2);
+  }
+
+  private openExposureDial(param: string): void {
+    if (!this.canAdjustExposureParam(param)) return;
+    Haptics.tap();
+    if (this.dialOpen && this.dialParam === param) {
+      this.closeDial();
+      return;
+    }
+    this.dialParam = param;
+    this.dialOpen = true;
+    this.dialIndex = 0;
+    this.dialAppliedValue = -1;
+    this.live?.ensureExposure();
+    this.syncDialToCurrent();
+    this.scheduleDialSync(0);
+  }
+
+  private openWbDial(): void {
+    if (!this.canAdjustWb()) return;
+    Haptics.tap();
+    if (this.dialOpen && this.dialParam === DIAL_WB) {
+      this.closeDial();
+      return;
+    }
+    this.dialParam = DIAL_WB;
+    this.dialOpen = true;
+    this.dialIndex = 0;
+    this.dialAppliedValue = -1;
+    this.live?.ensureWhiteBalance();
+    this.syncDialToCurrent();
+    this.scheduleDialSync(0);
+  }
+
+  private closeDial(): void {
+    this.dialOpen = false;
+    this.dialParam = '';
+    this.dialAppliedValue = -1;
+  }
+
+  /** 参数是异步读取的：面板先出现，数据到了再对齐到当前值。 */
+  private scheduleDialSync(attempt: number): void {
+    setTimeout(() => {
+      if (!this.dialOpen) return;
+      if (this.dialOptions().length > 0) {
+        this.syncDialToCurrent();
+        return;
+      }
+      if (attempt < 20) this.scheduleDialSync(attempt + 1);
+    }, 50);
+  }
+
+  private syncDialToCurrent(): void {
+    const live = this.live;
+    if (!this.dialOpen || live === null) return;
+    const opts = this.dialOptions();
+    if (opts.length === 0) return;
+    const current = this.dialParam === DIAL_WB
+      ? live.whiteBalance : live.getExposureRaw(this.dialParam);
+    const index = opts.findIndex((item: ExposureOption) => item.value === current);
+    if (index < 0) return;
+    this.dialIndex = index;
+    this.dialAppliedValue = current;
+    this.dialScroller.scrollTo({
+      xOffset: index * DIAL_ITEM_WIDTH,
+      yOffset: 0,
+      animation: false
+    });
+  }
+
+  private dialIndexAtCurrentOffset(): number {
+    const length = this.dialOptions().length;
+    if (length === 0) return 0;
+    const offset = Math.abs(this.dialScroller.currentOffset().xOffset);
+    const index = Math.round(offset / DIAL_ITEM_WIDTH);
+    return Math.max(0, Math.min(length - 1, index));
+  }
+
+  private onDialScroll(): void {
+    if (this.dialOptions().length === 0) return;
+    this.dialIndex = this.dialIndexAtCurrentOffset();
+  }
+
+  private onDialScrollStop(): void {
+    if (this.dialOptions().length === 0) return;
+    this.dialIndex = this.dialIndexAtCurrentOffset();
+    this.dialScroller.scrollTo({
+      xOffset: this.dialIndex * DIAL_ITEM_WIDTH,
+      yOffset: 0,
+      animation: true
+    });
+    this.applyDialValue();
+  }
+
+  private selectDialIndex(index: number): void {
+    const length = this.dialOptions().length;
+    if (length === 0) return;
+    this.dialIndex = Math.max(0, Math.min(length - 1, index));
+    this.dialScroller.scrollTo({
+      xOffset: this.dialIndex * DIAL_ITEM_WIDTH,
+      yOffset: 0,
+      animation: true
+    });
+    this.applyDialValue();
+  }
+
+  private applyDialValue(): void {
+    const opts = this.dialOptions();
+    if (opts.length === 0) return;
+    const option = opts[Math.max(0, Math.min(opts.length - 1, this.dialIndex))];
+    if (option.value === this.dialAppliedValue) return;
+    const live = this.live;
+    if (live === null) return;
+    if (this.dialParam === DIAL_WB) {
+      if (!this.canAdjustWb() || live.settingsWriting !== '') return;
+      this.dialAppliedValue = option.value;
+      Haptics.tap();
+      live.setWhiteBalance(option.value).catch((_e: Error) => {
+        // 错误已经写进 live.error
+      });
+      return;
+    }
+    if (!this.canAdjustExposureParam(this.dialParam) || live.exposureWriting !== '') return;
+    this.dialAppliedValue = option.value;
+    Haptics.tap();
+    live.setExposure(this.dialParam, option.value).catch((_e: Error) => {
+      // 错误已经写进 live.error
+    });
   }
 
   private isSelectedExposure(value: number): boolean {
@@ -970,28 +1149,32 @@ export struct WifiRemotePage {
         label: $r('app.string.camera_wifi_remote_iso'),
         currentValue: this.exposureValue(EXPOSURE_PARAM_ISO),
         isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_ISO),
-        onTap: () => { this.openExposure(EXPOSURE_PARAM_ISO); }
+        isActive: this.dialOpen && this.dialParam === EXPOSURE_PARAM_ISO,
+        onTap: () => { this.openExposureDial(EXPOSURE_PARAM_ISO); }
       })
       this.VDivider()
       RemoteExposureCell({
         label: $r('app.string.camera_wifi_remote_aperture'),
         currentValue: this.exposureValue(EXPOSURE_PARAM_APERTURE),
         isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_APERTURE),
-        onTap: () => { this.openExposure(EXPOSURE_PARAM_APERTURE); }
+        isActive: this.dialOpen && this.dialParam === EXPOSURE_PARAM_APERTURE,
+        onTap: () => { this.openExposureDial(EXPOSURE_PARAM_APERTURE); }
       })
       this.VDivider()
       RemoteExposureCell({
         label: $r('app.string.camera_wifi_remote_shutter'),
         currentValue: this.exposureValue(EXPOSURE_PARAM_SHUTTER),
         isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_SHUTTER),
-        onTap: () => { this.openExposure(EXPOSURE_PARAM_SHUTTER); }
+        isActive: this.dialOpen && this.dialParam === EXPOSURE_PARAM_SHUTTER,
+        onTap: () => { this.openExposureDial(EXPOSURE_PARAM_SHUTTER); }
       })
       this.VDivider()
       RemoteExposureCell({
         label: $r('app.string.camera_wifi_remote_ev'),
         currentValue: this.exposureValue(EXPOSURE_PARAM_EV),
         isEnabled: this.canAdjustExposureParam(EXPOSURE_PARAM_EV),
-        onTap: () => { this.openExposure(EXPOSURE_PARAM_EV); }
+        isActive: this.dialOpen && this.dialParam === EXPOSURE_PARAM_EV,
+        onTap: () => { this.openExposureDial(EXPOSURE_PARAM_EV); }
       })
       this.VDivider()
       this.FocusTool()
@@ -1011,11 +1194,11 @@ export struct WifiRemotePage {
         label: $r('app.string.camera_wifi_remote_wb_abbr'),
         currentValue: this.whiteBalanceLabel(),
         isEnabled: this.canAdjustWb(),
-        onTap: () => { this.openWb(); }
+        isActive: this.dialOpen && this.dialParam === DIAL_WB,
+        onTap: () => { this.openWbDial(); }
       })
     }
     .layoutWeight(1)
-    .bindSheet($$this.wbSheetOpen, this.WhiteBalanceSheet(), this.sheetOptions($r('app.string.camera_wifi_remote_wb')))
   }
 
   @Builder
@@ -1114,6 +1297,119 @@ export struct WifiRemotePage {
   }
 
   /**
+   * 专业参数拨盘：点击参数条上的 ISO / 光圈 / 快门 / EV / WB 后，在控制台上方
+   * 浮出一条可横向滑动、中心指针取值的刻度盘；松手才写相机。
+   */
+  @Builder
+  DialPanel() {
+    Column() {
+      Row({ space: 8 }) {
+        Text(this.dialTitle())
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+        Text(this.dialValueLabel())
+          .fontSize(FontSize.PageTitle)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary'))
+          .maxLines(1)
+        Blank()
+        Button({ type: ButtonType.Circle, stateEffect: true }) {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(IconSize.Body)
+            .fontColor([$r('app.color.text_secondary')])
+        }
+        .width(32)
+        .height(32)
+        .padding(0)
+        .backgroundColor(Color.Transparent)
+        .borderRadius(16)
+        .onClick(() => { this.closeDial(); })
+      }
+      .width('100%')
+      .height(32)
+      .alignItems(VerticalAlign.Center)
+
+      if (this.dialOptions().length === 0) {
+        Row({ space: 8 }) {
+          LoadingProgress()
+            .width(18)
+            .height(18)
+            .color($r('app.color.primary'))
+          Text($r('app.string.camera_wifi_remote_exposure_loading'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%')
+        .height(52)
+        .justifyContent(FlexAlign.Center)
+      } else {
+        Stack({ alignContent: Alignment.Center }) {
+          Scroll(this.dialScroller) {
+            Row() {
+              Row().width(this.dialSpacerWidth())
+              Repeat(this.dialOptions()).each((item: RepeatItem<ExposureOption>) => {
+                Column({ space: 4 }) {
+                  Row()
+                    .width(item.index % 5 === 0 ? 1.5 : 1)
+                    .height(item.index % 5 === 0 ? 12 : 7)
+                    .backgroundColor($r('app.color.text_tertiary'))
+                  Text(item.item.label)
+                    .fontSize(FontSize.Caption)
+                    .fontColor($r('app.color.text_secondary'))
+                    .maxLines(1)
+                }
+                .width(DIAL_ITEM_WIDTH)
+                .height(52)
+                .justifyContent(FlexAlign.Center)
+                .alignItems(HorizontalAlign.Center)
+                .onClick(() => { this.selectDialIndex(item.index); })
+              }).key((item: ExposureOption) => `${item.value}`)
+              Row().width(this.dialSpacerWidth())
+            }
+            .height(52)
+          }
+          .width('100%')
+          .height(52)
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.None)
+          .onDidScroll(() => { this.onDialScroll(); })
+          .onScrollStop(() => { this.onDialScrollStop(); })
+
+          Column() {
+            Row()
+              .width(2)
+              .height(20)
+              .borderRadius(1)
+              .backgroundColor($r('app.color.primary'))
+          }
+          .width(2)
+          .height(52)
+          .justifyContent(FlexAlign.Start)
+          .alignItems(HorizontalAlign.Center)
+          .hitTestBehavior(HitTestMode.None)
+        }
+        .width('100%')
+        .height(52)
+      }
+    }
+    .width(this.deckWidthVp())
+    .height(DIAL_PANEL_HEIGHT)
+    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+    .borderRadius(Radius.Card)
+    .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
+    .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.REGULAR,
+      interactive: true,
+      materialColor: $r('app.color.remote_material_tint')
+    })))
+    .clip(true)
+    .onAppear(() => { this.syncDialToCurrent(); })
+    .position({ x: this.deckX(), y: this.deckY() - DIAL_PANEL_HEIGHT - 8 })
+  }
+
+  /**
    * 整页都画在标题栏 builder 里。
    *
    * 沉浸光感的材质只认 Navigation/NavDestination 标题栏与底部 TabBar；而这一页
@@ -1135,6 +1431,9 @@ export struct WifiRemotePage {
       this.TopBar()
       if (this.deckVisible()) {
         this.BottomDeck()
+      }
+      if (this.dialOpen) {
+        this.DialPanel()
       }
     }
     .width('100%')
@@ -1368,6 +1667,7 @@ struct RemoteExposureCell {
   @Param label: ResourceStr = '';
   @Param currentValue: string = '--';
   @Param isEnabled: boolean = true;
+  @Param isActive: boolean = false;
   @Event onTap: () => void = () => {};
 
   build() {
@@ -1375,12 +1675,12 @@ struct RemoteExposureCell {
       Column({ space: 1 }) {
         Text(this.label)
           .fontSize(FontSize.Micro)
-          .fontColor($r('app.color.text_secondary'))
+          .fontColor(this.isActive ? $r('app.color.primary') : $r('app.color.text_secondary'))
           .maxLines(1)
         Text(this.currentValue)
           .fontSize(FontSize.Reading)
           .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
+          .fontColor(this.isActive ? $r('app.color.primary') : $r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
@@ -1390,7 +1690,7 @@ struct RemoteExposureCell {
     .layoutWeight(1)
     .height(52)
     .padding({ left: 2, right: 2 })
-    .backgroundColor(Color.Transparent)
+    .backgroundColor(this.isActive ? $r('app.color.primary_soft') : Color.Transparent)
     .borderRadius(10)
     .enabled(this.isEnabled)
     .opacity(this.isEnabled ? 1 : 0.35)
