@@ -32,8 +32,8 @@ import { CardShadow, FontSize, IconSize, Radius } from '../utils/UiTokens';
 import { Haptics } from '../utils/Haptics';
 import { GlassEffect } from '../utils/GlassEffect';
 
-/** 顶部标题栏高度（不含状态栏）。 */
-const REMOTE_TOP_BAR_HEIGHT: number = 58;
+/** 顶部标题栏高度（不含状态栏）：56vp 胶囊 + 上下各 6vp 呼吸边。 */
+const REMOTE_TOP_BAR_HEIGHT: number = 62;
 /** 底部控制台高度：曝光 48 + 工具 48 + 快门区 128 + 两条分隔线 + 上下内边距。 */
 const REMOTE_DECK_HEIGHT: number = 236;
 /** 取景画面四周的呼吸边距。 */
@@ -628,23 +628,24 @@ export struct WifiRemotePage {
   @Builder
   TopBar() {
     Row({ space: 8 }) {
-      Row({ space: 6 }) {
+      Row() {
         Button({ type: ButtonType.Circle, stateEffect: true }) {
           SymbolGlyph($r('sys.symbol.chevron_left'))
             .fontSize(IconSize.Nav)
-            .fontColor([$r('app.color.text_primary')])
+            .fontColor([$r('app.color.text_secondary')])
         }
-        .width(36)
-        .height(36)
+        .width(40)
+        .height(40)
         .padding(0)
         .backgroundColor(Color.Transparent)
-        .borderRadius(18)
+        .borderRadius(20)
         .onClick(() => { this.pageInfos.pop(); })
 
-        Column({ space: 1 }) {
+        Column({ space: 2 }) {
           Text($r('app.string.camera_wifi_remote_title'))
             .fontSize(FontSize.CardTitle)
             .fontWeight(FontWeight.Medium)
+            .lineHeight(22)
             .fontColor($r('app.color.text_primary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -655,7 +656,8 @@ export struct WifiRemotePage {
               .height(6)
               .fill(this.statusDotColor())
             Text(this.statusText())
-              .fontSize(FontSize.Caption)
+              .fontSize(FontSize.Section)
+              .lineHeight(17)
               .fontColor(this.statusColor())
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -664,20 +666,23 @@ export struct WifiRemotePage {
               && this.live.fps > 0) {
               Text('·')
                 .fontSize(FontSize.Caption)
+                .lineHeight(17)
                 .fontColor($r('app.color.text_tertiary'))
               Text($r('app.string.camera_wifi_remote_fps', this.live.fps))
                 .fontSize(FontSize.Caption)
+                .lineHeight(17)
                 .fontColor($r('app.color.text_tertiary'))
                 .flexShrink(0)
             }
           }
+          .height(17)
         }
         .alignItems(HorizontalAlign.Start)
       }
       .constraintSize({ maxWidth: 300 })
-      .height(52)
-      .padding({ left: 6, right: 14 })
-      .borderRadius(26)
+      .height(56)
+      .padding({ left: 8, right: 16 })
+      .borderRadius(28)
       .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
       .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
@@ -691,7 +696,7 @@ export struct WifiRemotePage {
       }
     }
     .width('100%')
-    .height(52)
+    .height(56)
     .padding({ left: 12, right: 12 })
     .alignItems(VerticalAlign.Center)
     .position({ x: 0, y: this.statusBarVp() + 6 })
@@ -706,12 +711,13 @@ export struct WifiRemotePage {
         .fill(this.focusDotColor())
       Text(this.focusBadgeText())
         .fontSize(FontSize.Caption)
+        .lineHeight(16)
         .fontColor(this.focusBadgeColor())
         .maxLines(1)
     }
-    .height(32)
+    .height(36)
     .padding({ left: 10, right: 12 })
-    .borderRadius(16)
+    .borderRadius(18)
     .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
     .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
       style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
