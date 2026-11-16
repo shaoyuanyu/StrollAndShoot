@@ -398,7 +398,7 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `DeviceReady` | `0x90C8` | 无参数；启动 / 对焦 / 拍摄后轮询到 `0x2001` |
 | `InitiateCaptureRecInMedia` | `0x9207` | `[-1, 0]` = 普通释放、存卡 |
 | `AfDrive` | `0x90C1` | 无参数 |
-| `ChangeAfArea` | `0x9205` | `[x, y]`，实时取景像素坐标 |
+| `ChangeAfArea` | `0x9205` | `[x, y]`，实时取景头 wholeSize 坐标系（不是 JPEG 像素） |
 | `ZoomControlOperation` | `0x9016` | `[wideSteps, teleSteps]`，SnapBridge 用 `[1,0]` / `[0,1]` |
 | `SetDevicePropValue` | `0x1016` | 参数=属性码，数据段=新值；用于写 `0xD1A6` |
 | `StartMovieRecInCard` | `0x920A` | 无参数 |
@@ -412,6 +412,7 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 | `LiveViewStatus` | `0xD1A2` | 1 = 实时取景已启动 |
 | `LiveViewProhibitionCondition` | `0xD1A4` | 非 0 不允许取景；bit31 是「拍摄中」标志，忽略 |
 | `LiveViewSelector` | `0xD1A6` | 0 = 静止图像，1 = 录像；写它走 `0x1016` 数据阶段 |
+| `AfModeAtLiveView` | `0xD061` | 0=AF-S、1=AF-C、2=AF-F、3/4=MF、5=AF-A |
 
 **实现分层**
 
@@ -439,11 +440,13 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 `GetLiveViewImage` 数据段不是纯 JPEG：前面是机型相关的头，JPEG 在末尾。
 - 老协议：偏移 4 处是 JPEG 长度（`a8`）；
 - Ex：偏移 12 处是 JPEG 长度（`b8`，前面两个 short + 两个 int）；
+- **头里的多字节字段是大端**（SnapBridge 用 `ByteBuffer.wrap` 默认序读），和 PTP 属性值的小端不同；JPEG 长度与 wholeSize 都按大端读。
 - 先按声明长度取末尾并验证 `FF D8`，失败再从头扫 SOI，最后按 EOI 截断。
 不要把头的偏移写死成某个常数：不同固件版本头长度不同，末尾取帧更稳。
 - **AF 坐标用头里的 wholeSize**：老协议偏移 12/14，Ex 偏移 16/18；JPEG 尺寸可能
   小于 wholeSize，直接拿 JPEG 宽高算 `ChangeAfArea` 会让焦点偏移。页面按 JPEG
-  比例摆放画面、按归一化坐标映射到 wholeSize。
+  比例摆放画面、按归一化坐标映射到 wholeSize。Z50II 实际值是 **5568×3712**；
+  1.80.2 及以前按小端读成 49173×32782，所有点都被放大约 8.8 倍，1.80.3 修正。
 - 帧循环每 30 帧打一行 `实时取景: 帧 n jpeg=... fetch=...ms decode=...ms drop=... fps=... af=...x... frame=...x...`，并给无 JPEG、`ChangeAfArea`、`AfDrive` 的响应码留日志，真机排查时先看这些行。
 - 每帧的显示尺寸直接从 JPEG 的 SOF 段解析，不再 `await pixelMap.getImageInfo()`；
   这条 native 往返以前串在取帧和解码之间，会直接加到每帧延迟上。
@@ -460,6 +463,9 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
   共用 `PtpScheduler`，不会在 PTP/IP 单管道上插队。
 - 拍摄 / 对焦后必须等 `DeviceReady`；`0x2019`、`0xA200`、`0xA201`、`0xA202`、
   `0xA207` 视为忙，继续轮询，其它响应码立即报错。
+- **AF-F（`0xD061=2`）只发 `ChangeAfArea`，不再补 `AfDrive`**：连续伺服本来就在
+  追焦，SnapBridge 的 `LiveViewAutoFocusRepository` 也是这个分支。其它 AF 模式
+  才走「移动区域 + AfDrive」。
 - 实时取景控制器随 Wi-Fi 会话创建，`CameraService.wifiLiveView` 持有；
   断开时先 `stop()` 再 `CloseSession`。
 - **拍摄后联动扫描**：`WifiRemotePage` 记录 `mediaChanged`，退出时 `live.stop()`
@@ -471,8 +477,8 @@ Wi-Fi STA 不只是传照片：相机与手机在同一网络时，可以用 PTP
 DataOut=2，随后 `StartData(9) + EndData(12)`（SnapBridge `u7` 同款）。
 
 **仍未做**：曝光参数、驱动模式、白平衡；录像已接入但尚未真机验证。当前实时取景
-真机实测 640×424、约 70KB/帧、10–12fps，这一速度主要受相机 Wi-Fi 出帧限制，
-代码侧已把取帧和解码重叠、去掉每帧 `getImageInfo`，目标间隔 40ms。
+真机实测 640×424、约 70KB/帧，1.80.2 后取帧约 22–38ms、解码约 18–23ms、
+20–25fps；上限主要受相机出帧和 40ms 节拍限制。
 
 **BLE：扫描、GATT 与两段式首配（1.38.x）**
 

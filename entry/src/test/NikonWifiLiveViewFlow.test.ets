@@ -24,6 +24,7 @@ interface RecordedOp {
 
 class FakeLiveTransport implements PtpTransport {
   ops: RecordedOp[] = [];
+  afModeValue: number = -1;
 
   get connectedDeviceName(): string {
     return 'fake-live';
@@ -44,6 +45,9 @@ class FakeLiveTransport implements PtpTransport {
     }
     if (propertyCode === 0xD1A2) {
       return new Uint8Array([0]);
+    }
+    if (propertyCode === 0xD061) {
+      return this.afModeValue >= 0 ? new Uint8Array([this.afModeValue]) : null;
     }
     return null;
   }
@@ -166,6 +170,22 @@ export default function nikonWifiLiveViewFlowTest() {
       await live.stop();
       expect(live.active).assertFalse();
       expect(fake.has(NIKON_OP_END_LIVEVIEW)).assertTrue();
+      await delay(10);
+    });
+
+    it('AF-F 连续对焦只移动对焦点，不再发 AfDrive', 0, async () => {
+      const fake = new FakeLiveTransport();
+      fake.afModeValue = 2;
+      const live = new NikonWifiLiveView(fake, OPS, (_m: string) => {}, PROPS);
+      expect(await live.start()).assertTrue();
+      expect(live.afMode).assertEqual(2);
+
+      const ok = await live.focusAt(120, 80);
+      expect(ok).assertTrue();
+      expect(fake.has(NIKON_OP_CHANGE_AF_AREA)).assertTrue();
+      expect(fake.has(NIKON_OP_AF_DRIVE)).assertFalse();
+
+      await live.stop();
       await delay(10);
     });
   });

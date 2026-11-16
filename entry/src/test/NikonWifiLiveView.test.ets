@@ -21,7 +21,7 @@ function makePayload(headerLength: number, declaredOffset: number,
   const data = new Uint8Array(headerLength + jpeg.length);
   const view = new DataView(data.buffer);
   if (declaredOffset >= 0) {
-    view.setUint32(declaredOffset, jpeg.length, true);
+    view.setUint32(declaredOffset, jpeg.length, false);
   }
   data.set(jpeg, headerLength);
   return data;
@@ -66,8 +66,8 @@ export default function nikonWifiLiveViewTest() {
     it('标准头读取 wholeSize', 0, () => {
       const data = new Uint8Array(32);
       const view = new DataView(data.buffer);
-      view.setUint16(12, 640, true);
-      view.setUint16(14, 424, true);
+      view.setUint16(12, 640, false);
+      view.setUint16(14, 424, false);
       const size = parseLiveViewWholeSize(data, false);
       expect(size[0]).assertEqual(640);
       expect(size[1]).assertEqual(424);
@@ -76,11 +76,20 @@ export default function nikonWifiLiveViewTest() {
     it('Ex 头读取 wholeSize', 0, () => {
       const data = new Uint8Array(32);
       const view = new DataView(data.buffer);
-      view.setUint16(16, 1280, true);
-      view.setUint16(18, 848, true);
+      view.setUint16(16, 1280, false);
+      view.setUint16(18, 848, false);
       const size = parseLiveViewWholeSize(data, true);
       expect(size[0]).assertEqual(1280);
       expect(size[1]).assertEqual(848);
+    });
+
+    it('Z50II 实际 wholeSize 字节按大端解析为 5568x3712', 0, () => {
+      // 真机数据是 15 C0 0E 80；按小端会读成 49173x32782。
+      const data = new Uint8Array(32);
+      data.set([0x15, 0xC0, 0x0E, 0x80], 16);
+      const size = parseLiveViewWholeSize(data, true);
+      expect(size[0]).assertEqual(5568);
+      expect(size[1]).assertEqual(3712);
     });
 
     it('从 JPEG SOF0 读取尺寸', 0, () => {

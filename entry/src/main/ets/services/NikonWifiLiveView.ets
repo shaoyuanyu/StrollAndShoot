@@ -43,9 +43,13 @@ export const NIKON_OP_GET_LIVEVIEW_IMAGE_EX = 0x9428;
 
 /** 尼康设备属性。 */
 export const NIKON_PROP_REMOTE_CAPTURE_PROHIBITION = 0xD0BD;
+export const NIKON_PROP_AF_MODE_AT_LIVEVIEW = 0xD061;
 export const NIKON_PROP_LIVEVIEW_STATUS = 0xD1A2;
 export const NIKON_PROP_LIVEVIEW_PROHIBITION = 0xD1A4;
 export const NIKON_PROP_LIVEVIEW_SELECTOR = 0xD1A6;
+
+/** `0xD061` 的取值：0=AF-S、1=AF-C、2=AF-F、3=MF（固定）、4=MF（可选）、5=AF-A。 */
+const AF_MODE_AF_F = 2;
 
 const RESPONSE_OK = 0x2001;
 const RESPONSE_OPERATION_NOT_SUPPORTED = 0x2005;
@@ -76,9 +80,20 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function u16le(data: Uint8Array, offset: number): number {
+/**
+ * 实时取景头的多字节字段是**大端**（SnapBridge 用 `ByteBuffer.wrap` 默认序读），
+ * 和 PTP 属性值的小端不同。以前这里按小端读，Z50II 的 wholeSize
+ * `15 C0 0E 80` 被读成 49173×32782，实际是 5568×3712，AF 坐标整体放大约 8.8 倍。
+ */
+function u16be(data: Uint8Array, offset: number): number {
   if (offset + 2 > data.length) return 0;
-  return data[offset] | (data[offset + 1] << 8);
+  return (data[offset] << 8) | data[offset + 1];
+}
+
+function u32be(data: Uint8Array, offset: number): number {
+  if (offset + 4 > data.length) return 0;
+  return ((data[offset] << 24) | (data[offset + 1] << 16)
+    | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
 }
 
 function u32le(data: Uint8Array | null): number {
@@ -90,7 +105,8 @@ function u32le(data: Uint8Array | null): number {
  * 从实时取景头里读「整幅画面」尺寸（AF 坐标的坐标系）。
  *
  * - 老协议 `GetLiveViewImage`：头偏移 12/14；
- * - `GetLiveViewImageEx`：头偏移 16/18。
+ * - `GetLiveViewImageEx`：头偏移 16/18；
+ * - 头字段是大端；PTP 属性值才是小端。
  *
  * JPEG 尺寸通常比 wholeSize 小（相机可能按显示比例缩放），
  * `ChangeAfArea` 用的是 wholeSize，因此不能直接拿 JPEG 尺寸算坐标。
@@ -98,8 +114,8 @@ function u32le(data: Uint8Array | null): number {
 export function parseLiveViewWholeSize(data: Uint8Array, ex: boolean): number[] {
   const offset = ex ? 16 : 12;
   if (data.length < offset + 4) return [0, 0];
-  const w = u16le(data, offset);
-  const h = u16le(data, offset + 2);
+  const w = u16be(data, offset);
+  const h = u16be(data, offset + 2);
   return w > 0 && h > 0 ? [w, h] : [0, 0];
 }
 
@@ -107,7 +123,8 @@ export function parseLiveViewWholeSize(data: Uint8Array, ex: boolean): number[] 
  * 从「头 + JPEG」的数据里取出 JPEG。
  *
  * - `GetLiveViewImage` 的头在偏移 4 处有 JPEG 长度；
- * - `GetLiveViewImageEx` 的头在偏移 12 处有 JPEG 长度。
+ * - `GetLiveViewImageEx` 的头在偏移 12 处有 JPEG 长度；
+ * - 长度是大端（与头里其它字段一致）。
  *
  * 头版本因机型而异，直接按固定偏移取有风险；先用声明长度取末尾并验证 SOI，
  * 验证失败再从头扫 `FF D8`。两种路径都找不到就返回 null。
@@ -116,7 +133,7 @@ export function extractLiveViewJpeg(data: Uint8Array, ex: boolean): Uint8Array |
   if (data.length < 2) return null;
   const declaredOffset = ex ? 12 : 4;
   if (data.length >= declaredOffset + 4) {
-    const declared = u32le(data.subarray(declaredOffset, declaredOffset + 4));
+    const declared = u32be(data, declaredOffset);
     if (declared > 2 && declared <= data.length) {
       const candidate = data.subarray(data.length - declared);
       if (candidate[0] === 0xFF && candidate[1] === 0xD8) return candidate;
@@ -207,6 +224,8 @@ export class NikonWifiLiveView {
   @Trace movieMode: boolean = false;
   @Trace movieRecording: boolean = false;
   @Trace movieSwitching: boolean = false;
+  /** 相机当前实时取景对焦模式（0xD061）；-1 = 没读到。 */
+  @Trace afMode: number = -1;
   /** 最近一次对焦命令是否成功（只代表相机接受了命令，不代表合焦）。 */
   @Trace lastFocusOk: boolean = false;
 
@@ -331,6 +350,17 @@ export class NikonWifiLiveView {
       if (!ready) {
         if (this.error === '') this.error = L10n.tr('camera_wifi_remote_start_failed');
         return false;
+      }
+
+      // 取景已经起来后再读；AF-F 是连续伺服，SnapBridge 只移动对焦点，不补 AfDrive。
+      const afMode = await this.transport.getDevicePropValue(
+        NIKON_PROP_AF_MODE_AT_LIVEVIEW, PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq) return false;
+      if (afMode !== null && afMode.length > 0) {
+        this.afMode = afMode[0];
+        this.log(`实时取景: AF 模式=${this.afModeName()}`);
+      } else {
+        this.afMode = -1;
       }
 
       this.active = true;
@@ -472,10 +502,14 @@ export class NikonWifiLiveView {
     this.lastAction = L10n.tr('camera_wifi_remote_focusing');
     await this.pauseLoop();
     try {
+      let areaCode = -1;
       if (this.supportsAfArea) {
-        const px = Math.max(0, Math.round(x));
-        const py = Math.max(0, Math.round(y));
+        let px = Math.max(0, Math.round(x));
+        let py = Math.max(0, Math.round(y));
+        if (this.afWidth > 0) px = Math.min(px, this.afWidth - 1);
+        if (this.afHeight > 0) py = Math.min(py, this.afHeight - 1);
         const moved = await this.raw(NIKON_OP_CHANGE_AF_AREA, [px, py], false);
+        areaCode = moved === null ? -1 : moved.code;
         this.log(`实时取景: ChangeAfArea(${px},${py}) → `
           + `${moved === null ? 'null' : '0x' + moved.code.toString(16)}`);
         if (moved === null || (moved.code !== RESPONSE_OK
@@ -484,6 +518,18 @@ export class NikonWifiLiveView {
             : this.errorText(moved.code);
           return false;
         }
+      }
+      if (this.afMode === AF_MODE_AF_F) {
+        // 连续伺服：移动对焦点后相机会自己追焦，SnapBridge 也不会再发 AfDrive。
+        const ok = areaCode === RESPONSE_OK;
+        this.lastFocusOk = ok;
+        if (ok) {
+          this.lastAction = L10n.tr('camera_wifi_remote_af_done');
+        } else {
+          this.error = L10n.tr('camera_wifi_remote_af_failed');
+        }
+        this.log(`实时取景: AF-F 连续对焦，只移动对焦点（${ok ? '成功' : '失败'}）`);
+        return ok;
       }
       if (!this.supportsAf) return false;
       const r = await this.raw(NIKON_OP_AF_DRIVE, [], false);
@@ -888,6 +934,18 @@ export class NikonWifiLiveView {
       setTimeout(() => {
         try { old.release(); } catch (_e) { /* best effort */ }
       }, FRAME_FINAL_RELEASE_DELAY_MS);
+    }
+  }
+
+  private afModeName(): string {
+    switch (this.afMode) {
+      case 0: return 'AF-S';
+      case 1: return 'AF-C';
+      case 2: return 'AF-F';
+      case 3: return 'MF(固定)';
+      case 4: return 'MF(可选)';
+      case 5: return 'AF-A';
+      default: return '未知';
     }
   }
 
