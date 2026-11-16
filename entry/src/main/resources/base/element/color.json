@@ -235,6 +235,46 @@
     {
       "name": "action_neutral_fill",
       "value": "#F1F3F5"
+    },
+    {
+      "name": "remote_scrim_top",
+      "value": "#B8F1F3F5"
+    },
+    {
+      "name": "remote_scrim_mid",
+      "value": "#D9F1F3F5"
+    },
+    {
+      "name": "remote_scrim_bottom",
+      "value": "#F2F1F3F5"
+    },
+    {
+      "name": "remote_image_rim",
+      "value": "#1F000000"
+    },
+    {
+      "name": "remote_image_shadow",
+      "value": "#26000000"
+    },
+    {
+      "name": "remote_material_tint",
+      "value": "#33FFFFFF"
+    },
+    {
+      "name": "remote_selection_fill",
+      "value": "#000000"
+    },
+    {
+      "name": "remote_selection_text",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "remote_sheet_wash",
+      "value": "#B8FFFFFF"
+    },
+    {
+      "name": "remote_error_bg",
+      "value": "#1AE84026"
     }
   ]
 }

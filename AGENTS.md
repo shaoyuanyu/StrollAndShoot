@@ -835,6 +835,8 @@ V1 装饰器（`@State`、`@Prop`、`@Link`、`@StorageLink`、`@StorageProp`、
 
 **全屏预览器的底部操作栏（2026-11-10，用户已确认保留）**：内容区需要一条「下载 / 收藏 / 分享」玻璃操作栏时，用一个高度 56vp、`TabContent` 为空的 `Tabs` 当材质背板（`barOverlap(true)` + `barPosition: End` + `barFloatingStyle.systemMaterial`），照片区域仍由外层 `Column` 承担；直接给内容区的 `Row` 设 `systemMaterial` 不生效。这是为拿系统材质而接受的**设计语义例外**（不符合《底部页签》3–5 个一级导航的规范），2026-11-10 用户确认保留；若要严格合规，改成普通底部工具栏 + `backgroundBlurStyle`/渐变。
 
+**全屏标题栏承载整页的例外（1.83.0，Wi-Fi 遥控页）**：遥控页需要一整块底部玻璃控制台，做法是把 `.title({ builder, height: 屏幕高度 })` 的标题栏铺满整屏，把背景、取景台、顶部胶囊和控制台都放进同一个标题栏 builder。**不要**退回“58vp 标题栏 + 绝对定位控制台”（超出标题栏高度的部分会被裁掉），也**不要**把取景台留在内容区、靠 `HitTestMode.Transparent` 把点按透传回下层（模拟器实测点画面无效）。整页都在标题栏树里时，材质拿到、取景台点按也正常。
+
 **不要试图用弹层（popup / tips / dialog）在内容区拿材质 —— 它会吞掉整页点击**（同日实测，试过又退回）。官方确实把 `Popup控制` / `Tips控制` / `菜单控制` / `半模态转场` / `PromptAction` 列为「沉浸光感可在全页面生效」的接口，`bindPopup` + `CustomPopupOptions.systemMaterial` 也真能渲染出材质（折射、高光都对）。但**弹层一显示就铺一层全屏遮罩**：点标题栏「全选」、点缩略图、滚动列表全部失效；`autoCancel: false` + `focusable: false` + `levelMode: LevelMode.EMBEDDED`（需 `import { LevelMode } from '@ohos.promptAction'`）都救不回来。
 
 #### bindSheet 的材质

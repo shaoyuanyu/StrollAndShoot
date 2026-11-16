@@ -1829,12 +1829,36 @@
       "value": "AF"
     },
     {
+      "name": "camera_wifi_remote_af_abbr",
+      "value": "AF"
+    },
+    {
+      "name": "camera_wifi_remote_zoom",
+      "value": "Zoom"
+    },
+    {
       "name": "camera_wifi_remote_wide",
-      "value": "W"
+      "value": "Wide"
     },
     {
       "name": "camera_wifi_remote_tele",
-      "value": "T"
+      "value": "Tele"
+    },
+    {
+      "name": "camera_wifi_remote_mode",
+      "value": "Mode"
+    },
+    {
+      "name": "camera_wifi_remote_take_photo",
+      "value": "Take photo"
+    },
+    {
+      "name": "camera_wifi_remote_record",
+      "value": "Record"
+    },
+    {
+      "name": "camera_wifi_remote_stop_recording",
+      "value": "Stop"
     },
     {
       "name": "camera_wifi_remote_fps",

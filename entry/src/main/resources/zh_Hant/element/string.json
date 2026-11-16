@@ -1829,12 +1829,36 @@
       "value": "對焦"
     },
     {
+      "name": "camera_wifi_remote_af_abbr",
+      "value": "AF"
+    },
+    {
+      "name": "camera_wifi_remote_zoom",
+      "value": "變焦"
+    },
+    {
       "name": "camera_wifi_remote_wide",
-      "value": "W"
+      "value": "廣角"
     },
     {
       "name": "camera_wifi_remote_tele",
-      "value": "T"
+      "value": "長焦"
+    },
+    {
+      "name": "camera_wifi_remote_mode",
+      "value": "模式"
+    },
+    {
+      "name": "camera_wifi_remote_take_photo",
+      "value": "拍照"
+    },
+    {
+      "name": "camera_wifi_remote_record",
+      "value": "錄影"
+    },
+    {
+      "name": "camera_wifi_remote_stop_recording",
+      "value": "停止"
     },
     {
       "name": "camera_wifi_remote_fps",
