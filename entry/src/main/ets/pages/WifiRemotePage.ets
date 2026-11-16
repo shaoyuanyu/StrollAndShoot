@@ -40,12 +40,11 @@ const REMOTE_DECK_HEIGHT: number = 200;
 const REMOTE_IMAGE_INSET: number = 8;
 /** 专业参数拨盘：每个刻度的宽度、面板高度、白平衡参数的占位标识。 */
 const DIAL_ITEM_WIDTH: number = 52;
-const DIAL_LENS_WIDTH: number = 60;
-const DIAL_LENS_HEIGHT: number = 60;
-const DIAL_LENS_RIM: number = 66;
+const DIAL_LENS_WIDTH: number = 78;
+const DIAL_LENS_HEIGHT: number = 34;
 /** 镜片中心到刻度标签中心小于这个距离时，标签会与镜片边缘相交，整枚淡出。 */
-const DIAL_LABEL_OCCLUDE_RADIUS: number = DIAL_LENS_RIM / 2 + 12;
-const DIAL_PANEL_HEIGHT: number = 104;
+const DIAL_LABEL_OCCLUDE_RADIUS: number = DIAL_LENS_WIDTH / 2 + 12;
+const DIAL_PANEL_HEIGHT: number = 92;
 const DIAL_WB: string = '__wb__';
 
 @Builder
@@ -1362,7 +1361,7 @@ export struct WifiRemotePage {
             .fontColor($r('app.color.text_secondary'))
         }
         .width('100%')
-        .height(60)
+        .height(48)
         .justifyContent(FlexAlign.Center)
       } else {
         Stack({ alignContent: Alignment.Center }) {
@@ -1379,10 +1378,10 @@ export struct WifiRemotePage {
               }).key((item: ExposureOption) => `${item.value}`)
               Row().width(this.dialSpacerWidth())
             }
-            .height(60)
+            .height(48)
           }
           .width('100%')
-          .height(60)
+          .height(48)
           .scrollable(ScrollDirection.Horizontal)
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.None)
@@ -1390,47 +1389,32 @@ export struct WifiRemotePage {
           .onDidScroll(() => { this.onDialScroll(); })
           .onScrollStop(() => { this.onDialScrollStop(); })
 
-          Stack() {
-            // 圆形凸透镜：外层厚玻璃圈 + 内层球面高光，镜内是当前中心值的放大副本。
+          Column() {
             Row()
-              .width(DIAL_LENS_RIM)
-              .height(DIAL_LENS_RIM)
-              .borderRadius(DIAL_LENS_RIM / 2)
-              .backgroundColor($r('app.color.remote_sheet_wash'))
-              .border({ width: 0.5, color: $r('app.color.remote_image_rim') })
-              .shadow({
-                radius: 10,
-                color: $r('app.color.remote_image_shadow'),
-                offsetX: 0,
-                offsetY: 2
-              })
+              .width(2)
+              .height(12)
+              .borderRadius(1)
+              .backgroundColor($r('app.color.primary'))
+          }
+          .width('100%')
+          .height(48)
+          .justifyContent(FlexAlign.Start)
+          .alignItems(HorizontalAlign.Center)
+          .hitTestBehavior(HitTestMode.None)
 
+          Stack() {
+            // 放大镜胶囊：底层挡掉滚动的中心标签，胶囊内用更大的蓝色字实时显示
+            // 中心值；拖动时数字直接跟着变，不再做松手后的淡入。
             Row()
               .width(DIAL_LENS_WIDTH)
               .height(DIAL_LENS_HEIGHT)
-              .borderRadius(DIAL_LENS_WIDTH / 2)
+              .borderRadius(DIAL_LENS_HEIGHT / 2)
               .backgroundColor($r('app.color.bg_surface'))
 
             Row()
-              .width(DIAL_LENS_WIDTH - 4)
-              .height(DIAL_LENS_HEIGHT - 4)
-              .borderRadius((DIAL_LENS_WIDTH - 4) / 2)
-              .clip(true)
-              .radialGradient({
-                center: [16, 12],
-                radius: 40,
-                colors: [
-                  [Color.White, 0.0],
-                  [$r('app.color.primary'), 0.55],
-                  [$r('app.color.primary'), 1.0]
-                ]
-              })
-              .opacity(0.35)
-
-            Row()
               .width(DIAL_LENS_WIDTH)
               .height(DIAL_LENS_HEIGHT)
-              .borderRadius(DIAL_LENS_WIDTH / 2)
+              .borderRadius(DIAL_LENS_HEIGHT / 2)
               .backgroundColor(GlassEffect.isEnabled() ? Color.Transparent : $r('app.color.bg_surface'))
               .systemMaterial(GlassEffect.material(new uiMaterial.ImmersiveMaterial({
                 style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
@@ -1438,56 +1422,43 @@ export struct WifiRemotePage {
                 materialColor: $r('app.color.remote_material_tint')
               })))
 
-            // 厚玻璃边 + 外圈细边，模拟镜片边缘的厚度。
-            Row()
-              .width(DIAL_LENS_WIDTH - 2)
-              .height(DIAL_LENS_HEIGHT - 2)
-              .borderRadius((DIAL_LENS_WIDTH - 2) / 2)
-              .border({ width: 2, color: Color.White })
-              .opacity(0.8)
-
             Row()
               .width(DIAL_LENS_WIDTH)
               .height(DIAL_LENS_HEIGHT)
-              .borderRadius(DIAL_LENS_WIDTH / 2)
-              .border({ width: 0.75, color: $r('app.color.primary') })
+              .borderRadius(DIAL_LENS_HEIGHT / 2)
+              .border({ width: 0.5, color: $r('app.color.primary') })
+              .shadow({
+                radius: 8,
+                color: $r('app.color.remote_image_shadow'),
+                offsetX: 0,
+                offsetY: 2
+              })
 
-            // 左上高光，给圆镜一点球面感。
+            // 透镜顶部高光，让它不再像一块纯白圆角底。
             Row()
-              .width(24)
-              .height(10)
-              .borderRadius(5)
-              .backgroundColor(Color.White)
-              .opacity(0.55)
-              .offset({ x: -11, y: -16 })
+              .width(44)
+              .height(0.8)
+              .borderRadius(0.4)
+              .backgroundColor($r('app.color.primary_soft'))
+              .opacity(0.9)
+              .offset({ y: -12 })
 
-            Column({ space: 2 }) {
-              Row()
-                .width(2)
-                .height(5)
-                .borderRadius(1)
-                .backgroundColor($r('app.color.primary'))
-              Text(this.dialValueLabel())
-                .width(DIAL_LENS_WIDTH)
-                .fontSize(this.dialValueFontSize())
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.primary'))
-                .textAlign(TextAlign.Center)
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-            }
-            .width(DIAL_LENS_WIDTH)
-            .height(DIAL_LENS_HEIGHT)
-            .justifyContent(FlexAlign.Center)
-            .alignItems(HorizontalAlign.Center)
+            Text(this.dialValueLabel())
+              .width(DIAL_LENS_WIDTH)
+              .fontSize(this.dialValueFontSize())
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.primary'))
+              .textAlign(TextAlign.Center)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
-          .width(DIAL_LENS_RIM)
-          .height(DIAL_LENS_RIM)
+          .width(DIAL_LENS_WIDTH)
+          .height(DIAL_LENS_HEIGHT)
           .offset({ y: 0 })
           .hitTestBehavior(HitTestMode.None)
         }
         .width('100%')
-        .height(60)
+        .height(48)
       }
     }
     .width(this.deckWidthVp())
@@ -2093,7 +2064,7 @@ struct DialScaleItem {
         .animation({ duration: 80, curve: Curve.EaseOut })
     }
     .width(DIAL_ITEM_WIDTH)
-    .height(60)
+    .height(48)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .onClick(() => { this.onSelect(this.index); })
