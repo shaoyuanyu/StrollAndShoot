@@ -1633,7 +1633,7 @@ struct RemoteZoomControl {
       .enabled(this.isEnabled)
       .onClick(() => { this.onWide(); })
     }
-    .width(40)
+    .width(52)
     .height(64)
     .borderRadius(20)
     .backgroundColor($r('app.color.filter_chip_bg'))
