@@ -2,6 +2,7 @@ import { CameraService } from '../services/CameraService';
 import { CameraLinkMode } from '../model/CameraLinkMode';
 import { L10n } from '../utils/L10n';
 import type { BleCameraDevice } from '../services/BleScanner';
+import { MockWifiLive } from './MockWifiLive';
 
 /**
  * 相机页状态预演（仅调试包）。
@@ -245,6 +246,13 @@ export class CameraStateDemo {
         s.linkMode = CameraLinkMode.STA;
         CameraStateDemo.connectedDevice(s, true);
         s.wifiHost = CameraStateDemo.STA_HOST;
+        break;
+      case 'wifi_remote':
+        // 给 `WifiRemotePage` 装一台会出帧的假 Wi-Fi 相机，专门用于 UI 验收。
+        s.linkMode = CameraLinkMode.STA;
+        CameraStateDemo.connectedDevice(s, true);
+        s.wifiHost = CameraStateDemo.STA_HOST;
+        MockWifiLive.install(s);
         break;
       case 'sta_failed':
         s.linkMode = CameraLinkMode.STA;
