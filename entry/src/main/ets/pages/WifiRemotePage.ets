@@ -1580,7 +1580,7 @@ struct RemoteRoundControl {
   }
 }
 
-/** 变焦：广角 / 长焦上下叠进一颗竖向胶囊，宽度收窄，和左右控件更容易配平。 */
+/** 变焦：左右两半合成一颗圆钮，和 AF 同尺寸；长焦在右、广角在左。 */
 @ComponentV2
 struct RemoteZoomControl {
   @Param isEnabled: boolean = true;
@@ -1588,54 +1588,42 @@ struct RemoteZoomControl {
   @Event onTele: () => void = () => {};
 
   build() {
-    Column() {
+    Row() {
       Button({ type: ButtonType.Normal, stateEffect: true }) {
-        Row({ space: 2 }) {
-          Text('+')
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-          Text($r('app.string.camera_wifi_remote_tele'))
-            .fontSize(FontSize.Micro)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-        }
+        Text('−')
+          .fontSize(20)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
       }
-      .width('100%')
-      .height(31.5)
-      .padding(0)
-      .backgroundColor(Color.Transparent)
-      .enabled(this.isEnabled)
-      .onClick(() => { this.onTele(); })
-
-      Row()
-        .width('100%')
-        .height(0.5)
-        .backgroundColor($r('app.color.divider'))
-        .opacity(0.7)
-
-      Button({ type: ButtonType.Normal, stateEffect: true }) {
-        Row({ space: 2 }) {
-          Text('−')
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-          Text($r('app.string.camera_wifi_remote_wide'))
-            .fontSize(FontSize.Micro)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-        }
-      }
-      .width('100%')
-      .height(31.5)
+      .layoutWeight(1)
+      .height(52)
       .padding(0)
       .backgroundColor(Color.Transparent)
       .enabled(this.isEnabled)
       .onClick(() => { this.onWide(); })
+
+      Row()
+        .width(0.5)
+        .height(24)
+        .backgroundColor($r('app.color.divider'))
+        .opacity(0.7)
+
+      Button({ type: ButtonType.Normal, stateEffect: true }) {
+        Text('+')
+          .fontSize(20)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+      }
+      .layoutWeight(1)
+      .height(52)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .enabled(this.isEnabled)
+      .onClick(() => { this.onTele(); })
     }
     .width(52)
-    .height(64)
-    .borderRadius(20)
+    .height(52)
+    .borderRadius(26)
     .backgroundColor($r('app.color.filter_chip_bg'))
     .clip(true)
     .opacity(this.isEnabled ? 1 : 0.35)
