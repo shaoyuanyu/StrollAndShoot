@@ -53,6 +53,26 @@ import {
   u32le as exposureU32le,
   u32leBytes
 } from './NikonWifiExposure';
+import {
+  AF_AREA_SINGLE_POINT,
+  CAMERA_PROP_AF_AREA,
+  CAMERA_PROP_AF_MODE,
+  CAMERA_PROP_EXPOSURE_PROGRAM,
+  CAMERA_PROP_MOVIE_WHITE_BALANCE,
+  CAMERA_PROP_WHITE_BALANCE,
+  type CameraOption,
+  afAreaLabel,
+  afAreaOptionsFromDescriptor,
+  afAreaSupportsPoint,
+  afModeLabel,
+  afModeOptionsFromDescriptor,
+  exposureParamEnabled,
+  isAutoAfArea,
+  programModeLabel,
+  programModeName,
+  whiteBalanceLabel,
+  whiteBalanceOptionsFromDescriptor
+} from './NikonWifiCameraSettings';
 
 /** 尼康 PTP 操作码。 */
 export const NIKON_OP_SET_DEVICE_PROP_VALUE = 0x1016;
@@ -71,20 +91,16 @@ export const NIKON_OP_GET_LIVEVIEW_IMAGE_EX = 0x9428;
 
 /** 尼康设备属性。 */
 export const NIKON_PROP_REMOTE_CAPTURE_PROHIBITION = 0xD0BD;
-export const NIKON_PROP_AF_MODE_AT_LIVEVIEW = 0xD061;
+export const NIKON_PROP_AF_MODE_AT_LIVEVIEW = CAMERA_PROP_AF_MODE;
 export const NIKON_PROP_LIVEVIEW_STATUS = 0xD1A2;
 export const NIKON_PROP_LIVEVIEW_PROHIBITION = 0xD1A4;
 export const NIKON_PROP_LIVEVIEW_SELECTOR = 0xD1A6;
-export const NIKON_PROP_AF_AREA_MODE = 0xD05D;
+export const NIKON_PROP_AF_AREA_MODE = CAMERA_PROP_AF_AREA;
 /** 自动 ISO 高限；用来过滤相机描述里超出当前设置上限的 ISO 值。 */
 export const NIKON_PROP_ISO_AUTO_HIGH_LIMIT = 0xD183;
 
 /** `0xD061` 的取值：0=AF-S、1=AF-C、2=AF-F、3=MF（固定）、4=MF（可选）、5=AF-A。 */
 const AF_MODE_AF_F = 2;
-const AF_AREA_SINGLE_POINT = 0x8010;
-const AF_AREA_AUTO_AREA = 0x8011;
-const AF_AREA_AUTO_AREA_L_CHARACTER = 0x8020;
-const AF_AREA_AUTO_AREA_L_ANIMAL = 0x8021;
 
 const RESPONSE_OK = 0x2001;
 const RESPONSE_OPERATION_NOT_SUPPORTED = 0x2005;
@@ -331,6 +347,21 @@ export class NikonWifiLiveView {
   @Trace exposureReady: boolean = false;
   /** 正在写入的参数名；空串表示空闲。 */
   @Trace exposureWriting: string = '';
+  /** 相机当前曝光模式（0x500E）；-1 = 没读到。 */
+  @Trace exposureMode: number = -1;
+  /** 白平衡当前值与可用值。 */
+  @Trace whiteBalance: number = 0;
+  @Trace whiteBalanceOptions: CameraOption[] = [];
+  @Trace whiteBalanceLoading: boolean = false;
+  @Trace whiteBalanceReady: boolean = false;
+  /** 对焦设置：当前 AF 模式（0xD061）与区域（0xD05D）。 */
+  @Trace afModeOptions: CameraOption[] = [];
+  @Trace afAreaMode: number = -1;
+  @Trace afAreaOptions: CameraOption[] = [];
+  @Trace focusSettingsLoading: boolean = false;
+  @Trace focusSettingsReady: boolean = false;
+  /** 正在写入的非曝光设置（wb / afMode / afArea）；空串表示空闲。 */
+  @Trace settingsWriting: string = '';
   /** 最近一次对焦命令是否成功（只代表相机接受了命令，不代表合焦）。 */
   @Trace lastFocusOk: boolean = false;
 
@@ -340,12 +371,16 @@ export class NikonWifiLiveView {
   readonly supportsAf: boolean;
   readonly supportsAfArea: boolean;
   readonly supportsZoom: boolean;
+  readonly supportsWhiteBalance: boolean;
+  readonly supportsAfModeSetting: boolean;
+  readonly supportsAfAreaSetting: boolean;
 
   private transport: PtpTransport;
   private log: (msg: string) => void;
   private useEx: boolean;
   private isoProperty: number = EXPOSURE_PROP_ISO;
   private isoMax: number = 0;
+  private whiteBalanceProperty: number = CAMERA_PROP_WHITE_BALANCE;
   private afAreaModeOriginal: number = -1;
   private afAreaModeChanged: boolean = false;
   @Trace private frame: image.PixelMap | null = null;
@@ -395,6 +430,13 @@ export class NikonWifiLiveView {
     this.supportsAf = !known || deviceOps.includes(NIKON_OP_AF_DRIVE);
     this.supportsAfArea = !known || deviceOps.includes(NIKON_OP_CHANGE_AF_AREA);
     this.supportsZoom = !known || deviceOps.includes(NIKON_OP_ZOOM);
+    this.supportsWhiteBalance = !known || deviceProps.length === 0
+      || deviceProps.includes(CAMERA_PROP_WHITE_BALANCE)
+      || deviceProps.includes(CAMERA_PROP_MOVIE_WHITE_BALANCE);
+    this.supportsAfModeSetting = !known || deviceProps.length === 0
+      || deviceProps.includes(CAMERA_PROP_AF_MODE);
+    this.supportsAfAreaSetting = !known || deviceProps.length === 0
+      || deviceProps.includes(CAMERA_PROP_AF_AREA);
     this.supportsMovie = (!known || (deviceOps.includes(NIKON_OP_START_MOVIE)
       && deviceOps.includes(NIKON_OP_END_MOVIE)))
       && (deviceProps.length === 0 || deviceProps.includes(NIKON_PROP_LIVEVIEW_SELECTOR));
@@ -435,6 +477,47 @@ export class NikonWifiLiveView {
     return 0;
   }
 
+  /** 曝光模式徽标；未读到返回 `--`。 */
+  getExposureModeLabel(): string {
+    return programModeLabel(this.exposureMode);
+  }
+
+  /** 当前曝光模式下该参数是否可调；页面据此置灰。 */
+  isExposureParamEnabled(param: string): boolean {
+    return exposureParamEnabled(this.exposureMode, param);
+  }
+
+  getWhiteBalanceLabel(): string {
+    return whiteBalanceLabel(this.whiteBalance, this.movieMode);
+  }
+
+  /** 对焦设置面板打开时兜底读取。 */
+  ensureWhiteBalance(): void {
+    if (!this.active || !this.supportsWhiteBalance || this.whiteBalanceReady
+      || this.whiteBalanceLoading) {
+      return;
+    }
+    this.loadWhiteBalanceState().catch((_e: Error) => { /* 已写日志 */ });
+  }
+
+  getAfModeLabel(): string {
+    return afModeLabel(this.afMode);
+  }
+
+  getAfAreaLabel(): string {
+    return afAreaLabel(this.afAreaMode);
+  }
+
+  /** 当前区域模式是否支持点画面移动对焦点。 */
+  supportsPointAf(): boolean {
+    return afAreaSupportsPoint(this.afAreaMode);
+  }
+
+  ensureFocusSettings(): void {
+    if (!this.active || this.focusSettingsReady || this.focusSettingsLoading) return;
+    this.loadFocusSettings().catch((_e: Error) => { /* 已写日志 */ });
+  }
+
   /** 页面打开参数面板时兜底触发读取；正常在 start() 后已经自动开始。 */
   ensureExposure(): void {
     if (!this.active || this.exposureReady || this.exposureLoading) return;
@@ -448,7 +531,12 @@ export class NikonWifiLiveView {
    * 不假设相机一定接受请求值（光圈/快门范围会随镜头与曝光模式变化）。
    */
   async setExposure(param: string, value: number): Promise<boolean> {
-    if (!this.active || !this.exposureReady || this.exposureWriting !== '') {
+    if (!this.active || !this.exposureReady || this.exposureWriting !== ''
+      || this.settingsWriting !== '') {
+      return false;
+    }
+    if (!this.isExposureParamEnabled(param)) {
+      this.error = L10n.tr('camera_wifi_remote_exposure_mode_locked');
       return false;
     }
     const seq = this.startSeq;
@@ -495,33 +583,243 @@ export class NikonWifiLiveView {
   }
 
   /**
-   * 实时取景下点画面要能移动对焦点，前提是相机处于支持点选的 AF 区域模式。
-   * Z50II 默认可能在「自动区域 AF」，此时 `0x9205 ChangeAfArea` 虽返回成功，
-   * 但取景头里 AF 数量为 0、画面没有真实对焦框。这里只在自动区域模式时切到
-   * 单点 AF，并在停止取景时恢复用户原来的模式。
+   * 白平衡写入。属性随照片/视频模式切换：照片 `0x5005`，视频优先 `0xD23A`。
+   * 写之前暂停取景，写完回读相机实际值。
    */
-  private async prepareAfAreaMode(seq: number): Promise<void> {
-    const data = await this.transport.getDevicePropValue(
-      NIKON_PROP_AF_AREA_MODE, PtpPriority.FOREGROUND);
-    if (seq !== this.startSeq || !this.active) return;
-    if (data === null || data.length < 2) return;
-    const mode = exposureU16le(data, 0);
-    this.log(`实时取景: AF 区域模式=0x${mode.toString(16)}`);
-    if (mode !== AF_AREA_AUTO_AREA
-      && mode !== AF_AREA_AUTO_AREA_L_CHARACTER
-      && mode !== AF_AREA_AUTO_AREA_L_ANIMAL) {
-      return;
+  async setWhiteBalance(value: number): Promise<boolean> {
+    if (!this.active || !this.whiteBalanceReady || this.settingsWriting !== ''
+      || this.exposureWriting !== '') {
+      return false;
     }
-    const r = await this.raw(NIKON_OP_SET_DEVICE_PROP_VALUE,
-      [NIKON_PROP_AF_AREA_MODE], false, u16leBytes(AF_AREA_SINGLE_POINT));
-    if (seq !== this.startSeq || !this.active) return;
-    if (r !== null && r.code === RESPONSE_OK) {
-      this.afAreaModeOriginal = mode;
-      this.afAreaModeChanged = true;
-      this.log('实时取景: AF 区域模式 → 单点');
-    } else {
-      this.log(`实时取景: 切换单点 AF 失败 ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+    const seq = this.startSeq;
+    const prop = this.whiteBalanceProperty;
+    this.settingsWriting = 'wb';
+    this.error = '';
+    await this.pauseLoop();
+    try {
+      let r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [prop], false,
+        u16leBytes(value));
+      for (let i = 0; i < 2 && r !== null && r.code === RESPONSE_DEVICE_BUSY; i++) {
+        await delay(100);
+        r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [prop], false,
+          u16leBytes(value));
+      }
+      if (seq !== this.startSeq || !this.active) return false;
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = L10n.tr('camera_wifi_remote_wb_failed');
+        this.log(`设置: 白平衡写入失败 ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+        return false;
+      }
+      await delay(40);
+      const now = await this.transport.getDevicePropValue(prop, PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq || !this.active) return false;
+      if (now !== null && now.length >= 2) {
+        this.whiteBalance = exposureU16le(now, 0);
+      } else {
+        this.whiteBalance = value;
+      }
+      this.log(`设置: 白平衡 → ${this.getWhiteBalanceLabel()}`);
+      return true;
+    } finally {
+      this.settingsWriting = '';
+      this.resumeLoop();
     }
+  }
+
+  /** 切换 AF 模式（0xD061，UINT8）。只写描述里给出的可选项。 */
+  async setAfMode(value: number): Promise<boolean> {
+    if (!this.active || !this.focusSettingsReady || this.settingsWriting !== ''
+      || this.exposureWriting !== '') {
+      return false;
+    }
+    const seq = this.startSeq;
+    this.settingsWriting = 'afMode';
+    this.error = '';
+    await this.pauseLoop();
+    try {
+      let r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [CAMERA_PROP_AF_MODE], false,
+        new Uint8Array([value & 0xFF]));
+      for (let i = 0; i < 2 && r !== null && r.code === RESPONSE_DEVICE_BUSY; i++) {
+        await delay(100);
+        r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [CAMERA_PROP_AF_MODE], false,
+          new Uint8Array([value & 0xFF]));
+      }
+      if (seq !== this.startSeq || !this.active) return false;
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = L10n.tr('camera_wifi_remote_focus_failed');
+        this.log(`设置: AF 模式写入失败 ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+        return false;
+      }
+      await delay(40);
+      const now = await this.transport.getDevicePropValue(
+        CAMERA_PROP_AF_MODE, PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq || !this.active) return false;
+      this.afMode = now !== null && now.length > 0 ? now[0] : value;
+      this.log(`设置: AF 模式 → ${this.getAfModeLabel()}`);
+      return true;
+    } finally {
+      this.settingsWriting = '';
+      this.resumeLoop();
+    }
+  }
+
+  /** 切换 AF 区域（0xD05D，UINT16），并记住是否需要退出时恢复。 */
+  async setAfAreaMode(value: number): Promise<boolean> {
+    if (!this.active || !this.focusSettingsReady || this.settingsWriting !== ''
+      || this.exposureWriting !== '') {
+      return false;
+    }
+    const seq = this.startSeq;
+    this.settingsWriting = 'afArea';
+    this.error = '';
+    await this.pauseLoop();
+    try {
+      let r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [CAMERA_PROP_AF_AREA], false,
+        u16leBytes(value));
+      for (let i = 0; i < 2 && r !== null && r.code === RESPONSE_DEVICE_BUSY; i++) {
+        await delay(100);
+        r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE, [CAMERA_PROP_AF_AREA], false,
+          u16leBytes(value));
+      }
+      if (seq !== this.startSeq || !this.active) return false;
+      if (r === null || r.code !== RESPONSE_OK) {
+        this.error = L10n.tr('camera_wifi_remote_focus_failed');
+        this.log(`设置: AF 区域写入失败 ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+        return false;
+      }
+      await delay(40);
+      const now = await this.transport.getDevicePropValue(
+        CAMERA_PROP_AF_AREA, PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq || !this.active) return false;
+      const actual = now !== null && now.length >= 2 ? exposureU16le(now, 0) : value;
+      this.afAreaMode = actual;
+      this.afAreaModeChanged = this.afAreaModeOriginal < 0
+        || actual !== this.afAreaModeOriginal;
+      this.log(`设置: AF 区域 → ${this.getAfAreaLabel()}`);
+      return true;
+    } finally {
+      this.settingsWriting = '';
+      this.resumeLoop();
+    }
+  }
+
+  /** 读白平衡当前值与描述；视频模式优先用视频属性，失败再退回照片属性。 */
+  private async loadWhiteBalanceState(): Promise<void> {
+    if (!this.supportsWhiteBalance || this.whiteBalanceLoading) return;
+    const seq = this.startSeq;
+    this.whiteBalanceLoading = true;
+    try {
+      let prop = this.movieMode ? CAMERA_PROP_MOVIE_WHITE_BALANCE
+        : CAMERA_PROP_WHITE_BALANCE;
+      let data = await this.transport.getDevicePropValue(prop, PtpPriority.FOREGROUND);
+      if (seq !== this.startSeq || !this.active) return;
+      if ((data === null || data.length < 2) && prop === CAMERA_PROP_MOVIE_WHITE_BALANCE) {
+        prop = CAMERA_PROP_WHITE_BALANCE;
+        data = await this.transport.getDevicePropValue(prop, PtpPriority.FOREGROUND);
+        if (seq !== this.startSeq || !this.active) return;
+      }
+      this.whiteBalanceProperty = prop;
+      if (data !== null && data.length >= 2) {
+        this.whiteBalance = exposureU16le(data, 0);
+      }
+      const desc = await this.readSettingDescriptor(prop);
+      if (seq !== this.startSeq || !this.active) return;
+      this.whiteBalanceOptions = whiteBalanceOptionsFromDescriptor(desc, this.movieMode);
+      this.whiteBalanceReady = true;
+      this.log(`设置: 白平衡=${this.getWhiteBalanceLabel()} 属性=0x${prop.toString(16)}`
+        + ` 选项=${this.settingPreview(this.whiteBalanceOptions)}`);
+    } catch (err) {
+      this.log(`设置: 白平衡读取异常 ${(err as Error).message}`);
+      if (this.active) {
+        this.whiteBalanceOptions = whiteBalanceOptionsFromDescriptor(null, this.movieMode);
+        this.whiteBalanceReady = true;
+      }
+    } finally {
+      if (seq === this.startSeq) this.whiteBalanceLoading = false;
+    }
+  }
+
+  /**
+   * 读取 AF 模式与 AF 区域，并在进入取景时把「自动区域 AF」临时切到单点：
+   * 自动区域下 `0x9205 ChangeAfArea` 会成功但不移动，取景头也不返回 AF 框。
+   * 用户之后可以在对焦面板里改回自动区域；退出时恢复进入前的模式。
+   */
+  private async loadFocusSettings(): Promise<void> {
+    if (this.focusSettingsLoading) return;
+    const seq = this.startSeq;
+    this.focusSettingsLoading = true;
+    try {
+      if (this.supportsAfModeSetting) {
+        if (this.afMode < 0) {
+          const modeData = await this.transport.getDevicePropValue(
+            CAMERA_PROP_AF_MODE, PtpPriority.FOREGROUND);
+          if (seq !== this.startSeq || !this.active) return;
+          if (modeData !== null && modeData.length > 0) this.afMode = modeData[0];
+        }
+        const modeDesc = await this.readSettingDescriptor(CAMERA_PROP_AF_MODE);
+        if (seq !== this.startSeq || !this.active) return;
+        this.afModeOptions = afModeOptionsFromDescriptor(modeDesc);
+      }
+      if (this.supportsAfAreaSetting) {
+        const areaData = await this.transport.getDevicePropValue(
+          CAMERA_PROP_AF_AREA, PtpPriority.FOREGROUND);
+        if (seq !== this.startSeq || !this.active) return;
+        const current = areaData !== null && areaData.length >= 2
+          ? exposureU16le(areaData, 0) : -1;
+        this.afAreaModeOriginal = current;
+        this.afAreaMode = current;
+        const areaDesc = await this.readSettingDescriptor(CAMERA_PROP_AF_AREA);
+        if (seq !== this.startSeq || !this.active) return;
+        this.afAreaOptions = afAreaOptionsFromDescriptor(areaDesc);
+        this.log(`设置: AF 区域=0x${current.toString(16)} ${this.getAfAreaLabel()}`
+          + ` 选项=${this.settingPreview(this.afAreaOptions)}`);
+        if (current >= 0 && isAutoAfArea(current) && this.settingsWriting === ''
+          && this.afAreaOptions.some((opt: CameraOption) => opt.value === AF_AREA_SINGLE_POINT)) {
+          // 切模式期间挡住页面上的快门 / 点按，避免用户在自动切换还没落地时操作。
+          this.settingsWriting = 'afAreaAuto';
+          try {
+            const r = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE,
+              [CAMERA_PROP_AF_AREA], false, u16leBytes(AF_AREA_SINGLE_POINT));
+            if (seq !== this.startSeq || !this.active) return;
+            if (r !== null && r.code === RESPONSE_OK) {
+              this.afAreaMode = AF_AREA_SINGLE_POINT;
+              this.afAreaModeChanged = true;
+              this.log('设置: AF 区域 → 单点（便于点选对焦）');
+            } else {
+              this.log(`设置: 切换单点 AF 失败`
+                + ` ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+            }
+          } finally {
+            this.settingsWriting = '';
+          }
+        }
+      }
+      this.focusSettingsReady = true;
+      this.log(`设置: AF 模式=${this.getAfModeLabel()}`
+        + ` 可选=${this.settingPreview(this.afModeOptions)}`);
+    } catch (err) {
+      this.log(`设置: 对焦设置读取异常 ${(err as Error).message}`);
+      if (this.active) {
+        this.afModeOptions = afModeOptionsFromDescriptor(null);
+        this.afAreaOptions = afAreaOptionsFromDescriptor(null);
+        this.focusSettingsReady = true;
+      }
+    } finally {
+      if (seq === this.startSeq) this.focusSettingsLoading = false;
+    }
+  }
+
+  private async readSettingDescriptor(prop: number): Promise<Uint8Array | null> {
+    const r = await this.raw(EXPOSURE_OP_GET_DEVICE_PROP_DESC, [prop], true);
+    if (r === null || r.code !== RESPONSE_OK || r.data === null) {
+      this.log(`设置: 属性 0x${prop.toString(16)} 无描述`
+        + ` ${r === null ? 'null' : '0x' + r.code.toString(16)}`);
+      return null;
+    }
+    const head = Array.from(r.data.subarray(0, Math.min(48, r.data.length)))
+      .map((b: number) => b.toString(16).padStart(2, '0')).join('');
+    this.log(`设置: 描述 0x${prop.toString(16)} len=${r.data.length} head=${head}`);
+    return r.data;
   }
 
   private async loadExposureState(): Promise<void> {
@@ -534,7 +832,8 @@ export class NikonWifiLiveView {
       await this.loadExposureOptions(seq);
       if (seq !== this.startSeq || !this.active) return;
       this.exposureReady = true;
-      this.log(`曝光: ${this.getExposureLabel(EXPOSURE_PARAM_APERTURE)}`
+      this.log(`曝光: 模式=${this.getExposureModeLabel()}`
+        + ` ${this.getExposureLabel(EXPOSURE_PARAM_APERTURE)}`
         + ` ${this.getExposureLabel(EXPOSURE_PARAM_SHUTTER)}`
         + ` ${this.getExposureLabel(EXPOSURE_PARAM_ISO)}`
         + ` EV ${this.getExposureLabel(EXPOSURE_PARAM_EV)}`);
@@ -562,6 +861,16 @@ export class NikonWifiLiveView {
   }
 
   private async readExposureValues(seq: number): Promise<void> {
+    const modeData = await this.transport.getDevicePropValue(
+      CAMERA_PROP_EXPOSURE_PROGRAM, PtpPriority.FOREGROUND);
+    if (seq !== this.startSeq || !this.active) return;
+    if (modeData !== null && modeData.length >= 2) {
+      this.exposureMode = exposureU16le(modeData, 0);
+      this.log(`曝光: 模式=${programModeName(this.exposureMode)}`);
+    } else {
+      this.exposureMode = -1;
+    }
+
     const ap = await this.transport.getDevicePropValue(
       EXPOSURE_PROP_APERTURE, PtpPriority.FOREGROUND);
     if (seq !== this.startSeq || !this.active) return;
@@ -650,6 +959,14 @@ export class NikonWifiLiveView {
   }
 
   private optionPreview(options: ExposureOption[]): string {
+    const labels: string[] = [];
+    for (let i = 0; i < options.length && i < 4; i++) {
+      labels.push(options[i].label);
+    }
+    return labels.join('/');
+  }
+
+  private settingPreview(options: CameraOption[]): string {
     const labels: string[] = [];
     for (let i = 0; i < options.length && i < 4; i++) {
       labels.push(options[i].label);
@@ -759,16 +1076,28 @@ export class NikonWifiLiveView {
       this.isoMax = 0;
       this.exposureReady = false;
       this.exposureLoading = false;
+      this.exposureMode = -1;
       this.afAreaModeOriginal = -1;
       this.afAreaModeChanged = false;
+      this.afAreaMode = -1;
       this.apertureOptions = [];
       this.shutterOptions = [];
       this.isoOptions = [];
       this.evOptions = [];
-      this.prepareAfAreaMode(seq).catch((_e: Error) => { /* 已写日志 */ });
+      this.settingsWriting = '';
+      this.whiteBalance = 0;
+      this.whiteBalanceOptions = [];
+      this.whiteBalanceReady = false;
+      this.whiteBalanceLoading = false;
+      this.afModeOptions = [];
+      this.afAreaOptions = [];
+      this.focusSettingsReady = false;
+      this.focusSettingsLoading = false;
       this.startLoop(++this.loopToken);
       this.log('实时取景: 已启动');
       this.loadExposureState().catch((_e: Error) => { /* 已写日志 */ });
+      this.loadFocusSettings().catch((_e: Error) => { /* 已写日志 */ });
+      this.loadWhiteBalanceState().catch((_e: Error) => { /* 已写日志 */ });
       return true;
     } catch (err) {
       this.error = (err as Error).message;
@@ -795,14 +1124,15 @@ export class NikonWifiLiveView {
       await this.raw(NIKON_OP_END_MOVIE, [], false);
       this.movieRecording = false;
     }
-    if (this.afAreaModeChanged) {
-      const restored = await this.raw(NIKON_OP_SET_DEVICE_PROP_VALUE,
-        [NIKON_PROP_AF_AREA_MODE], false, u16leBytes(this.afAreaModeOriginal));
+    if (this.afAreaModeChanged && this.afAreaModeOriginal >= 0
+      && this.afAreaMode !== this.afAreaModeOriginal) {
+      const restored = await this.raw(EXPOSURE_OP_SET_DEVICE_PROP_VALUE,
+        [CAMERA_PROP_AF_AREA], false, u16leBytes(this.afAreaModeOriginal));
       this.log(`实时取景: AF 区域模式恢复 0x${this.afAreaModeOriginal.toString(16)}`
         + ` ${restored === null ? 'null' : '0x' + restored.code.toString(16)}`);
-      this.afAreaModeChanged = false;
-      this.afAreaModeOriginal = -1;
     }
+    this.afAreaModeChanged = false;
+    this.afAreaModeOriginal = -1;
     const wasStarted = this.liveViewStarted;
     this.liveViewStarted = false;
     if (wasStarted) {
@@ -819,6 +1149,17 @@ export class NikonWifiLiveView {
     this.focusDrive = 0;
     this.afBoxes = [];
     this.exposureReady = false;
+    this.exposureMode = -1;
+    this.whiteBalance = 0;
+    this.whiteBalanceOptions = [];
+    this.whiteBalanceReady = false;
+    this.whiteBalanceLoading = false;
+    this.afModeOptions = [];
+    this.afAreaMode = -1;
+    this.afAreaOptions = [];
+    this.focusSettingsReady = false;
+    this.focusSettingsLoading = false;
+    this.settingsWriting = '';
   }
 
   /**
@@ -836,7 +1177,8 @@ export class NikonWifiLiveView {
       this.error = L10n.tr('camera_wifi_remote_unsupported');
       return false;
     }
-    if (this.shooting) return false;
+    if (this.shooting || this.exposureWriting !== ''
+      || this.settingsWriting !== '') return false;
     this.shooting = true;
     this.error = '';
     this.lastAction = L10n.tr('camera_wifi_remote_shooting');
@@ -862,7 +1204,8 @@ export class NikonWifiLiveView {
   /** AF-ON：相机自动对焦，然后等 DeviceReady。 */
   async afDrive(): Promise<boolean> {
     if (!this.active || !this.supportsAf) return false;
-    if (this.focusing) return false;
+    if (this.focusing || this.exposureWriting !== ''
+      || this.settingsWriting !== '') return false;
     this.focusing = true;
     this.error = '';
     this.lastFocusOk = false;
@@ -900,15 +1243,17 @@ export class NikonWifiLiveView {
   async focusAt(x: number, y: number): Promise<boolean> {
     if (!this.active) return false;
     if (!this.supportsAf && !this.supportsAfArea) return false;
-    if (this.focusing) return false;
+    if (this.focusing || this.exposureWriting !== ''
+      || this.settingsWriting !== '') return false;
     this.focusing = true;
     this.error = '';
     this.lastFocusOk = false;
     this.lastAction = L10n.tr('camera_wifi_remote_focusing');
     await this.pauseLoop();
     try {
+      const pointAf = this.supportsAfArea && this.supportsPointAf();
       let areaCode = -1;
-      if (this.supportsAfArea) {
+      if (pointAf) {
         let px = Math.max(0, Math.round(x));
         let py = Math.max(0, Math.round(y));
         if (this.afWidth > 0) px = Math.min(px, this.afWidth - 1);
@@ -923,10 +1268,14 @@ export class NikonWifiLiveView {
             : this.errorText(moved.code);
           return false;
         }
+      } else {
+        this.log(`实时取景: 当前 AF 区域不支持点选，只驱动对焦`
+          + ` mode=${this.afMode} area=0x${this.afAreaMode.toString(16)}`);
       }
       if (this.afMode === AF_MODE_AF_F) {
         // 连续伺服：移动对焦点后相机会自己追焦，SnapBridge 也不会再发 AfDrive。
-        const ok = areaCode === RESPONSE_OK;
+        // 自动区域等不支持点选的模式没有移动动作，但相机本来就在连续追焦。
+        const ok = pointAf ? areaCode === RESPONSE_OK : true;
         this.lastFocusOk = ok;
         if (ok) {
           this.lastAction = '';
@@ -979,7 +1328,8 @@ export class NikonWifiLiveView {
       return false;
     }
     if (this.movieMode === on) return true;
-    if (this.movieSwitching) return false;
+    if (this.movieSwitching || this.exposureWriting !== ''
+      || this.settingsWriting !== '') return false;
     this.movieSwitching = true;
     const wasActive = this.active;
     try {
@@ -1004,7 +1354,8 @@ export class NikonWifiLiveView {
 
   /** 开始录像（相机侧 0x920A）。 */
   async startMovie(): Promise<boolean> {
-    if (!this.active || !this.movieMode || this.movieRecording) return false;
+    if (!this.active || !this.movieMode || this.movieRecording
+      || this.exposureWriting !== '' || this.settingsWriting !== '') return false;
     this.error = '';
     await this.pauseLoop();
     try {
@@ -1046,7 +1397,8 @@ export class NikonWifiLiveView {
   /** 变焦：一步 wide / tele；Z 卡口手动变焦镜头不会响应，页面会显示失败。 */
   async zoom(tele: boolean): Promise<boolean> {
     if (!this.active || !this.supportsZoom) return false;
-    if (this.zooming) return false;
+    if (this.zooming || this.exposureWriting !== ''
+      || this.settingsWriting !== '') return false;
     this.zooming = true;
     this.error = '';
     try {

@@ -14,6 +14,7 @@ import downloadResumeTest from './DownloadResume.test';
 import nikonWifiLiveViewTest from './NikonWifiLiveView.test';
 import nikonWifiLiveViewFlowTest from './NikonWifiLiveViewFlow.test';
 import nikonWifiExposureTest from './NikonWifiExposure.test';
+import nikonWifiCameraSettingsTest from './NikonWifiCameraSettings.test';
 
 export default function testsuite() {
   localUnitTest();
@@ -32,4 +33,5 @@ export default function testsuite() {
   nikonWifiLiveViewTest();
   nikonWifiLiveViewFlowTest();
   nikonWifiExposureTest();
+  nikonWifiCameraSettingsTest();
 }

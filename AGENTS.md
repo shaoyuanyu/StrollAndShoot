@@ -677,6 +677,7 @@ HarmonyOS 开发者知识库 MCP（工具名前缀 `mcp__harmonyos_developer_kno
 | `services/CameraService.ets` | 扫描、连接、下载、缩略图/原图加载、缓存与 GPS 匹配 |
 | `services/NikonWifiLiveView.ets` | Wi-Fi STA 实时取景、快门、AF、变焦、曝光读写；PTP rawCommand + 串行调度 |
 | `services/NikonWifiExposure.ets` | 曝光属性码、值格式化、`0x1014` 描述解析与兜底列表 |
+| `services/NikonWifiCameraSettings.ets` | 白平衡、曝光模式、AF 模式 / 区域的属性码、取值映射与描述解析 |
 | `services/GpsRecorder.ets` | 连续定位、后台长时任务、按天聚合、模拟轨迹 |
 | `services/ThumbnailCache.ets` | 缩略图磁盘缓存、manifest、过期清理 |
 | `services/AppLog.ets` | 内存环形缓冲 + `app_log.txt` 追加写 + hilog |

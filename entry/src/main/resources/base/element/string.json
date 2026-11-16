@@ -1822,7 +1822,7 @@
     },
     {
       "name": "camera_wifi_remote_hint",
-      "value": "点画面对焦；点上方参数调光圈/快门/ISO/曝光补偿；按快门拍摄。离开页面会结束实时取景。"
+      "value": "点画面对焦；上方参数调曝光，白平衡/对焦可改模式与区域；按快门拍摄。离开页面会结束实时取景。"
     },
     {
       "name": "camera_wifi_remote_af",
@@ -1883,6 +1883,174 @@
     {
       "name": "camera_wifi_remote_focus_driving",
       "value": "对焦中"
+    },
+    {
+      "name": "camera_wifi_remote_wb",
+      "value": "白平衡"
+    },
+    {
+      "name": "camera_wifi_remote_focus_settings",
+      "value": "对焦"
+    },
+    {
+      "name": "camera_wifi_remote_af_mode",
+      "value": "对焦模式"
+    },
+    {
+      "name": "camera_wifi_remote_af_area",
+      "value": "对焦区域"
+    },
+    {
+      "name": "camera_wifi_remote_af_s",
+      "value": "AF-S"
+    },
+    {
+      "name": "camera_wifi_remote_af_c",
+      "value": "AF-C"
+    },
+    {
+      "name": "camera_wifi_remote_af_f",
+      "value": "AF-F"
+    },
+    {
+      "name": "camera_wifi_remote_af_a",
+      "value": "AF-A"
+    },
+    {
+      "name": "camera_wifi_remote_mf",
+      "value": "MF"
+    },
+    {
+      "name": "camera_wifi_remote_mf_fixed",
+      "value": "MF（固定）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_single",
+      "value": "单点 AF"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_auto",
+      "value": "自动区域 AF"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_3d",
+      "value": "3D 跟踪"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_dynamic_m",
+      "value": "动态区域 AF（M）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_dynamic_l",
+      "value": "动态区域 AF（L）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_pin",
+      "value": "针点 AF"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_wide_s",
+      "value": "宽区域 AF（S）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_wide_l",
+      "value": "宽区域 AF（L）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_wide_l_human",
+      "value": "宽区域 AF（L，人物）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_wide_l_animal",
+      "value": "宽区域 AF（L，动物）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_wide_c1",
+      "value": "宽区域 AF（C1）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_wide_c2",
+      "value": "宽区域 AF（C2）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_auto_human",
+      "value": "自动区域 AF（人物）"
+    },
+    {
+      "name": "camera_wifi_remote_af_area_auto_animal",
+      "value": "自动区域 AF（动物）"
+    },
+    {
+      "name": "camera_wifi_remote_wb_auto",
+      "value": "自动"
+    },
+    {
+      "name": "camera_wifi_remote_wb_natural",
+      "value": "自然光自动"
+    },
+    {
+      "name": "camera_wifi_remote_wb_daylight",
+      "value": "晴天"
+    },
+    {
+      "name": "camera_wifi_remote_wb_cloudy",
+      "value": "阴天"
+    },
+    {
+      "name": "camera_wifi_remote_wb_shade",
+      "value": "背阴"
+    },
+    {
+      "name": "camera_wifi_remote_wb_fluorescent",
+      "value": "荧光灯"
+    },
+    {
+      "name": "camera_wifi_remote_wb_incandescent",
+      "value": "白炽灯"
+    },
+    {
+      "name": "camera_wifi_remote_wb_flash",
+      "value": "闪光灯"
+    },
+    {
+      "name": "camera_wifi_remote_wb_color_temp",
+      "value": "色温"
+    },
+    {
+      "name": "camera_wifi_remote_wb_preset",
+      "value": "预设手动"
+    },
+    {
+      "name": "camera_wifi_remote_wb_same_as_still",
+      "value": "与照片相同"
+    },
+    {
+      "name": "camera_wifi_remote_wb_hint",
+      "value": "模式由相机提供；色温只切换模式"
+    },
+    {
+      "name": "camera_wifi_remote_af_hint",
+      "value": "模式与区域由相机支持的选项决定"
+    },
+    {
+      "name": "camera_wifi_remote_af_point_hint",
+      "value": "只有单点、针点等可移动区域支持点画面移动对焦点；自动区域与 3D 跟踪会由相机自己选区。"
+    },
+    {
+      "name": "camera_wifi_remote_focus_loading",
+      "value": "正在读取对焦设置…"
+    },
+    {
+      "name": "camera_wifi_remote_focus_failed",
+      "value": "对焦设置失败"
+    },
+    {
+      "name": "camera_wifi_remote_wb_failed",
+      "value": "白平衡设置失败"
+    },
+    {
+      "name": "camera_wifi_remote_exposure_mode_locked",
+      "value": "当前曝光模式下不能调这个参数"
     },
     {
       "name": "camera_group_actions",

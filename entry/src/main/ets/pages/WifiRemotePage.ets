@@ -20,6 +20,7 @@ import {
   EXPOSURE_PARAM_SHUTTER,
   type ExposureOption
 } from '../services/NikonWifiExposure';
+import { type CameraOption } from '../services/NikonWifiCameraSettings';
 import { WindowUtils } from '../utils/WindowUtils';
 import { FontSize, IconSize } from '../utils/UiTokens';
 import { Haptics } from '../utils/Haptics';
@@ -42,6 +43,8 @@ export struct WifiRemotePage {
   /** 当前打开的参数面板：'' 表示关闭。 */
   @Local exposureSheetOpen: boolean = false;
   @Local exposureParam: string = '';
+  @Local wbSheetOpen: boolean = false;
+  @Local focusSheetOpen: boolean = false;
   /** 本次遥控里至少产生了一张照片/一段录像；退出页面时自动补一次快速扫描。 */
   private mediaChanged: boolean = false;
   private focusTimer: number = -1;
@@ -136,22 +139,26 @@ export struct WifiRemotePage {
 
   private canShoot(): boolean {
     return this.live !== null && this.live.active && !this.live.shooting
-      && !this.live.starting && !this.live.movieSwitching;
+      && !this.live.starting && !this.live.movieSwitching
+      && this.live.exposureWriting === '' && this.live.settingsWriting === '';
   }
 
   private canSwitchMode(): boolean {
     return this.live !== null && this.live.active && this.live.supportsMovie
-      && !this.live.starting && !this.live.movieSwitching && !this.live.movieRecording;
+      && !this.live.starting && !this.live.movieSwitching && !this.live.movieRecording
+      && this.live.exposureWriting === '' && this.live.settingsWriting === '';
   }
 
   private canAf(): boolean {
     return this.live !== null && this.live.active && this.live.supportsAf
-      && !this.live.focusing;
+      && !this.live.focusing
+      && this.live.exposureWriting === '' && this.live.settingsWriting === '';
   }
 
   private canZoom(): boolean {
     return this.live !== null && this.live.active && this.live.supportsZoom
-      && !this.live.zooming;
+      && !this.live.zooming
+      && this.live.exposureWriting === '' && this.live.settingsWriting === '';
   }
 
   private exposureTitle(param: string): ResourceStr {
@@ -169,11 +176,124 @@ export struct WifiRemotePage {
 
   private canAdjustExposure(): boolean {
     return this.live !== null && this.live.active && this.live.exposureReady
-      && !this.live.starting && this.live.exposureWriting === '';
+      && !this.live.starting && this.live.exposureWriting === ''
+      && this.live.settingsWriting === '';
+  }
+
+  private canAdjustExposureParam(param: string): boolean {
+    return this.canAdjustExposure() && this.live !== null
+      && this.live.isExposureParamEnabled(param);
+  }
+
+  private exposureModeLabel(): string {
+    return this.live !== null ? this.live.getExposureModeLabel() : '--';
+  }
+
+  private whiteBalanceLabel(): string {
+    const live = this.live;
+    if (live === null || !live.active || !live.whiteBalanceReady) return '--';
+    return live.getWhiteBalanceLabel();
+  }
+
+  private wbOptions(): CameraOption[] {
+    const live = this.live;
+    return live !== null ? live.whiteBalanceOptions : [];
+  }
+
+  private afModeOptions(): CameraOption[] {
+    const live = this.live;
+    return live !== null ? live.afModeOptions : [];
+  }
+
+  private afAreaOptions(): CameraOption[] {
+    const live = this.live;
+    return live !== null ? live.afAreaOptions : [];
+  }
+
+  private wbLoading(): boolean {
+    const live = this.live;
+    return live !== null && live.whiteBalanceLoading;
+  }
+
+  private focusLoading(): boolean {
+    const live = this.live;
+    return live !== null && live.focusSettingsLoading;
+  }
+
+  private focusSettingLabel(): string {
+    const live = this.live;
+    if (live === null || !live.active || !live.focusSettingsReady) return '--';
+    return `${live.getAfModeLabel()} · ${live.getAfAreaLabel()}`;
+  }
+
+  private canAdjustWb(): boolean {
+    const live = this.live;
+    return live !== null && live.active && live.supportsWhiteBalance
+      && live.whiteBalanceReady && !live.starting && live.whiteBalanceLoading === false
+      && live.exposureWriting === '' && live.settingsWriting === '';
+  }
+
+  private canAdjustFocus(): boolean {
+    const live = this.live;
+    return live !== null && live.active && live.focusSettingsReady
+      && !live.starting && live.focusSettingsLoading === false
+      && (live.supportsAfModeSetting || live.supportsAfAreaSetting)
+      && live.exposureWriting === '' && live.settingsWriting === '';
+  }
+
+  private openWb(): void {
+    if (!this.canAdjustWb()) return;
+    Haptics.tap();
+    this.wbSheetOpen = true;
+    this.live?.ensureWhiteBalance();
+  }
+
+  private openFocus(): void {
+    if (!this.canAdjustFocus()) return;
+    Haptics.tap();
+    this.focusSheetOpen = true;
+    this.live?.ensureFocusSettings();
+  }
+
+  private applyWhiteBalance(value: number): void {
+    if (this.live === null || this.live.settingsWriting !== '') return;
+    Haptics.tap();
+    this.wbSheetOpen = false;
+    this.live.setWhiteBalance(value).catch((_e: Error) => {
+      // 错误已写进 live.error
+    });
+  }
+
+  private applyAfMode(value: number): void {
+    if (this.live === null || this.live.settingsWriting !== '') return;
+    Haptics.tap();
+    this.live.setAfMode(value).catch((_e: Error) => {
+      // 错误已写进 live.error
+    });
+  }
+
+  private applyAfArea(value: number): void {
+    if (this.live === null || this.live.settingsWriting !== '') return;
+    Haptics.tap();
+    this.live.setAfAreaMode(value).catch((_e: Error) => {
+      // 错误已写进 live.error
+    });
+  }
+
+  private isSelectedWb(value: number): boolean {
+    return this.live !== null && this.live.whiteBalance === value;
+  }
+
+  private isSelectedAfMode(value: number): boolean {
+    return this.live !== null && this.live.afMode === value;
+  }
+
+  private isSelectedAfArea(value: number): boolean {
+    return this.live !== null && this.live.afAreaMode === value;
   }
 
   private openExposure(param: string): void {
-    if (!this.canAdjustExposure()) return;
+    if (!this.canAdjustExposureParam(param)) return;
     Haptics.tap();
     this.exposureParam = param;
     this.exposureSheetOpen = true;
@@ -200,7 +320,7 @@ export struct WifiRemotePage {
     return live !== null && live.getExposureRaw(this.exposureParam) === value;
   }
 
-  private exposureSheetOptions(): SheetOptions {
+  private sheetOptions(): SheetOptions {
     const opts: SheetOptions = {
       height: SheetSize.MEDIUM,
       preferType: SheetType.BOTTOM,
@@ -270,6 +390,12 @@ export struct WifiRemotePage {
     return [x, y, w, h];
   }
 
+  private afRectAt(index: number): number[] {
+    const live = this.live;
+    if (live === null || index < 0 || index >= live.afBoxes.length) return [];
+    return this.afRect(live.afBoxes[index]);
+  }
+
 
   private onShutter(): void {
     if (!this.canShoot()) return;
@@ -323,7 +449,8 @@ export struct WifiRemotePage {
    */
   private onLiveTap(event: ClickEvent): void {
     const live = this.live;
-    if (live === null || !live.active || live.frameWidth <= 0 || live.frameHeight <= 0) {
+    if (live === null || !live.active || live.frameWidth <= 0 || live.frameHeight <= 0
+      || live.exposureWriting !== '' || live.settingsWriting !== '') {
       return;
     }
     const scale = Math.min(this.viewW / live.frameWidth, this.viewH / live.frameHeight);
@@ -345,12 +472,18 @@ export struct WifiRemotePage {
 
     this.focusX = event.x;
     this.focusY = event.y;
-    this.focusVisible = true;
+    // 自动区域 / 3D 跟踪不接受点选，点画面只触发对焦；此时不画本地十字，
+    // 避免看起来像对焦点被移过去了。
+    this.focusVisible = live.supportsPointAf();
     if (this.focusTimer >= 0) clearTimeout(this.focusTimer);
-    this.focusTimer = setTimeout(() => {
-      this.focusVisible = false;
+    if (this.focusVisible) {
+      this.focusTimer = setTimeout(() => {
+        this.focusVisible = false;
+        this.focusTimer = -1;
+      }, 800);
+    } else {
       this.focusTimer = -1;
-    }, 800);
+    }
     live.focusAt(px, py).catch((_e: Error) => { /* 错误已写进 live.error */ });
   }
 
@@ -407,13 +540,12 @@ export struct WifiRemotePage {
 
   /** 相机实时取景头里返回的 AF 框；不是本地点击画的假框。 */
   @Builder
-  AfBoxes() {
-    if (this.live !== null && this.live.afBoxes.length > 0
-      && this.afRect(this.live.afBoxes[0]).length === 4) {
+  AfBoxAt(index: number) {
+    if (this.afRectAt(index).length === 4) {
       Stack({ alignContent: Alignment.Center }) {
         Row()
-          .width(this.afRect(this.live.afBoxes[0])[2])
-          .height(this.afRect(this.live.afBoxes[0])[3])
+          .width(this.afRectAt(index)[2])
+          .height(this.afRectAt(index)[3])
           .border({ width: 1.4, color: this.afColor() })
           .backgroundColor(Color.Transparent)
         Row()
@@ -421,12 +553,22 @@ export struct WifiRemotePage {
           .height(4)
           .backgroundColor(this.afColor())
       }
-      .width(this.afRect(this.live.afBoxes[0])[2])
-      .height(this.afRect(this.live.afBoxes[0])[3])
-      .position({ x: this.afRect(this.live.afBoxes[0])[0],
-        y: this.afRect(this.live.afBoxes[0])[1] })
+      .width(this.afRectAt(index)[2])
+      .height(this.afRectAt(index)[3])
+      .position({ x: this.afRectAt(index)[0], y: this.afRectAt(index)[1] })
       .hitTestBehavior(HitTestMode.None)
     }
+  }
+
+  @Builder
+  AfBoxes() {
+    // 固定画前 5 块，直接按下标读取，避免 Repeat 按 key 复用单元格导致
+    // 「日志里框动了、画面不动」。自动区域 AF 会同时返回多块框。
+    this.AfBoxAt(0)
+    this.AfBoxAt(1)
+    this.AfBoxAt(2)
+    this.AfBoxAt(3)
+    this.AfBoxAt(4)
   }
 
   @Builder
@@ -571,18 +713,66 @@ export struct WifiRemotePage {
     .padding({ left: 2, right: 2 })
     .backgroundColor($r('app.color.viewer_glass_button'))
     .borderRadius(10)
-    .enabled(this.canAdjustExposure())
-    .opacity(this.canAdjustExposure() ? 1 : 0.45)
+    .enabled(this.canAdjustExposureParam(param))
+    .opacity(this.canAdjustExposureParam(param) ? 1 : 0.45)
     .onClick(() => { this.openExposure(param); })
   }
 
   @Builder
   ExposureStrip() {
     Row({ space: 6 }) {
+      Text(this.exposureModeLabel())
+        .fontSize(FontSize.Micro)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_on_dark'))
+        .width(30)
+        .height(42)
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .backgroundColor($r('app.color.viewer_glass_button'))
+        .borderRadius(10)
       this.ExposureChip(EXPOSURE_PARAM_APERTURE)
       this.ExposureChip(EXPOSURE_PARAM_SHUTTER)
       this.ExposureChip(EXPOSURE_PARAM_ISO)
       this.ExposureChip(EXPOSURE_PARAM_EV)
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+  }
+
+  @Builder
+  WbChip() {
+    Row() {
+      ToolChip({
+        label: $r('app.string.camera_wifi_remote_wb'),
+        value: this.whiteBalanceLabel(),
+        isEnabled: this.canAdjustWb(),
+        onTap: () => { this.openWb(); }
+      })
+    }
+    .layoutWeight(1)
+    .bindSheet($$this.wbSheetOpen, this.WhiteBalanceSheet(), this.sheetOptions())
+  }
+
+  @Builder
+  FocusChip() {
+    Row() {
+      ToolChip({
+        label: $r('app.string.camera_wifi_remote_focus_settings'),
+        value: this.focusSettingLabel(),
+        isEnabled: this.canAdjustFocus(),
+        onTap: () => { this.openFocus(); }
+      })
+    }
+    .layoutWeight(1)
+    .bindSheet($$this.focusSheetOpen, this.FocusSheet(), this.sheetOptions())
+  }
+
+  @Builder
+  ToolsStrip() {
+    Row({ space: 6 }) {
+      this.WbChip()
+      this.FocusChip()
     }
     .width('100%')
     .padding({ left: 12, right: 12 })
@@ -673,10 +863,225 @@ export struct WifiRemotePage {
     .padding({ left: 20, right: 20, top: 4, bottom: 20 })
   }
 
+  /** 白平衡：只列相机描述里的枚举值，选中后写相机并回读。 */
+  @Builder
+  WhiteBalanceSheet() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        Column({ space: 2 }) {
+          Text($r('app.string.camera_wifi_remote_wb'))
+            .fontSize(FontSize.CardTitle)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+          Text($r('app.string.camera_wifi_remote_wb_hint'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(2)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Text(this.whiteBalanceLabel())
+          .fontSize(FontSize.Reading)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary'))
+          .flexShrink(0)
+      }
+      .width('100%')
+      .padding({ right: 36 })
+      .alignItems(VerticalAlign.Top)
+
+      if (this.wbLoading() && this.wbOptions().length === 0) {
+        Row({ space: 8 }) {
+          LoadingProgress()
+            .width(18).height(18)
+            .color($r('app.color.primary'))
+          Text($r('app.string.camera_wifi_remote_exposure_loading'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 24, bottom: 24 })
+      } else if (this.wbOptions().length === 0) {
+        Text($r('app.string.camera_wifi_remote_exposure_empty'))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: 24, bottom: 24 })
+      } else {
+        Scroll() {
+          Column({ space: 2 }) {
+            Repeat(this.wbOptions()).each((item: RepeatItem<CameraOption>) => {
+              Row({ space: 10 }) {
+                Text(item.item.label)
+                  .fontSize(FontSize.Body)
+                  .fontColor(this.isSelectedWb(item.item.value)
+                    ? $r('app.color.primary') : $r('app.color.text_primary'))
+                  .layoutWeight(1)
+                if (this.isSelectedWb(item.item.value)) {
+                  SymbolGlyph($r('sys.symbol.checkmark'))
+                    .fontSize(IconSize.Small)
+                    .fontColor([$r('app.color.primary')])
+                }
+              }
+              .width('100%')
+              .height(46)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor(this.isSelectedWb(item.item.value)
+                ? $r('app.color.primary_soft') : Color.Transparent)
+              .borderRadius(9)
+              .onClick(() => { this.applyWhiteBalance(item.item.value); })
+            }).key((opt: CameraOption) => `wb-${opt.value}`)
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 20, right: 20, top: 4, bottom: 20 })
+  }
+
+  /** 对焦设置：AF 模式与 AF 区域分两组，选完不关面板，方便连续调整。 */
+  @Builder
+  FocusSheet() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        Column({ space: 2 }) {
+          Text($r('app.string.camera_wifi_remote_focus_settings'))
+            .fontSize(FontSize.CardTitle)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+          Text($r('app.string.camera_wifi_remote_af_hint'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(2)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+
+        Text(this.focusSettingLabel())
+          .fontSize(FontSize.Caption)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.primary'))
+          .maxLines(1)
+          .constraintSize({ maxWidth: 132 })
+          .textAlign(TextAlign.End)
+          .flexShrink(0)
+      }
+      .width('100%')
+      .padding({ right: 36 })
+      .alignItems(VerticalAlign.Top)
+
+      if (this.focusLoading() && this.afModeOptions().length === 0
+        && this.afAreaOptions().length === 0) {
+        Row({ space: 8 }) {
+          LoadingProgress()
+            .width(18).height(18)
+            .color($r('app.color.primary'))
+          Text($r('app.string.camera_wifi_remote_focus_loading'))
+            .fontSize(FontSize.Caption)
+            .fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 24, bottom: 24 })
+      } else if (this.afModeOptions().length === 0 && this.afAreaOptions().length === 0) {
+        Text($r('app.string.camera_wifi_remote_exposure_empty'))
+          .fontSize(FontSize.Caption)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: 24, bottom: 24 })
+      } else {
+        Scroll() {
+          Column({ space: 2 }) {
+            Text($r('app.string.camera_wifi_remote_af_mode'))
+              .fontSize(FontSize.Caption)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ left: 12, top: 4, bottom: 4 })
+            Repeat(this.afModeOptions()).each((item: RepeatItem<CameraOption>) => {
+              Row({ space: 10 }) {
+                Text(item.item.label)
+                  .fontSize(FontSize.Body)
+                  .fontColor(this.isSelectedAfMode(item.item.value)
+                    ? $r('app.color.primary') : $r('app.color.text_primary'))
+                  .layoutWeight(1)
+                if (this.isSelectedAfMode(item.item.value)) {
+                  SymbolGlyph($r('sys.symbol.checkmark'))
+                    .fontSize(IconSize.Small)
+                    .fontColor([$r('app.color.primary')])
+                }
+              }
+              .width('100%')
+              .height(46)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor(this.isSelectedAfMode(item.item.value)
+                ? $r('app.color.primary_soft') : Color.Transparent)
+              .borderRadius(9)
+              .onClick(() => { this.applyAfMode(item.item.value); })
+            }).key((opt: CameraOption) => `afm-${opt.value}`)
+
+            Text($r('app.string.camera_wifi_remote_af_area'))
+              .fontSize(FontSize.Caption)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ left: 12, top: 16, bottom: 4 })
+            Repeat(this.afAreaOptions()).each((item: RepeatItem<CameraOption>) => {
+              Row({ space: 10 }) {
+                Text(item.item.label)
+                  .fontSize(FontSize.Body)
+                  .fontColor(this.isSelectedAfArea(item.item.value)
+                    ? $r('app.color.primary') : $r('app.color.text_primary'))
+                  .layoutWeight(1)
+                if (this.isSelectedAfArea(item.item.value)) {
+                  SymbolGlyph($r('sys.symbol.checkmark'))
+                    .fontSize(IconSize.Small)
+                    .fontColor([$r('app.color.primary')])
+                }
+              }
+              .width('100%')
+              .height(46)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor(this.isSelectedAfArea(item.item.value)
+                ? $r('app.color.primary_soft') : Color.Transparent)
+              .borderRadius(9)
+              .onClick(() => { this.applyAfArea(item.item.value); })
+            }).key((opt: CameraOption) => `afa-${opt.value}`)
+
+            Text($r('app.string.camera_wifi_remote_af_point_hint'))
+              .fontSize(FontSize.Caption)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 16, bottom: 8 })
+          }
+          .width('100%')
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 20, right: 20, top: 4, bottom: 20 })
+  }
+
   @Builder
   BottomBar() {
     Column({ space: 10 }) {
       this.ExposureStrip()
+      this.ToolsStrip()
 
       if (this.live !== null && this.live.supportsMovie) {
         Row({ space: 2 }) {
@@ -757,7 +1162,7 @@ export struct WifiRemotePage {
       .height('100%')
       .backgroundColor(Color.Black)
       .bindSheet($$this.exposureSheetOpen, this.ExposureSheet(),
-        this.exposureSheetOptions())
+        this.sheetOptions())
     }
     .hideTitleBar(true)
     .backgroundColor(Color.Black)
@@ -789,6 +1194,42 @@ struct RoundControlButton {
     .borderRadius(28)
     .enabled(this.isEnabled)
     .opacity(this.isEnabled ? 1 : 0.35)
+    .onClick(() => { this.onTap(); })
+  }
+}
+
+/** 底部工具胶囊：白平衡 / 对焦；标签与值都随相机状态刷新。 */
+@ComponentV2
+struct ToolChip {
+  @Param label: ResourceStr = '';
+  @Param value: string = '--';
+  @Param isEnabled: boolean = true;
+  @Event onTap: () => void = () => {};
+
+  build() {
+    Button({ type: ButtonType.Normal, stateEffect: true }) {
+      Column({ space: 1 }) {
+        Text(this.label)
+          .fontSize(FontSize.Micro)
+          .fontColor($r('app.color.viewer_text_on_dark_70'))
+          .maxLines(1)
+        Text(this.value)
+          .fontSize(FontSize.Caption)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_on_dark'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Center)
+    }
+    .width('100%')
+    .height(42)
+    .padding({ left: 4, right: 4 })
+    .backgroundColor($r('app.color.viewer_glass_button'))
+    .borderRadius(10)
+    .enabled(this.isEnabled)
+    .opacity(this.isEnabled ? 1 : 0.45)
     .onClick(() => { this.onTap(); })
   }
 }
